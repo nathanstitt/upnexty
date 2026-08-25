@@ -158,11 +158,13 @@ func TestBlocksIncludeStraddlingEvent(t *testing.T) {
 
 // Finding 1 regression: MaxSpan clamps the window, dropping events beyond it.
 // FitEvents is best-effort within MaxSpan; it cannot override the hard bound.
+// Verify not only that window bounds respect MaxSpan, but that Blocks also
+// excludes events that end beyond the window.
 func TestComputeWindowMaxSpanDropsEventsExceedingBound(t *testing.T) {
 	evs := []calendar.Event{
 		ev("e1", 30, 30),    // ends at 60m
 		ev("e2", 120, 60),   // ends at 180m
-		ev("e3", 300, 30),   // ends at 330m — beyond start+12h? No, 330m is 5.5h
+		ev("e3", 300, 30),   // ends at 330m (5.5h)
 	}
 	// Use a MaxSpan that will truncate the third event.
 	opts := WindowOpts{
@@ -173,16 +175,19 @@ func TestComputeWindowMaxSpanDropsEventsExceedingBound(t *testing.T) {
 	}
 	w := ComputeWindow(evs, base, 1540, opts)
 	if got := w.End.Sub(w.Start); got > 4*time.Hour {
-		t.Errorf("span = %v, exceeds MaxSpan 4h", got)
+		t.Errorf("window span = %v, exceeds MaxSpan 4h", got)
 	}
-	// Third event ends at base + 330m = base + 5.5h.
-	// Window ends at start + 4h = base - 30m + 4h = base + 3.5h.
-	// So the third event (ending at 5.5h) is excluded from the window.
-	thirdEnd := base.Add(330 * time.Minute)
-	if w.End.Before(thirdEnd) {
-		// This is the correct behavior: the third event is dropped.
-	} else {
-		t.Errorf("window unexpectedly includes third event beyond MaxSpan")
+
+	// Verify that Blocks also drops the third event.
+	// Window starts at base - 30m, ends at base - 30m + 4h = base + 3.5h.
+	// Third event ends at base + 330m = base + 5.5h, which is outside [start, end).
+	bs := Blocks(evs, w, 4)
+	var titles []string
+	for _, b := range bs {
+		titles = append(titles, b.Event.Title)
+	}
+	if len(bs) != 2 || bs[0].Event.Title != "e1" || bs[1].Event.Title != "e2" {
+		t.Errorf("Blocks = %v, want only [e1, e2]; third event should be excluded", titles)
 	}
 }
 
@@ -205,38 +210,13 @@ func TestComputeWindowMaxSpanWinsOverMinSpan(t *testing.T) {
 	}
 }
 
-// Finding 3 regression: events must be sorted by Start; demonstrate the contract.
-// This test shows the current behavior: if events are NOT sorted, FitEvents
-// under-fits. We document this contract and accept the behavior rather than
-// defensive sort (which would surprise callers and hide upstream bugs).
-func TestComputeWindowRequiresSortedEvents(t *testing.T) {
-	// Create events intentionally out of order by Start time.
-	e1 := calendar.Event{Title: "e1", Start: base.Add(30 * time.Minute), End: base.Add(60 * time.Minute)}
-	e2 := calendar.Event{Title: "e2", Start: base.Add(10 * time.Minute), End: base.Add(20 * time.Minute)}
-	e3 := calendar.Event{Title: "e3", Start: base.Add(120 * time.Minute), End: base.Add(180 * time.Minute)}
-
-	unsorted := []calendar.Event{e1, e2, e3} // e2 is out of order (starts before e1)
-	opts := WindowOpts{
-		FitEvents:   2,
-		PastContext: 15 * time.Minute,
-		MinSpan:     1 * time.Hour,
-		MaxSpan:     12 * time.Hour,
-	}
-	w := ComputeWindow(unsorted, base, 1540, opts)
-
-	// With unsorted input, the loop stops after seeing 2 events (e1, e2),
-	// which are the first two in the slice (not the earliest by time).
-	// The window will end at e2.End (20m), not e3.End (180m).
-	// This demonstrates that callers MUST pre-sort.
-	e2End := base.Add(20 * time.Minute)
-	if w.End.Equal(e2End) {
-		// Expected: unsorted input produces incomplete coverage.
-		// The contract is: caller must sort.
-	} else {
-		// If this fails, it means ComputeWindow is re-sorting (which it should NOT do).
-		t.Logf("window end = %v, e2.End = %v", w.End, e2End)
-	}
-}
+// Finding 3: Events must be sorted by Start time.
+// ComputeWindow does not sort; it relies on caller-provided ordering.
+// The requirement is documented in the godoc; no test is needed here as any
+// permutation of unsorted input produces implementation-dependent behavior
+// and there is no single "correct" outcome to assert. The sorted-events
+// contract is the responsibility of callers (and of Task 7 when merging
+// multiple feeds).
 
 // Minor 4 regression: degenerate window (End <= Start) in X() fallback.
 func TestWindowXDegenerateWindow(t *testing.T) {
@@ -267,5 +247,61 @@ func TestComputeWindowZeroFitEventsShowsOneEvent(t *testing.T) {
 	e1End := base.Add(60 * time.Minute) // "e1" ends at start + 30 + 30 = 60m
 	if w.End.Before(e1End) {
 		t.Errorf("FitEvents=0: window end = %v, does not cover first event ending %v", w.End, e1End)
+	}
+}
+
+// Finding 2 (Round 2): MaxSpan is violated when no events qualify and loop doesn't run.
+// Bug: end is set to start+MinSpan at init, loop never runs (nil or all filtered), then
+// the final clamp is inside the "if span < MinSpan" block which is false when span==MinSpan,
+// so maxEnd clamp never executes. Result: returned window violates MaxSpan.
+func TestComputeWindowNoEventsRespectMaxSpan(t *testing.T) {
+	opts := WindowOpts{
+		FitEvents:   3,
+		PastContext: 15 * time.Minute,
+		MinSpan:     6 * time.Hour,
+		MaxSpan:     2 * time.Hour, // MaxSpan < MinSpan: should cap at 2h
+	}
+	w := ComputeWindow(nil, base, 1540, opts)
+	span := w.End.Sub(w.Start)
+	if span > 2*time.Hour {
+		t.Errorf("span = %v, exceeds MaxSpan 2h", span)
+	}
+}
+
+// Finding 2 (Round 2): All-AllDay events also skip the loop body.
+func TestComputeWindowAllAllDayRespectMaxSpan(t *testing.T) {
+	evs := []calendar.Event{
+		{Title: "allday1", Start: base, End: base.Add(24 * time.Hour), AllDay: true},
+		{Title: "allday2", Start: base.Add(24 * time.Hour), End: base.Add(48 * time.Hour), AllDay: true},
+	}
+	opts := WindowOpts{
+		FitEvents:   3,
+		PastContext: 15 * time.Minute,
+		MinSpan:     6 * time.Hour,
+		MaxSpan:     2 * time.Hour,
+	}
+	w := ComputeWindow(evs, base, 1540, opts)
+	span := w.End.Sub(w.Start)
+	if span > 2*time.Hour {
+		t.Errorf("span = %v, exceeds MaxSpan 2h (all-AllDay case)", span)
+	}
+}
+
+// Finding 2 (Round 2): All-already-ended events also skip the loop body.
+func TestComputeWindowAllAlreadyEndedRespectMaxSpan(t *testing.T) {
+	evs := []calendar.Event{
+		ev("past1", -60, 30),  // ended 30m ago
+		ev("past2", -120, 30), // ended 90m ago
+	}
+	opts := WindowOpts{
+		FitEvents:   3,
+		PastContext: 15 * time.Minute,
+		MinSpan:     6 * time.Hour,
+		MaxSpan:     2 * time.Hour,
+	}
+	w := ComputeWindow(evs, base, 1540, opts)
+	span := w.End.Sub(w.Start)
+	if span > 2*time.Hour {
+		t.Errorf("span = %v, exceeds MaxSpan 2h (all-already-ended case)", span)
 	}
 }

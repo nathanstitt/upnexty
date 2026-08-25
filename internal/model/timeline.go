@@ -70,10 +70,6 @@ func ComputeWindow(events []calendar.Event, now time.Time, widthPx float64, opts
 		if e.End.After(end) {
 			end = e.End
 		}
-		// Clamp to MaxSpan as we grow, so FitEvents can't override it.
-		if maxEnd != (time.Time{}) && end.After(maxEnd) {
-			end = maxEnd
-		}
 		if seen >= opts.FitEvents {
 			break
 		}
@@ -82,10 +78,14 @@ func ComputeWindow(events []calendar.Event, now time.Time, widthPx float64, opts
 	// Apply MinSpan floor (respecting MaxSpan precedence).
 	if span := end.Sub(start); span < opts.MinSpan {
 		end = start.Add(opts.MinSpan)
-		if maxEnd != (time.Time{}) && end.After(maxEnd) {
-			end = maxEnd
-		}
 	}
+
+	// Unconditional MaxSpan clamp (final, always executes).
+	// This ensures MaxSpan is never violated, whether the loop ran or not.
+	if maxEnd != (time.Time{}) && end.After(maxEnd) {
+		end = maxEnd
+	}
+
 	return Window{Start: start, End: end, WidthPx: widthPx}
 }
 
