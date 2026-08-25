@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>UpNext</title>
+<style>{{.CSS}}</style>
+</head>
+<body>
+<div id="app">
+  <aside id="now-block">
+    <div id="clock-time">{{.VM.ClockTime}}</div>
+    <div id="clock-date">{{.VM.ClockDate}}</div>
+    {{with .VM.Current}}
+    <div id="now-wx">{{icon .Code}}<span>{{printf "%.0f" .TempF}}&deg;</span></div>
+    {{end}}
+    {{with .VM.NextEvent}}
+    <div id="next-label">Next</div>
+    <div id="next-title">{{.Title}}</div>
+    <div id="next-when">{{$.VM.UntilNext}}{{if .Location}} &middot; {{.Location}}{{end}}</div>
+    {{end}}
+  </aside>
+
+  <div id="track">
+    {{if .VM.AllDay}}
+    <div class="ad-ribbon">
+      {{range .VM.AllDay}}<div class="ad-pill" style="background:{{.Color}}22;color:{{.Color}}">{{.Title}}</div>{{end}}
+    </div>
+    {{end}}
+
+    {{range .VM.Blocks}}
+    <div class="block" style="left:{{px .X}};width:{{px .W}};border-left-color:{{.Event.Color}}"></div>
+    {{end}}
+
+    {{range .Labels}}
+    {{if .Drifted}}<div class="leader" style="left:{{px .Anchor}}"></div>{{end}}
+    <div class="label" style="left:{{px .X}};top:{{px .Top}}"><span class="lt">{{.Text}}</span></div>
+    {{end}}
+
+    <div id="now-line" style="left:{{px .VM.NowX}}"></div>
+
+    <div id="wx" style="width:{{px .VM.Window.WidthPx}}">{{.Chart}}</div>
+
+    <div id="forecast">
+      {{range .Forecast}}
+      <div class="fc-col">
+        <div class="fc-dow">{{.Day}}</div>
+        {{icon .Code}}
+        <div><span class="fc-hi">{{.Hi}}&deg;</span><span class="fc-lo">{{.Lo}}&deg;</span></div>
+        <div class="fc-pp">{{.Pop}}</div>
+      </div>
+      {{end}}
+    </div>
+
+    {{if .VM.Stale}}<div id="stale-flag">Stale</div>
+    {{else if .VM.Errors}}<div id="errors">{{range .VM.Errors}}{{.}} {{end}}</div>{{end}}
+  </div>
+</div>
+</body>
+</html>
