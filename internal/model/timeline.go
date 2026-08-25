@@ -17,6 +17,8 @@ type Window struct {
 // X maps a time to its horizontal pixel offset. The mapping is strictly linear,
 // so equal durations always occupy equal widths and every row (agenda, weather)
 // can share one axis.
+//
+// If End <= Start (degenerate window), X returns 0 for all times.
 func (w Window) X(t time.Time) float64 {
 	span := w.End.Sub(w.Start).Seconds()
 	if span <= 0 {
@@ -33,12 +35,31 @@ type WindowOpts struct {
 	MaxSpan     time.Duration // never zoom out wider than this
 }
 
-// ComputeWindow picks a visible span that fits the next FitEvents events,
-// clamped to [MinSpan, MaxSpan] so neither an imminent meeting nor a distant
-// one distorts the scale.
+// ComputeWindow picks a visible span that fits the next FitEvents events within
+// hard bounds [MinSpan, MaxSpan].
+//
+// Precedence (in order):
+//   1. MaxSpan is a hard outer bound; the window will never exceed start+MaxSpan.
+//      This ensures axis legibility. If MaxSpan > 0 and MaxSpan < MinSpan,
+//      the effective span is MaxSpan (MaxSpan wins).
+//   2. FitEvents is best-effort: the function aims to fit this many upcoming,
+//      non-all-day events, but never exceeds MaxSpan to do so.
+//   3. MinSpan is a floor: if the fitted span is less than MinSpan (and MaxSpan
+//      permits), the window is extended to MinSpan.
+//
+// Callers must provide events sorted by Start time. Merging events from multiple
+// calendar feeds requires re-sorting before calling ComputeWindow.
+//
+// FitEvents: 0 behaves like 1 (shows at least one event if any exist).
 func ComputeWindow(events []calendar.Event, now time.Time, widthPx float64, opts WindowOpts) Window {
 	start := now.Add(-opts.PastContext)
 	end := start.Add(opts.MinSpan)
+
+	// Compute the hard MaxSpan bound (may override MinSpan).
+	var maxEnd time.Time
+	if opts.MaxSpan > 0 {
+		maxEnd = start.Add(opts.MaxSpan)
+	}
 
 	var seen int
 	for _, e := range events {
@@ -49,15 +70,21 @@ func ComputeWindow(events []calendar.Event, now time.Time, widthPx float64, opts
 		if e.End.After(end) {
 			end = e.End
 		}
+		// Clamp to MaxSpan as we grow, so FitEvents can't override it.
+		if maxEnd != (time.Time{}) && end.After(maxEnd) {
+			end = maxEnd
+		}
 		if seen >= opts.FitEvents {
 			break
 		}
 	}
 
+	// Apply MinSpan floor (respecting MaxSpan precedence).
 	if span := end.Sub(start); span < opts.MinSpan {
 		end = start.Add(opts.MinSpan)
-	} else if opts.MaxSpan > 0 && span > opts.MaxSpan {
-		end = start.Add(opts.MaxSpan)
+		if maxEnd != (time.Time{}) && end.After(maxEnd) {
+			end = maxEnd
+		}
 	}
 	return Window{Start: start, End: end, WidthPx: widthPx}
 }
