@@ -1,6 +1,7 @@
 package chart
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -74,6 +75,94 @@ func TestHourlyHandlesNoData(t *testing.T) {
 	}
 	if !strings.HasPrefix(strings.TrimSpace(got), "<svg") {
 		t.Error("expected a valid empty <svg>, not a panic or blank string")
+	}
+}
+
+func TestHourlyNilWeather(t *testing.T) {
+	base := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+	win := model.Window{Start: base, End: base.Add(8 * time.Hour), WidthPx: 1540}
+	got := Hourly(nil, win, 104)
+	if !strings.HasPrefix(strings.TrimSpace(got), "<svg") || !strings.HasSuffix(strings.TrimSpace(got), "</svg>") {
+		t.Errorf("Hourly(nil, ...) = %q, want a valid empty <svg>", got)
+	}
+}
+
+// pathYs extracts the y-coordinates from a "M x y L x y L x y ..." path `d`
+// attribute produced by Hourly.
+func pathYs(t *testing.T, svg string) []float64 {
+	t.Helper()
+	start := strings.Index(svg, `<path class="wx-temp" d="`)
+	if start < 0 {
+		t.Fatalf("no temperature path found in %.200q", svg)
+	}
+	start += len(`<path class="wx-temp" d="`)
+	end := strings.Index(svg[start:], `"`)
+	if end < 0 {
+		t.Fatalf("unterminated path d attribute in %.200q", svg)
+	}
+	d := svg[start : start+end]
+	// Fields alternate x, y (the leading M/L verb is glued to the x token),
+	// so odd indices are the y coordinates.
+	fields := strings.Fields(d)
+	var ys []float64
+	for i := 1; i < len(fields); i += 2 {
+		var y float64
+		if _, err := fmt.Sscanf(fields[i], "%f", &y); err != nil {
+			t.Fatalf("could not parse y coordinate %q: %v", fields[i], err)
+		}
+		ys = append(ys, y)
+	}
+	return ys
+}
+
+// TestHourlyIgnoresOutOfWindowOutlierForScale is a regression test: min/max
+// for the y-axis must be derived only from the points actually plotted
+// (inside the window). Seeding the range from w.Hourly[0] before filtering
+// let an overnight low well before the window own the scale and flatten the
+// visible curve, even though that point was never drawn. See task 8 review.
+func TestHourlyIgnoresOutOfWindowOutlierForScale(t *testing.T) {
+	base := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+	win := model.Window{Start: base, End: base.Add(4 * time.Hour), WidthPx: 1540}
+
+	w := &weather.Weather{}
+	// Hourly[0]: a 35F overnight low ten hours before the window starts.
+	// Never plotted, but if it seeds min/max it flattens everything below.
+	w.Hourly = append(w.Hourly, weather.HourPoint{
+		Time: base.Add(-10 * time.Hour), TempF: 35,
+	})
+	// In-window points with real variation: 70.0 -> 74.5F.
+	inWindow := []float64{70.0, 71.5, 73.0, 74.5}
+	for i, temp := range inWindow {
+		w.Hourly = append(w.Hourly, weather.HourPoint{
+			Time: base.Add(time.Duration(i) * time.Hour), TempF: temp,
+		})
+	}
+
+	got := Hourly(w, win, 104)
+	ys := pathYs(t, got)
+	if len(ys) != len(inWindow) {
+		t.Fatalf("plotted %d points, want %d (outlier should be filtered out): %v", len(ys), len(inWindow), ys)
+	}
+
+	minY, maxY := ys[0], ys[0]
+	for _, y := range ys[1:] {
+		if y < minY {
+			minY = y
+		}
+		if y > maxY {
+			maxY = y
+		}
+	}
+	spread := maxY - minY
+
+	const heightPx = 104
+	const chartH = heightPx - labelBandPx
+	// The drawing area reserves the top/bottom 15% as margin, so the usable
+	// band is chartH*0.7. A real 4.5F climb across 4 points should span a
+	// meaningful fraction of that, not be squashed to a few px by an
+	// out-of-window outlier owning the scale.
+	if spread < (chartH*0.7)/2 {
+		t.Errorf("y spread = %.1fpx, want > half the drawing area (%.1fpx); curve looks flat: ys=%v", spread, (chartH*0.7)/2, ys)
 	}
 }
 

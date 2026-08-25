@@ -27,27 +27,35 @@ func Hourly(w *weather.Weather, win model.Window, heightPx float64) string {
 		return b.String() + "</svg>"
 	}
 
-	// Only points inside the window matter.
+	// Only points inside the window matter. win.End itself is excluded: X(win.End)
+	// == win.WidthPx, which would place its precip bar entirely past the right
+	// edge of the viewBox.
 	type pt struct {
 		x, temp float64
 		prob    int
 	}
 	var pts []pt
-	minT, maxT := w.Hourly[0].TempF, w.Hourly[0].TempF
 	for _, h := range w.Hourly {
-		if h.Time.Before(win.Start) || h.Time.After(win.End) {
+		if h.Time.Before(win.Start) || !h.Time.Before(win.End) {
 			continue
 		}
 		pts = append(pts, pt{x: win.X(h.Time), temp: h.TempF, prob: h.PrecipProb})
-		if h.TempF < minT {
-			minT = h.TempF
-		}
-		if h.TempF > maxT {
-			maxT = h.TempF
-		}
 	}
 	if len(pts) == 0 {
 		return b.String() + "</svg>"
+	}
+	// min/max must come from the plotted points only. Seeding from
+	// w.Hourly[0] before filtering let an out-of-window outlier (e.g. an
+	// overnight low hours before the window starts) own the scale and flatten
+	// the visible curve even though it's never drawn.
+	minT, maxT := pts[0].temp, pts[0].temp
+	for _, p := range pts[1:] {
+		if p.temp < minT {
+			minT = p.temp
+		}
+		if p.temp > maxT {
+			maxT = p.temp
+		}
 	}
 	if maxT-minT < 1 { // avoid divide-by-zero on a flat forecast
 		maxT = minT + 1
@@ -56,8 +64,10 @@ func Hourly(w *weather.Weather, win model.Window, heightPx float64) string {
 		return chartH - ((t-minT)/(maxT-minT))*(chartH*0.7) - chartH*0.15
 	}
 
-	// Precipitation bars first so the curve draws over them.
-	barW := win.WidthPx / float64(max(len(pts), 1))
+	// Precipitation bars first so the curve draws over them. len(pts) >= 1 is
+	// already guaranteed by the early return above, so no div-by-zero guard
+	// is needed here.
+	barW := win.WidthPx / float64(len(pts))
 	for _, p := range pts {
 		if p.prob <= 0 {
 			continue
