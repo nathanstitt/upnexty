@@ -22,9 +22,15 @@ func fixtureVM(t *testing.T) model.ViewModel {
 	c.Location.Timezone = "UTC"
 
 	evs := []calendar.Event{
-		{Title: "Standup", Color: "#4f9cff", Start: now.Add(18 * time.Minute), End: now.Add(33 * time.Minute)},
-		{Title: "Design Review", Color: "#ff7a59", Location: "Room B",
-			Start: now.Add(90 * time.Minute), End: now.Add(150 * time.Minute)},
+		// Standup and Design Review Sync start only 6 minutes apart. Design
+		// Review Sync's long title collides with Standup's label and gets
+		// pushed ~41px right of its own block (drift threshold is 80px), so
+		// PlaceLabels marks it Drifted — this fixture exists specifically to
+		// exercise the leader-mark ({{if .Drifted}}) template branch, which
+		// two well-separated events would never trigger.
+		{Title: "Standup", Color: "#4f9cff", Start: now.Add(10 * time.Minute), End: now.Add(20 * time.Minute)},
+		{Title: "Design Review Sync", Color: "#ff7a59", Location: "Room B",
+			Start: now.Add(16 * time.Minute), End: now.Add(45 * time.Minute)},
 		{Title: "Company Holiday", AllDay: true, Color: "#4f9cff",
 			Start: now.Truncate(24 * time.Hour), End: now.Add(24 * time.Hour)},
 	}
@@ -67,10 +73,40 @@ func TestRenderIncludesEventTitlesAndClock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Standup", "Design Review", "Company Holiday", "10:42"} {
+	for _, want := range []string{"Standup", "Design Review Sync", "Company Holiday", "10:42"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q", want)
 		}
+	}
+}
+
+// TestRenderDrawsLeaderForDriftedLabel exercises the {{if .Drifted}} template
+// branch. fixtureVM's Standup/Design Review Sync pair is deliberately close
+// enough together (see the comment there) that PlaceLabels pushes the second
+// label right of its own block's X — the exact clustered-events case Task 12
+// hits every minute against live calendar data. Without this, no fixture ever
+// set Drifted true and a regression in the leader-mark rendering would go
+// unnoticed.
+func TestRenderDrawsLeaderForDriftedLabel(t *testing.T) {
+	vm := fixtureVM(t)
+
+	// Mirrors the Drifted threshold Render applies (view.go: X-Anchor > 2).
+	var sawDrift bool
+	for _, l := range vm.Labels {
+		if l.X-l.Anchor > 2 {
+			sawDrift = true
+		}
+	}
+	if !sawDrift {
+		t.Fatal("fixture does not produce a drifted label; test no longer exercises the leader mark")
+	}
+
+	got, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `class="leader"`) {
+		t.Error(`output missing class="leader" for a drifted label`)
 	}
 }
 
@@ -99,6 +135,43 @@ func TestRenderHandlesEmptyModel(t *testing.T) {
 	}
 	if !strings.Contains(got, "10:42") {
 		t.Error("clock must render even with no data")
+	}
+}
+
+// TestRenderShowsStaleFlagWhenStale and TestRenderHidesStaleFlagWhenFresh
+// assert both directions of the {{if .VM.Stale}} branch. Stale is meant to
+// mean "this refresh cycle had a failure, so what's on screen may be
+// last-good rather than current" — an indicator stuck on is exactly as
+// wrong as one stuck off, and on an unattended kiosk nobody is watching for
+// either failure mode, so both are asserted rather than just the happy path.
+func TestRenderShowsStaleFlagWhenStale(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+	vm := model.Build(now, c, nil, nil, []string{"weather: timeout"})
+	if !vm.Stale {
+		t.Fatal("fixture does not set Stale; test no longer exercises this branch")
+	}
+	got, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `id="stale-flag"`) {
+		t.Error(`output missing id="stale-flag" when Stale is true`)
+	}
+}
+
+func TestRenderHidesStaleFlagWhenFresh(t *testing.T) {
+	vm := fixtureVM(t)
+	if vm.Stale {
+		t.Fatal("fixture unexpectedly sets Stale; test no longer exercises this branch")
+	}
+	got, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, `id="stale-flag"`) {
+		t.Error(`output has id="stale-flag" when Stale is false`)
 	}
 }
 
