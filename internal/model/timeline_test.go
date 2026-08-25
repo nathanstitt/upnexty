@@ -162,9 +162,9 @@ func TestBlocksIncludeStraddlingEvent(t *testing.T) {
 // excludes events that end beyond the window.
 func TestComputeWindowMaxSpanDropsEventsExceedingBound(t *testing.T) {
 	evs := []calendar.Event{
-		ev("e1", 30, 30),    // ends at 60m
-		ev("e2", 120, 60),   // ends at 180m
-		ev("e3", 300, 30),   // ends at 330m (5.5h)
+		ev("e1", 30, 30),  // ends at 60m
+		ev("e2", 120, 60), // ends at 180m
+		ev("e3", 300, 30), // ends at 330m (5.5h)
 	}
 	// Use a MaxSpan that will truncate the third event.
 	opts := WindowOpts{
@@ -197,8 +197,8 @@ func TestComputeWindowMaxSpanWinsOverMinSpan(t *testing.T) {
 	opts := WindowOpts{
 		FitEvents:   1,
 		PastContext: 15 * time.Minute,
-		MinSpan:     6 * time.Hour,  // Requests 6h minimum
-		MaxSpan:     2 * time.Hour,  // But MaxSpan caps at 2h
+		MinSpan:     6 * time.Hour, // Requests 6h minimum
+		MaxSpan:     2 * time.Hour, // But MaxSpan caps at 2h
 	}
 	w := ComputeWindow(evs, base, 1540, opts)
 	span := w.End.Sub(w.Start)

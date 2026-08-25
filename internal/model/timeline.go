@@ -39,13 +39,13 @@ type WindowOpts struct {
 // hard bounds [MinSpan, MaxSpan].
 //
 // Precedence (in order):
-//   1. MaxSpan is a hard outer bound; the window will never exceed start+MaxSpan.
-//      This ensures axis legibility. If MaxSpan > 0 and MaxSpan < MinSpan,
-//      the effective span is MaxSpan (MaxSpan wins).
-//   2. FitEvents is best-effort: the function aims to fit this many upcoming,
-//      non-all-day events, but never exceeds MaxSpan to do so.
-//   3. MinSpan is a floor: if the fitted span is less than MinSpan (and MaxSpan
-//      permits), the window is extended to MinSpan.
+//  1. MaxSpan is a hard outer bound; the window will never exceed start+MaxSpan.
+//     This ensures axis legibility. If MaxSpan > 0 and MaxSpan < MinSpan,
+//     the effective span is MaxSpan (MaxSpan wins).
+//  2. FitEvents is best-effort: the function aims to fit this many upcoming,
+//     non-all-day events, but never exceeds MaxSpan to do so.
+//  3. MinSpan is a floor: if the fitted span is less than MinSpan (and MaxSpan
+//     permits), the window is extended to MinSpan.
 //
 // Callers must provide events sorted by Start time. Merging events from multiple
 // calendar feeds requires re-sorting before calling ComputeWindow.

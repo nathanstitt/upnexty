@@ -12,12 +12,12 @@ type Label struct {
 
 // LabelOpts tunes label placement.
 type LabelOpts struct {
-	MaxRows    int     // hard cap on stacked label rows
-	Gap        float64 // minimum horizontal space between labels on a row
-	MaxDrift   float64 // how far a label may be pushed before it is demoted
-	TrackWidth float64 // labels are clamped to this width
+	MaxRows     int     // hard cap on stacked label rows
+	Gap         float64 // minimum horizontal space between labels on a row
+	MaxDrift    float64 // how far a label may be pushed before it is demoted
+	TrackWidth  float64 // labels are clamped to this width
 	MaxOverflow float64 // how far past TrackWidth a label's right edge may extend
-}                       // before it is omitted entirely (prevents runaway overflow)
+} // before it is omitted entirely (prevents runaway overflow)
 
 // PlaceLabels positions one label per block, avoiding overlap. Labels are laid
 // out left to right; a label that would collide is pushed right, and demoted to
@@ -49,7 +49,6 @@ func PlaceLabels(blocks []Block, measure func(string) float64, opts LabelOpts) [
 			w = opts.TrackWidth
 		}
 
-		placed := false
 		for row := 0; row < opts.MaxRows; row++ {
 			x := b.X
 			if min := rowEnd[row] + opts.Gap; x < min {
@@ -95,12 +94,8 @@ func PlaceLabels(blocks []Block, measure func(string) float64, opts LabelOpts) [
 			// This prevents later labels from thinking the row is free.
 			rowEnd[row] = x + w
 			out = append(out, lab)
-			placed = true
 			break
 		}
-		// If placed is still false, this label was skipped due to overflow;
-		// continue to the next block without adding anything.
-		_ = placed
 	}
 	return out
 }
