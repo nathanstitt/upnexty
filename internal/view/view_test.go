@@ -161,6 +161,36 @@ func TestRenderShowsStaleFlagWhenStale(t *testing.T) {
 	}
 }
 
+// TestRenderShowsErrorTextWhenStale guards against the bug where the
+// template's {{if .VM.Stale}}...{{else if .VM.Errors}}... branch made the
+// Errors arm provably unreachable (model.Build sets Stale := len(errs) > 0,
+// so the two conditions are always equivalent) — the actual diagnostic text,
+// e.g. "ical(Personal): GET ...: 401 Unauthorized", was computed, carried
+// through three layers, and then silently discarded, leaving only the bare
+// word "Stale" on an unattended panel with no way to tell what actually
+// failed. Both #stale-flag and #errors must render together.
+func TestRenderShowsErrorTextWhenStale(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+	wantErr := "ical(Personal): GET https://example.com/cal.ics: 401 Unauthorized"
+	vm := model.Build(now, c, nil, nil, []string{wantErr})
+	got, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `id="errors"`) {
+		t.Error(`output missing id="errors" when Errors is non-empty`)
+	}
+	if !strings.Contains(got, wantErr) {
+		t.Errorf("output missing error text %q", wantErr)
+	}
+	// Stale and Errors must render together, not as alternatives.
+	if !strings.Contains(got, `id="stale-flag"`) {
+		t.Error(`output missing id="stale-flag" alongside errors`)
+	}
+}
+
 func TestRenderHidesStaleFlagWhenFresh(t *testing.T) {
 	vm := fixtureVM(t)
 	if vm.Stale {

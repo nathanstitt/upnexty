@@ -51,12 +51,8 @@
       {{end}}
     </div>
 
-    {{/* model.Build sets Stale := len(errs) > 0, so Stale and a non-empty
-         Errors are currently always equivalent and this branch never fires.
-         Kept for forward-compatibility in case that coupling ever loosens
-         (e.g. a future Stale source unrelated to Errors). */}}
-    {{if .VM.Stale}}<div id="stale-flag">Stale</div>
-    {{else if .VM.Errors}}<div id="errors">{{range .VM.Errors}}{{.}} {{end}}</div>{{end}}
+    {{if .VM.Stale}}<div id="stale-flag">Stale</div>{{end}}
+    {{if .VM.Errors}}<div id="errors">{{range .VM.Errors}}{{.}} {{end}}</div>{{end}}
   </div>
 </div>
 </body>

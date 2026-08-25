@@ -74,6 +74,12 @@ html, body {
 .fc-lo { font-size: 17px; color: var(--text-mid); margin-left: 5px; }
 .fc-pp { font-size: 14px; color: var(--blue); }
 
-#errors { position: absolute; top: 4px; right: 8px; font-size: 13px; color: #ff7a59; }
+/* Stale and Errors can render together (model.Build sets Stale whenever
+   Errors is non-empty), so #errors sits below #stale-flag rather than
+   sharing its top offset. max-width plus overflow-wrap keeps a long error
+   string (e.g. a full "ical(Name): GET ...: 401 Unauthorized" message) from
+   running off the right edge of the 1540px track. */
 #stale-flag { position: absolute; top: 4px; right: 8px; font-size: 13px; color: #ff7a59;
   text-transform: uppercase; letter-spacing: 1px; }
+#errors { position: absolute; top: 22px; right: 8px; max-width: 460px;
+  font-size: 13px; color: #ff7a59; text-align: right; overflow-wrap: break-word; }
