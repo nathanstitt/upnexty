@@ -1,4 +1,6 @@
-# doctaculous CSS gaps found while building the Luckfox dashboard
+# doctaculous gaps found while building the Luckfox dashboard
+
+Six CSS features below, plus one API issue (context cancellation, §7).
 
 Found while rendering `internal/view/assets/style.css` (a 1920×480 dark-theme
 dashboard) through `doctaculous.OpenHTMLBytes` + `RasterizePage`. Every item
@@ -74,6 +76,32 @@ Ignored — glyph advance is unchanged. Not found in `pkg/css` or
 `pkg/layout`. Used on small uppercase labels (`NEXT`, `NOW`, weekday
 headers), where the tracking matters for legibility at a distance.
 
+## 7. Context cancellation is a no-op on the HTML path (API, not CSS)
+
+A hung or slow HTML render cannot be cancelled. Both halves of the pipeline
+drop the context:
+
+```go
+// pkg/doctaculous/html_backend.go:248 — no ctx parameter at all
+func OpenHTMLBytes(data []byte, opts ...HTMLOption) (*Document, error)
+
+// pkg/doctaculous/reflow_backend.go:155 — ctx accepted then discarded
+func (r *reflowRenderer) renderPage(_ context.Context, index int, opts RasterOptions) (image.Image, error)
+```
+
+`Document.RasterizePage` does thread its `ctx` down to `renderPage`, so the
+call *looks* cancellable, but the underscore parameter means it is never
+consulted. Parse and layout run under `context.Background()` regardless.
+
+Impact here: the dashboard renders on a timer, forever, on a board with three
+slow cores. A pathological document that sends layout into a very long loop
+would wedge the render goroutine with no way to time it out — the caller can
+only abandon it, not stop it. The work keeps consuming a core.
+
+`OpenReader(ctx, ...)` accepts a context for the open phase, so that half has
+a path forward; `renderPage` honouring its ctx (checking it between pages, or
+between layout passes) would close the rest.
+
 ## Confirmed working
 
 No action needed on these; recording them so the gaps above are unambiguous.
@@ -90,6 +118,7 @@ markup (the dashboard embeds `<svg>` directly and it rasterizes correctly).
 
 1. **`var()`** — blocks any stylesheet using a palette, which is most modern CSS.
 2. **alpha colors** — silently drops UI elements; the failure looks like a bug in the page.
-3. **`linear-gradient`** — parses today, so the gap is surprising.
-4. **`border-radius`**, **`letter-spacing`** — visual polish.
-5. **`box-shadow`** — lowest; `border-left` covers the common inset-spine case.
+3. **context cancellation** (§7) — correctness/robustness rather than appearance; matters for any long-running renderer.
+4. **`linear-gradient`** — parses today, so the gap is surprising.
+5. **`border-radius`**, **`letter-spacing`** — visual polish.
+6. **`box-shadow`** — lowest; `border-left` covers the common inset-spine case.
