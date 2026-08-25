@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"runtime/debug"
+	"sort"
 	"time"
 
 	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
@@ -187,13 +188,18 @@ func fetchCalendars(ctx context.Context, cfg *config.Config, store *Store) bool 
 		if src.URL == "" || len(src.URL) > 6 && src.URL[:6] == "PASTE_" {
 			continue
 		}
-		evs, err := calendar.Fetch(ctx, src, now, cfg.Agenda.DaysAhead)
+		evs, err := calendar.Fetch(ctx, src, now, cfg.Agenda.DaysAhead, cfg.TimeLocation())
 		if err != nil {
 			errs = append(errs, "ical("+src.Name+"): "+err.Error())
 			continue
 		}
 		all = append(all, evs...)
 	}
+	// Each feed arrives individually sorted, but concatenating sorted slices
+	// does not produce a sorted slice — sort the merge before truncating so a
+	// MaxEvents cutoff drops the chronologically latest events across ALL
+	// feeds, not just whichever feed happened to be appended last.
+	sort.SliceStable(all, func(i, j int) bool { return all[i].Start.Before(all[j].Start) })
 	if cfg.Agenda.MaxEvents > 0 && len(all) > cfg.Agenda.MaxEvents {
 		all = all[:cfg.Agenda.MaxEvents]
 	}

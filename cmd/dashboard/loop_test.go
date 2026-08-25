@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,6 +146,101 @@ func TestFetchLoopRetriesSoonerOnlyOnItsOwnFailure(t *testing.T) {
 	gap := times[1].Sub(times[0])
 	if gap >= interval {
 		t.Errorf("gap after own failure = %v, want well under interval (%v) — should retry at ~%v", gap, interval, retryDelay)
+	}
+}
+
+// TestFetchCalendarsSortsAcrossFeedsBeforeTruncating guards against the bug
+// where fetchCalendars concatenated each feed's (individually sorted) events
+// and then truncated to MaxEvents — a concatenation of sorted slices is NOT
+// sorted, so truncating it can keep an entire early feed's late events while
+// discarding a later feed's earlier, more imminent ones. Feed A here
+// contributes only LATE events; feed B contributes only EARLY events. With
+// MaxEvents smaller than the combined total, the retained set must be the
+// chronologically earliest events across BOTH feeds — i.e. it must include
+// feed B's events, not just a prefix of feed A's.
+func TestFetchCalendarsSortsAcrossFeedsBeforeTruncating(t *testing.T) {
+	icsFeed := func(events ...[2]string) string {
+		var sb strings.Builder
+		sb.WriteString("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n")
+		for _, e := range events {
+			uid, dtstart := e[0], e[1]
+			sb.WriteString("BEGIN:VEVENT\r\n")
+			sb.WriteString("UID:" + uid + "\r\n")
+			sb.WriteString("DTSTART:" + dtstart + "\r\n")
+			sb.WriteString("DTEND:" + dtstart + "\r\n")
+			sb.WriteString("SUMMARY:" + uid + "\r\n")
+			sb.WriteString("END:VEVENT\r\n")
+		}
+		sb.WriteString("END:VCALENDAR\r\n")
+		return sb.String()
+	}
+
+	// Anchored to the real clock (fetchCalendars calls time.Now() internally,
+	// with no seam to inject a fixed one) but offset well into the future so
+	// the test is not sensitive to what wall-clock time it happens to run at.
+	base := time.Now().Add(48 * time.Hour).UTC()
+	day := func(n int) string { return base.AddDate(0, 0, n).Format("20060102T150405Z") }
+
+	// Feed A: three LATE events (appended to `all` first).
+	feedA := icsFeed(
+		[2]string{"A-late-1", day(10)},
+		[2]string{"A-late-2", day(11)},
+		[2]string{"A-late-3", day(12)},
+	)
+	// Feed B: three EARLY events (appended second, but chronologically first).
+	feedB := icsFeed(
+		[2]string{"B-early-1", day(0)},
+		[2]string{"B-early-2", day(1)},
+		[2]string{"B-early-3", day(2)},
+	)
+
+	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(feedA))
+	}))
+	defer srvA.Close()
+	srvB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(feedB))
+	}))
+	defer srvB.Close()
+
+	cfg := &config.Config{
+		Calendars: []config.CalendarSource{
+			{Name: "A", URL: srvA.URL},
+			{Name: "B", URL: srvB.URL},
+		},
+	}
+	cfg.Agenda.DaysAhead = 20
+	cfg.Agenda.MaxEvents = 4
+
+	store := &Store{}
+	ok := fetchCalendars(context.Background(), cfg, store)
+	if !ok {
+		t.Fatal("fetchCalendars returned false, want true (both feeds should succeed)")
+	}
+
+	evs, _, _ := store.Snapshot()
+	if len(evs) != 4 {
+		t.Fatalf("got %d events, want 4 (MaxEvents)", len(evs))
+	}
+
+	wantTitles := map[string]bool{
+		"B-early-1": true, "B-early-2": true, "B-early-3": true, "A-late-1": true,
+	}
+	for _, e := range evs {
+		if !wantTitles[e.Title] {
+			t.Errorf("retained event %q, want only the 4 chronologically earliest across both feeds (%v)", e.Title, wantTitles)
+		}
+	}
+	// Must include events from feed B (the second-appended feed) — proof the
+	// merge was sorted before truncation rather than truncated per-append-order.
+	var sawFeedB bool
+	for _, e := range evs {
+		if strings.HasPrefix(e.Title, "B-") {
+			sawFeedB = true
+		}
+	}
+	if !sawFeedB {
+		t.Error("no feed B events retained; truncation kept only feed A's prefix instead of sorting the merge first")
 	}
 }
 
