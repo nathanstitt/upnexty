@@ -1,6 +1,6 @@
 # doctaculous gaps found while building the Luckfox dashboard
 
-Six CSS features below, plus one API issue (context cancellation, §7).
+Seven CSS features below, plus one API issue (context cancellation, §7).
 
 Found while rendering `internal/view/assets/style.css` (a 1920×480 dark-theme
 dashboard) through `doctaculous.OpenHTMLBytes` + `RasterizePage`. Every item
@@ -102,6 +102,24 @@ only abandon it, not stop it. The work keeps consuming a core.
 a path forward; `renderPage` honouring its ctx (checking it between pages, or
 between layout passes) would close the rest.
 
+## 8. `overflow-wrap` / `word-break` — no mid-word breaking
+
+Neither property exists in `pkg/css` or `pkg/layout`. Line breaking is
+whitespace-only (`pkg/layout/inline/break.go`): a token with no break
+opportunity keeps filling past its box rather than breaking mid-word.
+
+`max-width` IS honoured (verified — `resolveContentWidth`/`clampMaxMin` apply
+it, including to absolutely-positioned boxes), so the box is constrained; the
+text simply overflows it.
+
+Impact here: the error line renders a fetch failure like
+`ical(Personal): GET https://…very-long-url…: 401 Unauthorized`. That is one
+unbroken token, so on a long URL it runs past its 460px box and off the right
+edge of the panel. `overflow: visible` is the default and is honoured, so
+nothing clips it. Cosmetic — the surrounding layout is unaffected because the
+box is out-of-flow — but the diagnostic becomes unreadable exactly when it
+matters.
+
 ## Confirmed working
 
 No action needed on these; recording them so the gaps above are unambiguous.
@@ -120,5 +138,5 @@ markup (the dashboard embeds `<svg>` directly and it rasterizes correctly).
 2. **alpha colors** — silently drops UI elements; the failure looks like a bug in the page.
 3. **context cancellation** (§7) — correctness/robustness rather than appearance; matters for any long-running renderer.
 4. **`linear-gradient`** — parses today, so the gap is surprising.
-5. **`border-radius`**, **`letter-spacing`** — visual polish.
+5. **`border-radius`**, **`letter-spacing`**, **`overflow-wrap`** — visual polish; `overflow-wrap` matters most when rendering diagnostics (§8).
 6. **`box-shadow`** — lowest; `border-left` covers the common inset-spine case.
