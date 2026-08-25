@@ -62,6 +62,10 @@ type ViewModel struct {
 	AllDay []calendar.Event
 	NowX   float64
 
+	// Stale reports that this refresh cycle had at least one failure, so some
+	// of what is displayed may be last-good data rather than current. A
+	// calendar timeout with working weather still sets it — render the
+	// indicator on Stale, not on whether a particular section is empty.
 	Stale  bool
 	Errors []string
 }
