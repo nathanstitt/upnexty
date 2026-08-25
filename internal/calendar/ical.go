@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -155,6 +156,12 @@ func Parse(body []byte, calName, color string, now time.Time, daysAhead int, own
 		evs := icalExpand(ve, calName, color, now, cutoff, overrides, owner)
 		events = append(events, evs...)
 	}
+	// The Pi's caller sorted at the DashData assembly step (main.go:1173), a
+	// line outside the ported range. Parse now returns events in chronological
+	// order directly since callers here need concrete Events, not a
+	// pre-serialization struct. Sort by time, not the formatted string — RFC3339
+	// lexicographic order breaks across mixed UTC offsets.
+	sort.SliceStable(events, func(i, j int) bool { return events[i].Start.Before(events[j].Start) })
 	return events, nil
 }
 

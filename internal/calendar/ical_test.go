@@ -146,6 +146,12 @@ func TestParseNoDuplicateOccurrences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Keyed on Title|Start rather than UID|Start: Event has no exported UID
+	// field (the brief specifies its exact public shape), so UID isn't
+	// reachable here. This means the key can't distinguish the
+	// RECURRENCE-ID override (title "Daily Sync (moved)") from the series it
+	// replaces (title "Daily Sync") if they ever shared a Start — they don't
+	// in this fixture, so the check still catches same-title duplicates.
 	seen := map[string]bool{}
 	for _, e := range evs {
 		k := e.Title + "|" + e.Start.Format(time.RFC3339)
@@ -161,10 +167,97 @@ func TestParseRespectsWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// At daysAhead=1 from ref (Mon 2026-08-24 08:00 UTC) only the Standup at
+	// 2026-08-24 13:00 UTC falls in [ref-1h, ref+1d]: Standup's next
+	// Wed/Fri occurrences and both Daily Sync events start after the cutoff.
+	if len(evs) != 1 {
+		t.Fatalf("expected exactly 1 event within a 1-day window, got %d: %v", len(evs), titles(evs))
+	}
+	if evs[0].Title != "Standup" {
+		t.Errorf("Title = %q, want %q", evs[0].Title, "Standup")
+	}
 	cutoff := ref.AddDate(0, 0, 1)
 	for _, e := range evs {
 		if e.Start.After(cutoff) {
 			t.Errorf("event %q at %v is beyond the 1-day window", e.Title, e.Start)
 		}
 	}
+}
+
+func TestParseSortsChronologically(t *testing.T) {
+	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 7, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) < 2 {
+		t.Fatalf("expected multiple interleaved occurrences, got %d", len(evs))
+	}
+	for i := 1; i < len(evs); i++ {
+		if evs[i].Start.Before(evs[i-1].Start) {
+			t.Errorf("events out of order at index %d: %v (%q) before %v (%q)",
+				i, evs[i].Start, evs[i].Title, evs[i-1].Start, evs[i-1].Title)
+		}
+	}
+}
+
+func TestParseDropsDeclinedEvents(t *testing.T) {
+	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "owner@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range evs {
+		if e.Title == "Skipped Sync" {
+			t.Fatal("declined event was not dropped")
+		}
+	}
+}
+
+func TestParseAcceptedEventCarriesStatus(t *testing.T) {
+	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "owner@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range evs {
+		if e.Title == "Confirmed Sync" {
+			if e.Status != "accepted" {
+				t.Errorf("Status = %q, want %q", e.Status, "accepted")
+			}
+			return
+		}
+	}
+	t.Fatalf("Confirmed Sync not found in %v", titles(evs))
+}
+
+func TestParseDefaultsDurationWithoutDtend(t *testing.T) {
+	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range evs {
+		if e.Title == "Open-Ended Chat" {
+			want := e.Start.Add(time.Hour)
+			if !e.End.Equal(want) {
+				t.Errorf("End = %v, want %v (Start + 1h)", e.End, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("Open-Ended Chat not found in %v", titles(evs))
+}
+
+func TestParseUnescapesText(t *testing.T) {
+	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Retro, Planning, and Review"
+	for _, e := range evs {
+		if e.Title == want {
+			if e.Location != "Building A\nRoom 200" {
+				t.Errorf("Location = %q, want %q", e.Location, "Building A\nRoom 200")
+			}
+			return
+		}
+	}
+	t.Fatalf("unescaped title not found; got %v", titles(evs))
 }
