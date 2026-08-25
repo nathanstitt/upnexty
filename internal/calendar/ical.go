@@ -68,19 +68,28 @@ func httpGet(ctx context.Context, url string) ([]byte, error) {
 }
 
 // Fetch retrieves one iCal feed and parses it. The owner email is derived from
-// the feed URL so ATTENDEE PARTSTAT can be matched.
-func Fetch(ctx context.Context, src config.CalendarSource, now time.Time, daysAhead int) ([]Event, error) {
+// the feed URL so ATTENDEE PARTSTAT can be matched. loc is the configured
+// local timezone, used for any DTSTART/EXDATE/RECURRENCE-ID without an
+// explicit TZID (including every all-day VALUE=DATE event); pass nil to fall
+// back to UTC.
+func Fetch(ctx context.Context, src config.CalendarSource, now time.Time, daysAhead int, loc *time.Location) ([]Event, error) {
 	body, err := httpGet(ctx, src.URL)
 	if err != nil {
 		return nil, err
 	}
-	return Parse(body, src.Name, src.Color, now, daysAhead, icalOwnerFromURL(src.URL))
+	return Parse(body, src.Name, src.Color, now, daysAhead, icalOwnerFromURL(src.URL), loc)
 }
 
 // Parse expands an iCal feed into concrete occurrences within the window
 // [now, now+daysAhead]. Handles folded lines, VALUE=DATE all-day events, RRULE
-// expansion with EXDATE exclusions and RECURRENCE-ID overrides.
-func Parse(body []byte, calName, color string, now time.Time, daysAhead int, ownerEmail string) ([]Event, error) {
+// expansion with EXDATE exclusions and RECURRENCE-ID overrides. loc is the
+// configured local timezone applied to any time value that carries no TZID
+// (including all-day dates); a nil loc falls back to time.UTC rather than
+// time.Local, since the board has no TZ configured and time.Local there is UTC.
+func Parse(body []byte, calName, color string, now time.Time, daysAhead int, ownerEmail string, loc *time.Location) ([]Event, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
 	// Unfold folded lines (CRLF + whitespace → single line)
 	body = bytes.ReplaceAll(body, []byte("\r\n "), []byte(""))
 	body = bytes.ReplaceAll(body, []byte("\r\n\t"), []byte(""))
@@ -146,14 +155,14 @@ func Parse(body []byte, calName, color string, now time.Time, daysAhead int, own
 		if !ok {
 			continue
 		}
-		if t, allDay, ok := icalParseProp(rid); ok {
+		if t, allDay, ok := icalParseProp(rid, loc); ok {
 			overrides[ve.val("UID")+"|"+icalOccKey(t, allDay)] = true
 		}
 	}
 
 	var events []Event
 	for _, ve := range vevents {
-		evs := icalExpand(ve, calName, color, now, cutoff, overrides, owner)
+		evs := icalExpand(ve, calName, color, now, cutoff, overrides, owner, loc)
 		events = append(events, evs...)
 	}
 	// The Pi's caller sorted at the DashData assembly step (main.go:1173), a
@@ -205,14 +214,16 @@ func icalOwnerStatus(ve *icalVEvent, owner string) string {
 }
 
 // icalParseProp resolves a DTSTART/DTEND/RECURRENCE-ID property to a time,
-// reporting whether it is a date-only (all-day) value.
-func icalParseProp(p icalProp) (t time.Time, allDay bool, ok bool) {
+// reporting whether it is a date-only (all-day) value. loc is applied to any
+// value that carries no TZID of its own — notably every all-day VALUE=DATE
+// value, which never has one.
+func icalParseProp(p icalProp, loc *time.Location) (t time.Time, allDay bool, ok bool) {
 	v := p.value
 	if p.params["VALUE"] == "DATE" || len(v) == 8 {
-		t, err := time.ParseInLocation("20060102", v, time.Local)
+		t, err := time.ParseInLocation("20060102", v, loc)
 		return t, true, err == nil
 	}
-	t, err := icalParseDateTime(v, p.params["TZID"])
+	t, err := icalParseDateTime(v, p.params["TZID"], loc)
 	return t, false, err == nil
 }
 
@@ -228,7 +239,7 @@ func icalOccKey(t time.Time, allDay bool) string {
 // icalExpand turns one VEVENT into the concrete Events that fall within
 // [now-1h, cutoff]. Non-recurring events yield at most one; recurring events
 // (RRULE) are expanded, with EXDATE exclusions and RECURRENCE-ID overrides applied.
-func icalExpand(ve *icalVEvent, calName, color string, now, cutoff time.Time, overrides map[string]bool, owner string) []Event {
+func icalExpand(ve *icalVEvent, calName, color string, now, cutoff time.Time, overrides map[string]bool, owner string, loc *time.Location) []Event {
 	title := icalUnescape(ve.val("SUMMARY"))
 	if title == "" {
 		title = "(no title)"
@@ -242,7 +253,7 @@ func icalExpand(ve *icalVEvent, calName, color string, now, cutoff time.Time, ov
 	if !ok {
 		return nil
 	}
-	start, allDay, ok := icalParseProp(dtstart)
+	start, allDay, ok := icalParseProp(dtstart, loc)
 	if !ok {
 		return nil
 	}
@@ -250,7 +261,7 @@ func icalExpand(ve *icalVEvent, calName, color string, now, cutoff time.Time, ov
 	// Duration = DTEND - DTSTART (fallbacks: 1 day all-day, 1 hour timed).
 	var dur time.Duration
 	if dtend, ok := ve.get("DTEND"); ok {
-		if end, _, ok := icalParseProp(dtend); ok && end.After(start) {
+		if end, _, ok := icalParseProp(dtend, loc); ok && end.After(start) {
 			dur = end.Sub(start)
 		}
 	}
@@ -299,14 +310,14 @@ func icalExpand(ve *icalVEvent, calName, color string, now, cutoff time.Time, ov
 	excluded := map[string]bool{}
 	for _, ex := range ve.multi["EXDATE"] {
 		for _, v := range strings.Split(ex.value, ",") {
-			if t, ad, ok := icalParseProp(icalProp{params: ex.params, value: v}); ok {
+			if t, ad, ok := icalParseProp(icalProp{params: ex.params, value: v}, loc); ok {
 				excluded[icalOccKey(t, ad)] = true
 			}
 		}
 	}
 
 	var out []Event
-	for _, occ := range icalRecur(rrule.value, start, now, cutoff, dur) {
+	for _, occ := range icalRecur(rrule.value, start, now, cutoff, dur, loc) {
 		key := icalOccKey(occ, allDay)
 		if excluded[key] {
 			continue
@@ -325,7 +336,7 @@ func icalExpand(ve *icalVEvent, calName, color string, now, cutoff time.Time, ov
 // [now-1h, cutoff]. Supports FREQ DAILY/WEEKLY/MONTHLY/YEARLY with INTERVAL,
 // COUNT, UNTIL, BYDAY (incl. ordinals like 3TU), and BYMONTHDAY. Iteration is
 // bounded so a malformed/huge rule can't loop forever.
-func icalRecur(rule string, dtstart, now, cutoff time.Time, dur time.Duration) []time.Time {
+func icalRecur(rule string, dtstart, now, cutoff time.Time, dur time.Duration, loc *time.Location) []time.Time {
 	freq := ""
 	interval := 1
 	count := -1
@@ -352,7 +363,7 @@ func icalRecur(rule string, dtstart, now, cutoff time.Time, dur time.Duration) [
 		case "UNTIL":
 			if t, err := time.Parse("20060102T150405Z", val); err == nil {
 				until = t
-			} else if t, err := time.ParseInLocation("20060102", val, time.Local); err == nil {
+			} else if t, err := time.ParseInLocation("20060102", val, loc); err == nil {
 				until = t
 			}
 		case "BYDAY":
@@ -610,12 +621,12 @@ func monthDay(year int, month time.Month, dom int, ref time.Time) time.Time {
 }
 
 // icalParseDateTime parses iCal DATETIME values: 20060102T150405Z or 20060102T150405
-// tzid is the TZID parameter value (e.g. "America/New_York"), empty string to use local.
-func icalParseDateTime(s, tzid string) (time.Time, error) {
+// tzid is the TZID parameter value (e.g. "America/New_York"); when empty, loc
+// (the configured local timezone) is used instead.
+func icalParseDateTime(s, tzid string, loc *time.Location) (time.Time, error) {
 	if strings.HasSuffix(s, "Z") {
 		return time.Parse("20060102T150405Z", s)
 	}
-	loc := time.Local
 	if tzid != "" {
 		if l, err := time.LoadLocation(tzid); err == nil {
 			loc = l

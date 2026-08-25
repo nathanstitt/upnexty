@@ -27,7 +27,7 @@ func titles(evs []Event) []string {
 }
 
 func TestParseSingleEvent(t *testing.T) {
-	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "")
+	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestParseSingleEvent(t *testing.T) {
 }
 
 func TestParseAllDayEvent(t *testing.T) {
-	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "")
+	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestParseAllDayEvent(t *testing.T) {
 }
 
 func TestParseUnfoldsLongLines(t *testing.T) {
-	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "")
+	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestParseUnfoldsLongLines(t *testing.T) {
 }
 
 func TestParseExpandsWeeklyByDay(t *testing.T) {
-	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 7, "")
+	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 7, "", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestParseExpandsWeeklyByDay(t *testing.T) {
 }
 
 func TestParseHonorsExdate(t *testing.T) {
-	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 7, "")
+	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 7, "", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestParseHonorsExdate(t *testing.T) {
 }
 
 func TestParseAppliesRecurrenceOverride(t *testing.T) {
-	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 7, "")
+	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 7, "", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestParseAppliesRecurrenceOverride(t *testing.T) {
 }
 
 func TestParseNoDuplicateOccurrences(t *testing.T) {
-	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 7, "")
+	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 7, "", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestParseNoDuplicateOccurrences(t *testing.T) {
 }
 
 func TestParseRespectsWindow(t *testing.T) {
-	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 1, "")
+	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 1, "", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestParseRespectsWindow(t *testing.T) {
 }
 
 func TestParseSortsChronologically(t *testing.T) {
-	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 7, "")
+	evs, err := Parse(load(t, "recurring.ics"), "Work", "#fff", ref, 7, "", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestParseSortsChronologically(t *testing.T) {
 }
 
 func TestParseDropsDeclinedEvents(t *testing.T) {
-	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "owner@example.com")
+	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "owner@example.com", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestParseDropsDeclinedEvents(t *testing.T) {
 }
 
 func TestParseAcceptedEventCarriesStatus(t *testing.T) {
-	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "owner@example.com")
+	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "owner@example.com", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestParseAcceptedEventCarriesStatus(t *testing.T) {
 }
 
 func TestParseDefaultsDurationWithoutDtend(t *testing.T) {
-	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "")
+	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,8 +245,80 @@ func TestParseDefaultsDurationWithoutDtend(t *testing.T) {
 	t.Fatalf("Open-Ended Chat not found in %v", titles(evs))
 }
 
+// TestParseAllDayEventHonorsConfiguredLocation guards against the bug where
+// Parse ignored the caller's configured timezone entirely and always fell
+// back to time.Local for any value without an explicit TZID — which is every
+// VALUE=DATE all-day event, since iCal's DATE type carries no zone of its
+// own. On the board time.Local is UTC, so an all-day event configured for
+// e.g. America/Chicago would render 5-6 hours off from where it belongs
+// relative to the NOW line. Company Holiday (basic.ics) is
+// "DTSTART;VALUE=DATE:20260827" with no TZID; parsed with America/Chicago it
+// must resolve to midnight *Chicago* time, i.e. 2026-08-27 00:00 CDT, whose
+// UTC instant is 2026-08-27 05:00Z (CDT is UTC-5 in August).
+func TestParseAllDayEventHonorsConfiguredLocation(t *testing.T) {
+	chicago, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Fatalf("LoadLocation(America/Chicago): %v", err)
+	}
+	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "", chicago)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *Event
+	for i := range evs {
+		if evs[i].Title == "Company Holiday" {
+			got = &evs[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("Company Holiday not found in %v", titles(evs))
+	}
+	if got.Start.Location().String() != "America/Chicago" {
+		t.Errorf("Start.Location() = %v, want America/Chicago", got.Start.Location())
+	}
+	wantUTC := time.Date(2026, 8, 27, 5, 0, 0, 0, time.UTC)
+	if !got.Start.UTC().Equal(wantUTC) {
+		t.Errorf("Start (UTC instant) = %v, want %v (midnight America/Chicago)", got.Start.UTC(), wantUTC)
+	}
+}
+
+// TestParseHonorsExdateAcrossTZID guards icalOccKey's t.UTC() normalization,
+// which is load-bearing for matching EXDATE/RECURRENCE-ID against generated
+// occurrences whenever the two sides are expressed in different zone forms —
+// every other fixture in this package uses Z (UTC) timestamps on both the
+// RRULE/DTSTART and the EXDATE, so the two keys already share a location and
+// a naive string-format match (with no .UTC() call) would pass those tests
+// even if the normalization were deleted. tzid.ics's DTSTART/RRULE carry
+// TZID=America/New_York (so generated occurrences are represented in that
+// zone) while its EXDATE is instead given as a plain Z/UTC timestamp for the
+// same instant — a real-world shape some feeds produce. Only t.UTC()
+// normalization before formatting makes the two keys land on the same
+// string; comparing raw wall-clock representations would miss the match and
+// fail to exclude the occurrence.
+func TestParseHonorsExdateAcrossTZID(t *testing.T) {
+	evs, err := Parse(load(t, "tzid.ics"), "Work", "#fff", ref, 7, "", time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []time.Time
+	for _, e := range evs {
+		if e.Title == "TZID Daily Sync" {
+			got = append(got, e.Start)
+		}
+	}
+	if len(got) != 4 {
+		t.Fatalf("got %d occurrences, want 4 (5 daily - 1 excluded): %v", len(got), got)
+	}
+	excluded := time.Date(2026, 8, 27, 13, 0, 0, 0, time.UTC) // 09:00 EDT (UTC-4)
+	for _, s := range got {
+		if s.UTC().Equal(excluded) {
+			t.Fatalf("EXDATE occurrence at %v (America/New_York) was not excluded; got occurrences %v", excluded, got)
+		}
+	}
+}
+
 func TestParseUnescapesText(t *testing.T) {
-	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "")
+	evs, err := Parse(load(t, "basic.ics"), "Work", "#fff", ref, 7, "", time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
