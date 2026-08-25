@@ -3,6 +3,9 @@
 
 # Vendored upgrade_tool — redistributable only from Luckfox; see CLAUDE.md Setup
 /tools/
+# Exception: fb2png source should be tracked
+!/tools/fb2png/
+!/tools/fb2png/**.go
 
 # Firmware images and device-tree dumps pulled off the board
 *.img
