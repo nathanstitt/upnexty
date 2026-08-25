@@ -98,3 +98,26 @@ func TestPlaceLabelsHandlesEmptyInput(t *testing.T) {
 		t.Errorf("len = %d, want 0", len(ls))
 	}
 }
+
+func TestPlaceLabelsNoOverlapWhenClampedToTrackWidth(t *testing.T) {
+	// Two labels near the right edge: if the second one is clamped to TrackWidth,
+	// it must not collide with the first. This is a regression test for a bug where
+	// clamping re-introduced overlap that push-and-demote had avoided.
+	bs := []Block{blk("aaaaaaaaaa", 900, 5), blk("bb", 950, 5)} // 100px and 20px labels
+	ls := PlaceLabels(bs, fixed(10), LabelOpts{MaxRows: 2, Gap: 8, MaxDrift: 60, TrackWidth: 1000})
+
+	// Both labels should fit without overlap
+	label0End := ls[0].X + ls[0].W
+	label1Start := ls[1].X
+
+	if label1Start < label0End+8 { // Gap = 8
+		if ls[1].Row == ls[0].Row { // same row, so must respect Gap
+			t.Errorf("labels overlap on same row: label0 ends at %v, label1 starts at %v (gap %v), want gap >= 8",
+				label0End, label1Start, label1Start-label0End)
+		}
+	}
+	// Also verify Anchor is preserved
+	if ls[1].Anchor != 950 {
+		t.Errorf("second label Anchor = %v, want block anchor 950", ls[1].Anchor)
+	}
+}

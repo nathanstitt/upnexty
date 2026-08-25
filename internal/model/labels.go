@@ -52,18 +52,31 @@ func PlaceLabels(blocks []Block, measure func(string) float64, opts LabelOpts) [
 			if x-b.X > opts.MaxDrift && row < opts.MaxRows-1 {
 				continue
 			}
+
+			// Apply TrackWidth clamp, but re-check for collision after clamping.
 			if x+w > opts.TrackWidth {
 				x = opts.TrackWidth - w
 				if x < 0 {
 					x = 0
 				}
+				// After clamping, check if the clamped position still collides
+				// with the previous label on this row. If it does and we have
+				// another row to try, demote instead (unless this is the last row).
+				if x < rowEnd[row] && row < opts.MaxRows-1 {
+					continue
+				}
 			}
+
 			lab = Label{Text: text, X: x, W: w, Row: row, Anchor: b.X}
 			rowEnd[row] = x + w
 			placed = true
 			break
 		}
-		if !placed { // every row drifted too far: accept the last row anyway
+
+		// If no row could accommodate this label without clamping into a collision,
+		// accept the last row anyway (there is nowhere else to go), but ensure
+		// we don't silently update rowEnd with a colliding position.
+		if !placed {
 			row := opts.MaxRows - 1
 			x := rowEnd[row] + opts.Gap
 			if x+w > opts.TrackWidth {
