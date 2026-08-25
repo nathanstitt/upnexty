@@ -121,3 +121,74 @@ func TestPlaceLabelsNoOverlapWhenClampedToTrackWidth(t *testing.T) {
 		t.Errorf("second label Anchor = %v, want block anchor 950", ls[1].Anchor)
 	}
 }
+
+func TestPlaceLabelsNoOverlapMaxRows1(t *testing.T) {
+	// Regression: two labels on a single row near the track edge.
+	// The second label should not overlap the first, even if clamping is needed.
+	// With MaxRows=1 there's nowhere to demote, so the second label must be pushed right.
+	bs := []Block{blk("aaaaaaaaaa", 900, 5), blk("bb", 950, 5)} // 100px and 20px labels
+	ls := PlaceLabels(bs, fixed(10), LabelOpts{MaxRows: 1, Gap: 8, MaxDrift: 60, TrackWidth: 1000})
+
+	if len(ls) != 2 {
+		t.Fatalf("len = %d, want 2", len(ls))
+	}
+
+	// Both must be on row 0
+	if ls[0].Row != 0 || ls[1].Row != 0 {
+		t.Errorf("rows = %d,%d, want 0,0", ls[0].Row, ls[1].Row)
+	}
+
+	// They must not overlap
+	label0End := ls[0].X + ls[0].W
+	label1Start := ls[1].X
+
+	if label1Start < label0End {
+		t.Errorf("labels overlap: label0 [%v,%v), label1 [%v,%v), gap = %v",
+			ls[0].X, label0End, label1Start, label1Start+ls[1].W, label1Start-label0End)
+	}
+
+	// Anchor preserved
+	for i, l := range ls {
+		if l.Anchor != bs[i].X {
+			t.Errorf("label %d Anchor = %v, want %v", i, l.Anchor, bs[i].X)
+		}
+	}
+}
+
+func TestPlaceLabelsNoStackingInCrammedCase(t *testing.T) {
+	// Regression: five 50px labels at X=960,965,970,975,980 with MaxRows=2.
+	// They should not stack on top of each other at identical X values.
+	var bs []Block
+	for i := 0; i < 5; i++ {
+		bs = append(bs, blk("12345", 960+float64(i)*5, 5))
+	}
+	ls := PlaceLabels(bs, fixed(10), LabelOpts{MaxRows: 2, Gap: 8, MaxDrift: 60, TrackWidth: 1000})
+
+	if len(ls) != 5 {
+		t.Fatalf("len = %d, want 5", len(ls))
+	}
+
+	// Check each row for ordering (no backwards moves, no stacking)
+	rowLabels := make(map[int][]Label)
+	for _, l := range ls {
+		rowLabels[l.Row] = append(rowLabels[l.Row], l)
+	}
+
+	for row, labels := range rowLabels {
+		for i := 1; i < len(labels); i++ {
+			prevEnd := labels[i-1].X + labels[i-1].W
+			currStart := labels[i].X
+			if currStart < prevEnd+8 { // Gap
+				t.Errorf("row %d: labels %d and %d overlap/underspaced: [%v,%v) then [%v,%v), gap = %v",
+					row, i-1, i, labels[i-1].X, prevEnd, currStart, currStart+labels[i].W, currStart-prevEnd)
+			}
+		}
+	}
+
+	// Anchors preserved
+	for i, l := range ls {
+		if l.Anchor != bs[i].X {
+			t.Errorf("label %d Anchor = %v, want %v", i, l.Anchor, bs[i].X)
+		}
+	}
+}

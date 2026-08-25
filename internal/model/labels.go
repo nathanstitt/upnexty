@@ -41,8 +41,6 @@ func PlaceLabels(blocks []Block, measure func(string) float64, opts LabelOpts) [
 			w = opts.TrackWidth
 		}
 
-		placed := false
-		var lab Label
 		for row := 0; row < opts.MaxRows; row++ {
 			x := b.X
 			if min := rowEnd[row] + opts.Gap; x < min {
@@ -53,42 +51,36 @@ func PlaceLabels(blocks []Block, measure func(string) float64, opts LabelOpts) [
 				continue
 			}
 
-			// Apply TrackWidth clamp, but re-check for collision after clamping.
+			// Check if label would overflow TrackWidth. If so, try to clamp it,
+			// but re-check for collision after clamping.
 			if x+w > opts.TrackWidth {
-				x = opts.TrackWidth - w
-				if x < 0 {
-					x = 0
+				clampedX := opts.TrackWidth - w
+				if clampedX < 0 {
+					clampedX = 0
 				}
-				// After clamping, check if the clamped position still collides
-				// with the previous label on this row. If it does and we have
-				// another row to try, demote instead (unless this is the last row).
-				if x < rowEnd[row] && row < opts.MaxRows-1 {
-					continue
+				// After clamping, check if the clamped position collides
+				// with the previous label on this row.
+				if clampedX < rowEnd[row] {
+					// Collision after clamp. If we have more rows, try the next one.
+					if row < opts.MaxRows-1 {
+						continue
+					}
+					// On the last row: push right instead, overflow the track.
+					// This is more readable than multiple labels stacked at X=950.
+					x = rowEnd[row] + opts.Gap
+				} else {
+					// No collision after clamp; use the clamped position.
+					x = clampedX
 				}
 			}
 
-			lab = Label{Text: text, X: x, W: w, Row: row, Anchor: b.X}
+			lab := Label{Text: text, X: x, W: w, Row: row, Anchor: b.X}
+			// Update rowEnd with the true right edge, even if it overflows TrackWidth.
+			// This prevents later labels from thinking the row is free.
 			rowEnd[row] = x + w
-			placed = true
+			out = append(out, lab)
 			break
 		}
-
-		// If no row could accommodate this label without clamping into a collision,
-		// accept the last row anyway (there is nowhere else to go), but ensure
-		// we don't silently update rowEnd with a colliding position.
-		if !placed {
-			row := opts.MaxRows - 1
-			x := rowEnd[row] + opts.Gap
-			if x+w > opts.TrackWidth {
-				x = opts.TrackWidth - w
-				if x < 0 {
-					x = 0
-				}
-			}
-			lab = Label{Text: text, X: x, W: w, Row: row, Anchor: b.X}
-			rowEnd[row] = x + w
-		}
-		out = append(out, lab)
 	}
 	return out
 }
