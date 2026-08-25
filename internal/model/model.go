@@ -47,6 +47,7 @@ type ViewModel struct {
 	LocationName string
 	Current      *weather.Conditions
 	Forecast     []weather.DayPoint
+	Hourly       []weather.HourPoint
 
 	NextEvent *calendar.Event
 	UntilNext string
@@ -82,13 +83,20 @@ func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Wea
 		ClockDate:    local.Format("Monday, January 2"),
 		LocationName: c.Location.Name,
 		Errors:       errs,
-		Stale:        w == nil && len(evs) == 0,
+		// Stale means "something failed this fetch cycle, so what's on
+		// screen may be older than it looks" — derived from errs, not from
+		// whether both sources happened to fail together. A calendar
+		// timeout with weather still succeeding is exactly the case this
+		// must catch: the agenda shown is stale even though Current is
+		// fresh.
+		Stale: len(errs) > 0,
 	}
 
 	if w != nil {
 		cur := w.Current
 		vm.Current = &cur
 		vm.Forecast = w.Daily
+		vm.Hourly = w.Hourly
 	}
 
 	// Build may receive events concatenated from multiple calendar feeds.
@@ -126,7 +134,10 @@ func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Wea
 // reads as "now".
 func untilText(now, start time.Time) string {
 	d := start.Sub(now)
-	if d <= 0 {
+	// Sub-minute durations truncate to 0 under int(d.Minutes()), which would
+	// otherwise print "0m" for the whole final minute before an event starts.
+	// Treat anything under a minute as already-here.
+	if d < time.Minute {
 		return "now"
 	}
 	mins := int(d.Minutes())
@@ -142,7 +153,10 @@ func untilText(now, start time.Time) string {
 
 // estimateTextWidth approximates rendered label width. Labels are 19px and the
 // UI font averages ~0.52em per character; exact metrics are not needed because
-// placement only has to avoid visible collisions.
+// placement only has to avoid visible collisions. This is a guess, not a
+// measurement: it must stay consistent with whatever label font-size Task 9's
+// CSS actually specifies, and should be tuned against a real render on
+// hardware if labels overlap or drop too eagerly.
 func estimateTextWidth(s string) float64 {
 	const avgCharPx = 19 * 0.52
 	return float64(len([]rune(s))) * avgCharPx

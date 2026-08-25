@@ -130,3 +130,68 @@ func TestBuildPopulatesForecast(t *testing.T) {
 		t.Errorf("len(Forecast) = %d, want 2", len(vm.Forecast))
 	}
 }
+
+func TestBuildPopulatesHourly(t *testing.T) {
+	now := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+	w := &weather.Weather{
+		Current: weather.Conditions{TempF: 72, Code: 1},
+		Hourly: []weather.HourPoint{
+			{Time: now, TempF: 72, PrecipProb: 10, Code: 1},
+			{Time: now.Add(time.Hour), TempF: 74, PrecipProb: 20, Code: 1},
+		},
+	}
+	vm := Build(now, testConfig(), nil, w, nil)
+	if len(vm.Hourly) != 2 {
+		t.Fatalf("len(Hourly) = %d, want 2", len(vm.Hourly))
+	}
+	if vm.Hourly[1].TempF != 74 {
+		t.Errorf("Hourly[1].TempF = %v, want 74", vm.Hourly[1].TempF)
+	}
+}
+
+func TestBuildHourlyEmptyWhenNoWeather(t *testing.T) {
+	now := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+	vm := Build(now, testConfig(), nil, nil, nil)
+	if len(vm.Hourly) != 0 {
+		t.Errorf("Hourly = %v, want empty when weather is nil", vm.Hourly)
+	}
+}
+
+func TestBuildStaleWhenCalendarErrorsDespiteWeatherOk(t *testing.T) {
+	now := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+	w := &weather.Weather{Current: weather.Conditions{TempF: 72}}
+	vm := Build(now, testConfig(), nil, w, []string{"calendar: timeout"})
+	if !vm.Stale {
+		t.Error("Stale should be true when calendar errored, even though weather succeeded")
+	}
+}
+
+func TestBuildStaleWhenWeatherErrorsDespiteCalendarOk(t *testing.T) {
+	now := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+	evs := []calendar.Event{{Title: "e", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour)}}
+	vm := Build(now, testConfig(), evs, nil, []string{"weather: timeout"})
+	if !vm.Stale {
+		t.Error("Stale should be true when weather errored, even though calendar succeeded")
+	}
+}
+
+func TestBuildNotStaleWhenNoErrors(t *testing.T) {
+	now := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+	w := &weather.Weather{Current: weather.Conditions{TempF: 72}}
+	evs := []calendar.Event{{Title: "e", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour)}}
+	vm := Build(now, testConfig(), evs, w, nil)
+	if vm.Stale {
+		t.Error("Stale should be false when there are no errors")
+	}
+}
+
+func TestBuildUntilNextReadsNowInFinalMinute(t *testing.T) {
+	now := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		{Title: "soon", Start: now.Add(30 * time.Second), End: now.Add(30 * time.Minute)},
+	}
+	vm := Build(now, testConfig(), evs, nil, nil)
+	if vm.UntilNext != "now" {
+		t.Errorf("UntilNext = %q, want %q for an event 30s away", vm.UntilNext, "now")
+	}
+}
