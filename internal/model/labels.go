@@ -16,11 +16,18 @@ type LabelOpts struct {
 	Gap        float64 // minimum horizontal space between labels on a row
 	MaxDrift   float64 // how far a label may be pushed before it is demoted
 	TrackWidth float64 // labels are clamped to this width
-}
+	MaxOverflow float64 // how far past TrackWidth a label's right edge may extend
+}                       // before it is omitted entirely (prevents runaway overflow)
 
 // PlaceLabels positions one label per block, avoiding overlap. Labels are laid
 // out left to right; a label that would collide is pushed right, and demoted to
 // the next row if pushing would drift it more than MaxDrift from its anchor.
+//
+// IMPORTANT: The returned slice may be SHORTER than the input blocks slice.
+// Labels that would exceed TrackWidth + MaxOverflow are omitted entirely,
+// not placed off-screen. This prevents runaway overflow in dense time windows.
+// Callers must NOT assume index alignment between blocks and returned labels.
+// Use the Anchor field (block's own X) to correlate a label with its block.
 func PlaceLabels(blocks []Block, measure func(string) float64, opts LabelOpts) []Label {
 	if len(blocks) == 0 {
 		return nil
@@ -28,7 +35,8 @@ func PlaceLabels(blocks []Block, measure func(string) float64, opts LabelOpts) [
 	if opts.MaxRows < 1 {
 		opts.MaxRows = 1
 	}
-	rowEnd := make([]float64, opts.MaxRows) // right edge occupied per row
+	maxRight := opts.TrackWidth + opts.MaxOverflow // hard ceiling for label right edges
+	rowEnd := make([]float64, opts.MaxRows)        // right edge occupied per row
 	for i := range rowEnd {
 		rowEnd[i] = -1e9
 	}
@@ -41,6 +49,7 @@ func PlaceLabels(blocks []Block, measure func(string) float64, opts LabelOpts) [
 			w = opts.TrackWidth
 		}
 
+		placed := false
 		for row := 0; row < opts.MaxRows; row++ {
 			x := b.X
 			if min := rowEnd[row] + opts.Gap; x < min {
@@ -74,13 +83,24 @@ func PlaceLabels(blocks []Block, measure func(string) float64, opts LabelOpts) [
 				}
 			}
 
+			// Check if label would exceed the overflow ceiling. If so, skip it.
+			if x+w > maxRight {
+				// This label cannot be placed within bounds; omit it entirely
+				// rather than placing it off-screen where it won't be visible.
+				break
+			}
+
 			lab := Label{Text: text, X: x, W: w, Row: row, Anchor: b.X}
 			// Update rowEnd with the true right edge, even if it overflows TrackWidth.
 			// This prevents later labels from thinking the row is free.
 			rowEnd[row] = x + w
 			out = append(out, lab)
+			placed = true
 			break
 		}
+		// If placed is still false, this label was skipped due to overflow;
+		// continue to the next block without adding anything.
+		_ = placed
 	}
 	return out
 }

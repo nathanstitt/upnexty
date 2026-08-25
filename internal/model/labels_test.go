@@ -16,7 +16,7 @@ func blk(title string, x, wpx float64) Block {
 }
 
 func defaultOpts() LabelOpts {
-	return LabelOpts{MaxRows: 2, Gap: 8, MaxDrift: 60, TrackWidth: 1000}
+	return LabelOpts{MaxRows: 2, Gap: 8, MaxDrift: 60, TrackWidth: 1000, MaxOverflow: 0}
 }
 
 func TestPlaceLabelsKeepsWellSpacedLabelsOnRowZero(t *testing.T) {
@@ -104,7 +104,7 @@ func TestPlaceLabelsNoOverlapWhenClampedToTrackWidth(t *testing.T) {
 	// it must not collide with the first. This is a regression test for a bug where
 	// clamping re-introduced overlap that push-and-demote had avoided.
 	bs := []Block{blk("aaaaaaaaaa", 900, 5), blk("bb", 950, 5)} // 100px and 20px labels
-	ls := PlaceLabels(bs, fixed(10), LabelOpts{MaxRows: 2, Gap: 8, MaxDrift: 60, TrackWidth: 1000})
+	ls := PlaceLabels(bs, fixed(10), LabelOpts{MaxRows: 2, Gap: 8, MaxDrift: 60, TrackWidth: 1000, MaxOverflow: 0})
 
 	// Both labels should fit without overlap
 	label0End := ls[0].X + ls[0].W
@@ -127,7 +127,8 @@ func TestPlaceLabelsNoOverlapMaxRows1(t *testing.T) {
 	// The second label should not overlap the first, even if clamping is needed.
 	// With MaxRows=1 there's nowhere to demote, so the second label must be pushed right.
 	bs := []Block{blk("aaaaaaaaaa", 900, 5), blk("bb", 950, 5)} // 100px and 20px labels
-	ls := PlaceLabels(bs, fixed(10), LabelOpts{MaxRows: 1, Gap: 8, MaxDrift: 60, TrackWidth: 1000})
+	opts := LabelOpts{MaxRows: 1, Gap: 8, MaxDrift: 60, TrackWidth: 1000, MaxOverflow: 100}
+	ls := PlaceLabels(bs, fixed(10), opts)
 
 	if len(ls) != 2 {
 		t.Fatalf("len = %d, want 2", len(ls))
@@ -147,6 +148,14 @@ func TestPlaceLabelsNoOverlapMaxRows1(t *testing.T) {
 			ls[0].X, label0End, label1Start, label1Start+ls[1].W, label1Start-label0End)
 	}
 
+	// Check overflow bound
+	maxAllowed := opts.TrackWidth + opts.MaxOverflow
+	for i, l := range ls {
+		if l.X+l.W > maxAllowed {
+			t.Errorf("label %d right edge %v exceeds maxRight %v", i, l.X+l.W, maxAllowed)
+		}
+	}
+
 	// Anchor preserved
 	for i, l := range ls {
 		if l.Anchor != bs[i].X {
@@ -162,7 +171,8 @@ func TestPlaceLabelsNoStackingInCrammedCase(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		bs = append(bs, blk("12345", 960+float64(i)*5, 5))
 	}
-	ls := PlaceLabels(bs, fixed(10), LabelOpts{MaxRows: 2, Gap: 8, MaxDrift: 60, TrackWidth: 1000})
+	opts := LabelOpts{MaxRows: 2, Gap: 8, MaxDrift: 60, TrackWidth: 1000, MaxOverflow: 200}
+	ls := PlaceLabels(bs, fixed(10), opts)
 
 	if len(ls) != 5 {
 		t.Fatalf("len = %d, want 5", len(ls))
@@ -185,10 +195,90 @@ func TestPlaceLabelsNoStackingInCrammedCase(t *testing.T) {
 		}
 	}
 
+	// Check overflow bound
+	maxAllowed := opts.TrackWidth + opts.MaxOverflow
+	for _, l := range ls {
+		if l.X+l.W > maxAllowed {
+			t.Errorf("label at anchor %v: right edge %v exceeds maxRight %v", l.Anchor, l.X+l.W, maxAllowed)
+		}
+	}
+
 	// Anchors preserved
 	for i, l := range ls {
 		if l.Anchor != bs[i].X {
 			t.Errorf("label %d Anchor = %v, want %v", i, l.Anchor, bs[i].X)
+		}
+	}
+}
+
+func TestPlaceLabelsDropsWhenExceedsOverflowBound(t *testing.T) {
+	// Production-scale test: 50 event-length labels (160px each) clustered
+	// in a ~50px window on a 1540px track with MaxRows=2.
+	// Without overflow bound, the second label would be at X=9020 (off-screen).
+	// With MaxOverflow=0, labels beyond TrackWidth should be omitted.
+	// With MaxOverflow=50, some may fit, but not all.
+
+	var bs []Block
+	for i := 0; i < 50; i++ {
+		// Event label is 160px wide; all events start at X ~1480 in a ~50px window
+		bs = append(bs, blk("Event Title", 1480+float64(i%10)*3, 5))
+	}
+
+	opts := LabelOpts{MaxRows: 2, Gap: 8, MaxDrift: 20, TrackWidth: 1540, MaxOverflow: 0}
+	ls := PlaceLabels(bs, fixed(10), opts)
+
+	// With MaxOverflow=0, most labels will be dropped because they'd exceed TrackWidth
+	if len(ls) >= len(bs) {
+		t.Errorf("len(returned) = %d, want < len(blocks) = %d (some should be dropped)",
+			len(ls), len(bs))
+	}
+
+	// Every returned label must fit within the bound
+	maxAllowed := opts.TrackWidth + opts.MaxOverflow
+	for _, l := range ls {
+		if l.X+l.W > maxAllowed {
+			t.Errorf("returned label at anchor %v: right edge %v exceeds TrackWidth %v",
+				l.Anchor, l.X+l.W, opts.TrackWidth)
+		}
+	}
+}
+
+func TestPlaceLabelsKeepsMildCrowdingWithinBound(t *testing.T) {
+	// Test that mild crowding within the overflow allowance does NOT
+	// cause labels to be dropped — only truly unbounded overflow causes dropping.
+	// Use a small label width and generous MaxDrift so they can fit.
+	var bs []Block
+	for i := 0; i < 5; i++ {
+		bs = append(bs, blk("ok", 100+float64(i)*150, 5)) // "ok" = 20px, spaced 150px apart
+	}
+
+	opts := LabelOpts{MaxRows: 2, Gap: 8, MaxDrift: 300, TrackWidth: 1000, MaxOverflow: 100}
+	ls := PlaceLabels(bs, fixed(10), opts)
+
+	// All 5 labels should fit (good spacing, small labels)
+	if len(ls) < 5 {
+		t.Errorf("len = %d, want >= 5 (all should fit within generous MaxOverflow and MaxDrift)", len(ls))
+	}
+
+	// All must be within the bound
+	maxAllowed := opts.TrackWidth + opts.MaxOverflow
+	for _, l := range ls {
+		if l.X+l.W > maxAllowed {
+			t.Errorf("label right edge %v exceeds maxRight %v", l.X+l.W, maxAllowed)
+		}
+	}
+
+	// Anchors preserved
+	for _, l := range ls {
+		found := false
+		for _, b := range bs {
+			if l.Anchor == b.X {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("label Anchor %v not found in block anchors", l.Anchor)
 		}
 	}
 }
