@@ -57,9 +57,30 @@ func RenderHTML(ctx context.Context, html []byte, pageW, pageH int) (image.Image
 
 // Pack converts an image to XR24 bytes for a fbW x fbH framebuffer, rotating
 // clockwise by the given angle. Pixel format is B,G,R,X little-endian.
+//
+// Preconditions (enforced by panic for contract violations):
+//   - For rotate 90 or 270: fbW must equal pageH and fbH must equal pageW.
+//   - For rotate 0 or 180: fbW must equal pageW and fbH must equal pageH.
+//
+// Silently cropping mismatched dimensions would produce undiagnosed wrong images
+// on deployed hardware, so dimension violations panic immediately.
 func Pack(img image.Image, fbW, fbH, rotate int) []byte {
 	b := img.Bounds()
 	pageW, pageH := b.Dx(), b.Dy()
+
+	// Enforce preconditions to prevent silent data loss.
+	switch rotate {
+	case 90, 270:
+		if fbW != pageH || fbH != pageW {
+			panic(fmt.Sprintf("Pack: rotate %d requires fbW=%d, fbH=%d to match pageH=%d, pageW=%d", rotate, fbW, fbH, pageH, pageW))
+		}
+	case 0, 180:
+		if fbW != pageW || fbH != pageH {
+			panic(fmt.Sprintf("Pack: rotate %d requires fbW=%d, fbH=%d to match pageW=%d, pageH=%d", rotate, fbW, fbH, pageW, pageH))
+		}
+	default:
+		panic(fmt.Sprintf("Pack: unsupported rotate angle %d", rotate))
+	}
 
 	canvas := image.NewRGBA(image.Rect(0, 0, pageW, pageH))
 	draw.Draw(canvas, canvas.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
