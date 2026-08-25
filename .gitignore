@@ -1,0 +1,14 @@
+# Cross-compiled binaries
+/build/
+
+# Vendored upgrade_tool — redistributable only from Luckfox; see CLAUDE.md Setup
+/tools/
+
+# Firmware images and device-tree dumps pulled off the board
+*.img
+*.dtb
+*.dtbo
+*.raw
+*.bin
+
+.DS_Store
