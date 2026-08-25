@@ -1,15 +1,18 @@
 // Command dashboard renders the UpNext dashboard to the Luckfox framebuffer.
 //
 // Display-only: there is no HTTP server and no touch handling. A tick loop
-// wakes each minute, rebuilds the view model, and re-renders only when the
-// generated HTML differs from the last frame.
+// wakes each minute and rebuilds/re-renders the view. The clock advances every
+// minute by construction, so the generated HTML always differs from the
+// previous frame — there is no "skip when unchanged" fast path.
 package main
 
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
+	"runtime/debug"
 	"time"
 
 	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
@@ -23,9 +26,13 @@ import (
 const (
 	pageW, pageH = 1920, 480
 	rotate       = 270
-	retryDelay   = 30 * time.Second
 	fetchTimeout = 60 * time.Second
 )
+
+// retryDelay is how soon a fetch loop retries after ITS OWN fetch fails,
+// rather than waiting the full interval. A var (not const) so tests can
+// shrink it instead of waiting on real 30s timers.
+var retryDelay = 30 * time.Second
 
 func main() {
 	once := flag.Bool("once", false, "render a single frame and exit")
@@ -59,7 +66,7 @@ func main() {
 	store := &Store{}
 	if *once {
 		fetchAll(context.Background(), cfg, store)
-		if err := renderOnce(cfg, store, *fbDev, fbW, fbH, *htmlOut, nil); err != nil {
+		if err := renderOnce(cfg, store, *fbDev, fbW, fbH, *htmlOut); err != nil {
 			log.Fatalf("render: %v", err)
 		}
 		return
@@ -68,18 +75,44 @@ func main() {
 	go fetchLoop(cfg, store, time.Duration(cfg.Refresh.CalendarMinutes)*time.Minute, fetchCalendars)
 	go fetchLoop(cfg, store, time.Duration(cfg.Refresh.WeatherMinutes)*time.Minute, fetchWeather)
 
-	var last string
 	for {
 		time.Sleep(nextTick(time.Now()))
-		if err := renderOnce(cfg, store, *fbDev, fbW, fbH, *htmlOut, &last); err != nil {
+		if err := renderSafely(cfg, store, *fbDev, fbW, fbH, *htmlOut); err != nil {
 			log.Printf("render: %v", err)
 		}
 	}
 }
 
-// renderOnce builds the model, renders HTML, and blits it. When last is
-// non-nil it is used to skip the raster when the HTML has not changed.
-func renderOnce(cfg *config.Config, store *Store, dev string, fbW, fbH int, htmlOut string, last *string) error {
+// renderSafely wraps renderOnce with a panic recovery so that one bad frame —
+// a template execution error, a nil deref surfaced by unusual fetch data,
+// anything not otherwise anticipated — logs and lets the loop continue to the
+// next minute rather than killing an unattended kiosk process permanently.
+// The known fb.Pack geometry-mismatch panic is instead guarded against by
+// failing fast at startup (see main): that is a misconfiguration, not a
+// transient bad frame, so refusing to start is the right response for it.
+// This recover is for everything else.
+func renderSafely(cfg *config.Config, store *Store, dev string, fbW, fbH int, htmlOut string) error {
+	return recoverRender(func() error {
+		return renderOnce(cfg, store, dev, fbW, fbH, htmlOut)
+	})
+}
+
+// recoverRender runs fn, converting any panic into an error instead of
+// letting it propagate and kill the process. Factored out from renderSafely
+// so the recover behavior itself can be exercised with a controllable
+// panicking stub in tests, without needing a real doctaculous render to
+// panic on demand.
+func recoverRender(fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic during render: %v\n%s", r, debug.Stack())
+		}
+	}()
+	return fn()
+}
+
+// renderOnce builds the model, renders HTML, and blits it to the framebuffer.
+func renderOnce(cfg *config.Config, store *Store, dev string, fbW, fbH int, htmlOut string) error {
 	evs, wx, errs := store.Snapshot()
 	vm := model.Build(time.Now(), cfg, evs, wx, errs)
 
@@ -91,9 +124,6 @@ func renderOnce(cfg *config.Config, store *Store, dev string, fbW, fbH int, html
 		if err := os.WriteFile(htmlOut, []byte(html), 0o644); err != nil {
 			log.Printf("html-out: %v", err)
 		}
-	}
-	if last != nil && html == *last {
-		return nil // nothing changed; skip the ~1.5s render
 	}
 
 	// doctaculous discards the context on the HTML render path (see
@@ -110,28 +140,34 @@ func renderOnce(cfg *config.Config, store *Store, dev string, fbW, fbH int, html
 
 	// fb.Pack's dimension check was validated once against fbW/fbH at startup
 	// (see main), so this call should never hit its panic path in practice —
-	// fbW/fbH/rotate/pageW/pageH are all fixed for the process lifetime.
+	// fbW/fbH/rotate/pageW/pageH are all fixed for the process lifetime. If it
+	// somehow does, renderSafely's recover keeps the loop alive regardless.
 	if err := fb.Write(dev, fb.Pack(img, fbW, fbH, rotate)); err != nil {
 		return err
-	}
-	if last != nil {
-		*last = html
 	}
 	return nil
 }
 
-type fetchFunc func(context.Context, *config.Config, *Store)
+// fetchFunc runs one fetch attempt and reports whether it succeeded.
+// fetchLoop uses that return value — not the Store's combined error state —
+// to decide its own retry cadence, because Store.Snapshot concatenates errors
+// from BOTH sources. A persistently failing calendar feed must not pin the
+// independent weather loop to the 30s retry cadence forever (or vice versa) —
+// each loop's retry decision must depend only on its own fetch's outcome.
+type fetchFunc func(context.Context, *config.Config, *Store) (ok bool)
 
 // fetchLoop runs one fetcher forever, retrying sooner after a failure so a boot
-// with no DNS recovers in seconds rather than a full interval.
+// with no DNS recovers in seconds rather than a full interval. The retry
+// decision is based solely on fn's own return value, never on shared Store
+// state that another loop also writes to.
 func fetchLoop(cfg *config.Config, store *Store, interval time.Duration, fn fetchFunc) {
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
-		fn(ctx, cfg, store)
+		ok := fn(ctx, cfg, store)
 		cancel()
 
 		wait := interval
-		if _, _, errs := store.Snapshot(); len(errs) > 0 {
+		if !ok {
 			wait = retryDelay
 		}
 		time.Sleep(wait)
@@ -143,7 +179,7 @@ func fetchAll(ctx context.Context, cfg *config.Config, store *Store) {
 	fetchWeather(ctx, cfg, store)
 }
 
-func fetchCalendars(ctx context.Context, cfg *config.Config, store *Store) {
+func fetchCalendars(ctx context.Context, cfg *config.Config, store *Store) bool {
 	var all []calendar.Event
 	var errs []string
 	now := time.Now()
@@ -162,13 +198,15 @@ func fetchCalendars(ctx context.Context, cfg *config.Config, store *Store) {
 		all = all[:cfg.Agenda.MaxEvents]
 	}
 	store.SetEvents(all, errs)
+	return len(errs) == 0
 }
 
-func fetchWeather(ctx context.Context, cfg *config.Config, store *Store) {
+func fetchWeather(ctx context.Context, cfg *config.Config, store *Store) bool {
 	w, err := weather.Fetch(ctx, cfg)
 	if err != nil {
 		store.SetWeather(nil, []string{"weather: " + err.Error()})
-		return
+		return false
 	}
 	store.SetWeather(w, nil)
+	return true
 }
