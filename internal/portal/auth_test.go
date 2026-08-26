@@ -76,11 +76,12 @@ func TestDefaultPasswordRejectsMalformedMAC(t *testing.T) {
 	// Malformed MACs (non-hex or truncated sysfs reads) must not become
 	// real, guessable passwords. They should degrade to the safe empty case.
 	malformed := []string{
-		"unknown",          // arbitrary text
-		"N/A driver",       // a status message
-		"error: no wifi",   // an error message
-		"not-a-mac-at-all", // intentionally wrong
-		"??????",           // non-hex characters
+		"unknown",           // arbitrary text
+		"N/A driver",        // a status message
+		"error: no wifi",    // an error message
+		"not-a-mac-at-all",  // intentionally wrong
+		"??????",            // non-hex characters
+		"54:01:4a:4c 1b:fd", // interior whitespace should be rejected
 	}
 	for _, mac := range malformed {
 		if got := DefaultPassword(mac); got != "" {
@@ -89,6 +90,17 @@ func TestDefaultPasswordRejectsMalformedMAC(t *testing.T) {
 		// Confirm that a malformed MAC cannot authenticate either.
 		if CheckPassword("", "", mac) {
 			t.Errorf("empty password accepted against malformed MAC %q", mac)
+		}
+	}
+	// Whitespace-trimmed forms must WORK (sysfs reads include trailing newlines).
+	whitespaceValid := []string{
+		"54:01:4a:4c:1b:fd\n",   // trailing newline
+		" 54:01:4a:4c:1b:fd ",   // leading and trailing space
+		"54:01:4a:4c:1b:fd\r\n", // CRLF
+	}
+	for _, mac := range whitespaceValid {
+		if got := DefaultPassword(mac); got != "4c1bfd" {
+			t.Errorf("DefaultPassword(%q) = %q, want 4c1bfd (should trim whitespace)", mac, got)
 		}
 	}
 }

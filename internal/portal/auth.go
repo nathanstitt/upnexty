@@ -14,7 +14,7 @@ import (
 // so first-run needs no documentation. Returns "" when the MAC is unavailable
 // (driver not loaded) or malformed, which never authenticates -- see CheckPassword.
 func DefaultPassword(mac string) string {
-	clean := strings.ToLower(mac)
+	clean := strings.ToLower(strings.TrimSpace(mac))
 	clean = strings.ReplaceAll(clean, ":", "")
 	clean = strings.ReplaceAll(clean, "-", "")
 	if len(clean) < 6 {
