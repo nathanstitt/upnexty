@@ -63,8 +63,9 @@ config are **dead** and must not appear in the UI.
 - `units.precipitation` — **zero consumers**. Precip renders as a bare `%`.
 - `location.name` — reaches `ViewModel.LocationName` and is never rendered.
 
-These should be deleted from `config.go` rather than given a UI. Surfacing a
-control that does nothing is worse than having no control.
+These are **deleted** as part of this work rather than given a UI. Surfacing a
+control that does nothing is worse than having no control, and leaving them in
+place invites someone to wire up a control later.
 
 ### Deliberately not exposed
 
@@ -233,10 +234,30 @@ board/etc/init.d/
 is UBI on NAND and a torn write during a power cut would leave an unbootable
 config. Keep the previous version as `config.json.bak` for the same reason.
 
-**Applying changes without a restart.** The dashboard already re-reads nothing —
-`config.Load` runs once at startup. Simplest correct approach: the portal writes
-the file and signals the dashboard loop to reload before its next tick. Falling
-back to a process restart is acceptable but loses the current frame.
+**Applying changes.** The portal is a goroutine in the existing `dashboard`
+binary, not a second process, so there is no IPC and nothing to signal. Today
+`config.Load` runs once and the resulting `*Config` is captured by the loop and
+both fetchers; the change is to put it behind the same mutex-guarded holder that
+`Store` already uses for weather and calendar data:
+
+```go
+type Store struct {
+    mu      sync.RWMutex
+    cfg     *config.Config   // added
+    events  []calendar.Event
+    weather *weather.Weather
+    ...
+}
+```
+
+A portal handler validates, writes the file, and swaps the pointer. The next
+tick reads the new value — no restart, no dropped frame. Because the pointer is
+replaced rather than mutated, readers keep a consistent snapshot for the whole
+tick.
+
+The one case that genuinely needs more than a swap is **WiFi credentials**,
+where the interface has to come down and reassociate. That is a `wifi` package
+call, not a config reload.
 
 **Progressive enhancement, not a SPA.** Plain HTML forms that work without
 JavaScript, enhanced with fetch for inline validation. A captive-portal browser
@@ -256,12 +277,13 @@ sheet is a hostile environment — some are old WebViews with no JS at all.
 
 ## Open questions
 
-1. **Should the panel show the AP name and password while unconfigured?** It
-   would make first-run self-explanatory and the screen is otherwise blank.
-   Slight exposure: anyone who can see the panel learns the admin password. For
-   a wall display in a home, that seems the right trade.
+1. ~~Should the panel show the AP name and password while unconfigured?~~
+   **Resolved: yes, both.** First-run then needs no documentation, using a
+   screen that is otherwise blank. Accepted trade: anyone who can see the panel
+   learns the admin password.
 2. **Does WiFi scanning need `iw`?** It is missing from this image. `wpa_cli
    scan_results` works and is already proven, so probably not — worth confirming
    before committing to a network picker UI.
-3. **Restart or reload on save?** Reload is nicer; restart is simpler and the
-   panel already tolerates a missed frame.
+3. ~~Restart or reload on save?~~ **Resolved:** neither. The portal runs inside
+   the dashboard process, so a handler swaps the config pointer under the
+   existing mutex and the next tick picks it up.
