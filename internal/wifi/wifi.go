@@ -144,24 +144,46 @@ func (c *Client) Connect(ssid, password string) error {
 		return fmt.Errorf("ssid is required")
 	}
 
-	conf := fmt.Sprintf(`ctrl_interface=/var/run/wpa_supplicant
-ap_scan=1
-update_config=1
+	// An open network needs key_mgmt=NONE and no psk line at all --
+	// wpa_supplicant rejects WPA-PSK with an empty passphrase (it requires
+	// 8-63 chars), so emitting psk="" would produce a block that never
+	// associates and fails in a way that looks like a generic connect error.
+	var netBlock string
+	if password == "" {
+		netBlock = fmt.Sprintf("network={\n\tssid=\"%s\"\n\tkey_mgmt=NONE\n}\n", wpaEscape(ssid))
+	} else {
+		netBlock = fmt.Sprintf("network={\n\tssid=\"%s\"\n\tpsk=\"%s\"\n\tkey_mgmt=WPA-PSK\n}\n",
+			wpaEscape(ssid), wpaEscape(password))
+	}
 
-network={
-	ssid="%s"
-	psk="%s"
-	key_mgmt=WPA-PSK
-}
-`, wpaEscape(ssid), wpaEscape(password))
+	conf := "ctrl_interface=/var/run/wpa_supplicant\nap_scan=1\nupdate_config=1\n\n" + netBlock
 
 	// Written via a temp file + rename for the same reason config.Save is:
 	// a torn write here leaves a board that cannot get back on the network.
 	path := c.confPath()
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(conf), 0o600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
 		return fmt.Errorf("write supplicant config: %w", err)
 	}
+	if _, err := f.WriteString(conf); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("write supplicant config: %w", err)
+	}
+	// fsync before rename: rename is atomic, but without the sync the rename
+	// can land before the contents on power loss -- and this file is what the
+	// board needs to get back on the network.
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("sync supplicant config: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close supplicant config: %w", err)
+	}
+
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("install supplicant config: %w", err)

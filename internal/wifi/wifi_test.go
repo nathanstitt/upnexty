@@ -272,15 +272,15 @@ func TestConnectWritesConfigAndRestarts(t *testing.T) {
 		t.Errorf("config missing ctrl_interface, wpa_cli will not work:\n%s", conf)
 	}
 
-	// It must actually restart the supplicant, or nothing takes effect.
+	// It must restart with the exact command /etc/init.d/S99wlan0 restart.
 	var restarted bool
 	for _, call := range f.call {
-		if strings.Contains(call, "wpa_supplicant") || strings.Contains(call, "S99wlan0") {
+		if call == "/etc/init.d/S99wlan0 restart" {
 			restarted = true
 		}
 	}
 	if !restarted {
-		t.Errorf("no restart issued; calls were %v", f.call)
+		t.Errorf("expected exact call '/etc/init.d/S99wlan0 restart', got calls: %v", f.call)
 	}
 }
 
@@ -305,5 +305,74 @@ func TestConnectEscapesQuotes(t *testing.T) {
 	}
 	if !strings.Contains(conf, `\"`) {
 		t.Errorf("expected escaped quotes:\n%s", conf)
+	}
+}
+
+func TestConnectOpenNetworkNoPassword(t *testing.T) {
+	// Open networks must have key_mgmt=NONE and no psk line.
+	// An empty psk with WPA-PSK is invalid and causes association to fail.
+	f := &fakeRunner{out: map[string][]byte{}}
+	c := &Client{R: f, ConfPath: t.TempDir() + "/wpa_supplicant.conf"}
+
+	if err := c.Connect("OpenNet", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := os.ReadFile(c.ConfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := string(b)
+	if !strings.Contains(conf, "key_mgmt=NONE") {
+		t.Errorf("open network missing key_mgmt=NONE:\n%s", conf)
+	}
+	if strings.Contains(conf, "psk=") {
+		t.Errorf("open network should not have psk line:\n%s", conf)
+	}
+	if strings.Contains(conf, "WPA-PSK") {
+		t.Errorf("open network should not have WPA-PSK:\n%s", conf)
+	}
+}
+
+func TestConnectSecuredNetworkHasWPAPSK(t *testing.T) {
+	// Secured networks must have key_mgmt=WPA-PSK and a psk line.
+	f := &fakeRunner{out: map[string][]byte{}}
+	c := &Client{R: f, ConfPath: t.TempDir() + "/wpa_supplicant.conf"}
+
+	if err := c.Connect("SecuredNet", "password123"); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := os.ReadFile(c.ConfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := string(b)
+	if !strings.Contains(conf, "key_mgmt=WPA-PSK") {
+		t.Errorf("secured network missing key_mgmt=WPA-PSK:\n%s", conf)
+	}
+	if !strings.Contains(conf, `psk="password123"`) {
+		t.Errorf("secured network missing psk line:\n%s", conf)
+	}
+}
+
+func TestConnectRestartsWithExactCommand(t *testing.T) {
+	// Assert the exact restart invocation, not just a substring match.
+	f := &fakeRunner{out: map[string][]byte{}}
+	c := &Client{R: f, ConfPath: t.TempDir() + "/wpa_supplicant.conf"}
+
+	if err := c.Connect("TestNet", "testpass"); err != nil {
+		t.Fatal(err)
+	}
+
+	var found bool
+	for _, call := range f.call {
+		if call == "/etc/init.d/S99wlan0 restart" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected exact call '/etc/init.d/S99wlan0 restart', got calls: %v", f.call)
 	}
 }
