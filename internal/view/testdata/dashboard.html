@@ -64,12 +64,19 @@ html, body {
 #now-line::after { content: "NOW"; position: absolute; top: -16px; left: -13px;
   font-size: 12px; color: var(--blue); letter-spacing: 1px; }
 
-#wx { position: absolute; bottom: 96px; left: 0; }
+/* Sits directly above the forecast row (116px) with a 4px breathing gap.
+   Keep in sync with #forecast's height. */
+#wx { position: absolute; bottom: 120px; left: 0; }
 .wx-chart { display: block; }
 .wx-temp { fill: none; stroke: #ffb454; stroke-width: 2; }
 .wx-precip { fill: rgba(79,156,255,0.35); }
 
-#forecast { position: absolute; bottom: 0; left: 0; width: 1540px; height: 92px;
+/* 116px, not 92px: the column's four rows (day / icon / temps / precip) plus
+   their gaps measure ~105px on the real engine, and the 24px icon box is not
+   yet counted because inline <svg> currently collapses to nothing (see
+   docs/doctaculous-gaps.md §0). At 92px the precip line overflowed past the
+   bottom of the panel and was clipped -- verified on hardware. */
+#forecast { position: absolute; bottom: 0; left: 0; width: 1540px; height: 116px;
   display: flex; border-top: 1px solid var(--border); }
 .fc-col { flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 3px; border-right: 1px solid #1b2230; }
