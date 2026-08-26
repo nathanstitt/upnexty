@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -151,5 +152,77 @@ func TestDeadFieldsAreGone(t *testing.T) {
 	}`)
 	if _, err := Load(p); err != nil {
 		t.Fatalf("removed keys must be ignored, not rejected: %v", err)
+	}
+}
+
+func TestSaveRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.json")
+
+	c := &Config{}
+	c.Location.Timezone = "America/Chicago"
+	c.Location.Latitude = 38.5
+	c.WiFi.SSID = "HomeNet"
+	b120 := 120
+	c.Display.Brightness = &b120
+	c.Calendars = []CalendarSource{{Name: "Work", Color: "#4f9cff", URL: "https://example.com/c.ics"}}
+
+	if err := c.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Location.Timezone != "America/Chicago" || got.WiFi.SSID != "HomeNet" {
+		t.Errorf("round trip lost data: %+v", got)
+	}
+	if got.BrightnessValue() != 120 {
+		t.Errorf("Brightness = %d, want 120", got.BrightnessValue())
+	}
+	if len(got.Calendars) != 1 || got.Calendars[0].Name != "Work" {
+		t.Errorf("Calendars = %+v", got.Calendars)
+	}
+}
+
+func TestSaveLeavesNoTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	c := &Config{}
+	if err := c.Save(filepath.Join(dir, "config.json")); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exactly the config plus its backup -- no stray *.tmp left behind.
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+func TestSaveKeepsPreviousAsBackup(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.json")
+
+	first := &Config{}
+	first.Location.Timezone = "UTC"
+	if err := first.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	second := &Config{}
+	second.Location.Timezone = "America/Chicago"
+	if err := second.Save(p); err != nil {
+		t.Fatal(err)
+	}
+
+	bak, err := Load(p + ".bak")
+	if err != nil {
+		t.Fatalf("backup missing or unreadable: %v", err)
+	}
+	if bak.Location.Timezone != "UTC" {
+		t.Errorf("backup holds %q, want the previous value UTC", bak.Location.Timezone)
 	}
 }

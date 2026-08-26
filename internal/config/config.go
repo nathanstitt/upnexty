@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -124,4 +125,49 @@ func (c *Config) TimeLocation() *time.Location {
 		return time.UTC
 	}
 	return loc
+}
+
+// Save writes the config atomically: a temp file in the same directory, fsynced,
+// then renamed over the target. /root is UBI on NAND, and a torn write during a
+// power cut would leave a board that cannot parse its own config at boot.
+// The previous file is kept as <path>.bak for the same reason.
+func (c *Config) Save(path string) error {
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	b = append(b, '\n')
+
+	// Same directory, so the rename below stays within one filesystem.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	// fsync before rename: rename is atomic, but without the sync the rename
+	// can land before the contents on a power loss.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync temp config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp config: %w", err)
+	}
+
+	// Keep the previous version. Ignore a missing original (first save).
+	if _, err := os.Stat(path); err == nil {
+		if err := os.Rename(path, path+".bak"); err != nil {
+			return fmt.Errorf("back up config: %w", err)
+		}
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("install config: %w", err)
+	}
+	return nil
 }
