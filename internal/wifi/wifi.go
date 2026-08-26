@@ -104,6 +104,13 @@ func (c *Client) Scan() ([]Network, error) {
 	for _, n := range best {
 		nets = append(nets, n)
 	}
-	sort.Slice(nets, func(i, j int) bool { return nets[i].Signal > nets[j].Signal })
+	sort.Slice(nets, func(i, j int) bool {
+		if nets[i].Signal != nets[j].Signal {
+			return nets[i].Signal > nets[j].Signal
+		}
+		// Ties are common, and map iteration is randomized -- without a
+		// secondary key the picker's order would shuffle between page loads.
+		return nets[i].SSID < nets[j].SSID
+	})
 	return nets, nil
 }

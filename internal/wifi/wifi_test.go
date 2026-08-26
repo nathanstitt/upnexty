@@ -156,3 +156,93 @@ fc:ec:da:f1:e7:e0	2462	-70	[WPA2-PSK-CCMP][ESS]	Argosity
 		t.Errorf("hidden (blank) SSID should be skipped, got %+v", nets)
 	}
 }
+
+func TestScanErrorPropagates(t *testing.T) {
+	c := &Client{R: &fakeRunner{err: map[string]error{
+		"wpa_cli -i wlan0 scan_results": errors.New("no such device"),
+	}}}
+	if _, err := c.Scan(); err == nil {
+		t.Fatal("expected an error when wpa_cli fails")
+	}
+}
+
+func TestScanMalformedLinesTooFewFields(t *testing.T) {
+	const malformed = `bssid / frequency / signal level / flags / ssid
+86:25:19:98:5a:b4	2462	-69
+fc:ec:da:f1:e7:e0	2462	-72	[WPA2-PSK-CCMP][ESS]	Argosity
+`
+	c := &Client{R: &fakeRunner{out: map[string][]byte{
+		"wpa_cli -i wlan0 scan_results": []byte(malformed),
+	}}}
+	nets, err := c.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Line with too few fields is skipped silently; only valid Argosity should remain.
+	if len(nets) != 1 || nets[0].SSID != "Argosity" {
+		t.Errorf("malformed line should be skipped, got %+v", nets)
+	}
+}
+
+func TestScanNonNumericSignal(t *testing.T) {
+	const badSignal = `bssid / frequency / signal level / flags / ssid
+86:25:19:98:5a:b4	2462	invalid	[WPA2-PSK-CCMP][ESS]	BadSignal
+fc:ec:da:f1:e7:e0	2462	-72	[WPA2-PSK-CCMP][ESS]	Argosity
+`
+	c := &Client{R: &fakeRunner{out: map[string][]byte{
+		"wpa_cli -i wlan0 scan_results": []byte(badSignal),
+	}}}
+	nets, err := c.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Line with non-numeric signal is skipped silently; only valid Argosity should remain.
+	if len(nets) != 1 || nets[0].SSID != "Argosity" {
+		t.Errorf("non-numeric signal should be skipped, got %+v", nets)
+	}
+}
+
+func TestScanDeterministicOrderingOnTiedSignals(t *testing.T) {
+	// Run the same scan multiple times and verify identical ordering.
+	// Before the fix, equal signals would produce random ordering due to map
+	// iteration randomization. After the fix, ties should always sort by SSID.
+	const withTies = `bssid / frequency / signal level / flags / ssid
+fc:ec:da:f1:e7:e0	2462	-72	[WPA2-PSK-CCMP][ESS]	Zebra
+02:ec:da:f1:e7:e0	2462	-72	[ESS]	Alpha
+86:25:19:98:5a:b4	2462	-69	[WPA2-PSK-CCMP][ESS]	Beta
+`
+	var lastOrder []string
+	for i := 0; i < 10; i++ {
+		c := &Client{R: &fakeRunner{out: map[string][]byte{
+			"wpa_cli -i wlan0 scan_results": []byte(withTies),
+		}}}
+		nets, err := c.Scan()
+		if err != nil {
+			t.Fatal(err)
+		}
+		order := make([]string, len(nets))
+		for j, n := range nets {
+			order[j] = n.SSID
+		}
+		if lastOrder != nil && !equal(order, lastOrder) {
+			t.Errorf("iteration %d: order %v differs from first %v", i, order, lastOrder)
+		}
+		lastOrder = order
+	}
+	// Verify the deterministic order is by signal (Beta first), then alphabetically (Alpha, Zebra).
+	if lastOrder[0] != "Beta" || lastOrder[1] != "Alpha" || lastOrder[2] != "Zebra" {
+		t.Errorf("expected [Beta Alpha Zebra], got %v", lastOrder)
+	}
+}
+
+func equal(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
