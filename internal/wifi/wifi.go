@@ -32,8 +32,10 @@ type Client struct {
 	// ConfPath is the persistent supplicant config. Defaults to
 	// /etc/wpa_supplicant.conf when empty.
 	ConfPath string
-	// HostapdConf and DnsmasqConf default to /tmp paths when empty; tests
-	// point them at a temp dir.
+	// HostapdConf and DnsmasqConf default to /tmp paths when empty. That is
+	// deliberate and differs from ConfPath's persistent /etc default: these two
+	// are regenerated on every StartAP, so losing them on reboot costs nothing,
+	// whereas the supplicant config holds credentials that must survive.
 	HostapdConf string
 	DnsmasqConf string
 }

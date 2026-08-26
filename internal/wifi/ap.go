@@ -71,6 +71,7 @@ auth_algs=1
 wmm_enabled=0
 `, Iface, APName(mac))
 	if err := os.WriteFile(c.hostapdConf(), []byte(hostapd), 0o644); err != nil {
+		c.restoreSTA()
 		return fmt.Errorf("write hostapd config: %w", err)
 	}
 
@@ -87,6 +88,7 @@ address=/#/%s
 no-resolv
 `, Iface, APAddr)
 	if err := os.WriteFile(c.dnsmasqConf(), []byte(dnsmasq), 0o644); err != nil {
+		c.restoreSTA()
 		return fmt.Errorf("write dnsmasq config: %w", err)
 	}
 

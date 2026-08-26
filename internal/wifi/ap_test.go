@@ -194,3 +194,30 @@ func TestStopAPReturnsToSTA(t *testing.T) {
 		t.Errorf("StopAP must call /etc/init.d/S99wlan0 restart; calls were %v", f.call)
 	}
 }
+
+func TestStartAPRestoresSTAOnWriteFailure(t *testing.T) {
+	// If StartAP fails to write a config (filesystem full, bad path, perms),
+	// it must restore STA mode. A write failure after killing the supplicant
+	// leaves the board unreachable, just like any other failure path.
+	// Point HostapdConf at a path that cannot be written (nonexistent directory).
+	badPath := t.TempDir() + "/nope/hostapd.conf"
+	f := &fakeRunner{out: map[string][]byte{}}
+	c := &Client{R: f, HostapdConf: badPath, DnsmasqConf: t.TempDir() + "/dnsmasq-ap.conf"}
+
+	err := c.StartAP("54:01:4a:4c:1b:fd")
+	if err == nil {
+		t.Fatal("expected an error from failed write")
+	}
+
+	// Verify that /etc/init.d/S99wlan0 restart was called (the rescue path).
+	var restarted bool
+	for _, call := range f.call {
+		if call == "/etc/init.d/S99wlan0 restart" {
+			restarted = true
+			break
+		}
+	}
+	if !restarted {
+		t.Errorf("StartAP must call restoreSTA on write failure (which includes restart); calls were %v", f.call)
+	}
+}
