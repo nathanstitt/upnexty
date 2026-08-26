@@ -39,10 +39,18 @@ produce the same empty space.
 It also costs layout: the icon's 24px is missing from every forecast column, so
 the column content no longer matches the space budgeted for it.
 
-Note `<svg>` is not the same as the SVG *format* support discussed elsewhere;
-the need here is only for the engine to lay out and paint an inline `<svg>`
-subtree (paths, circles, strokes, fills) that the rasterizer's primitives
-already cover.
+**The renderer is not the missing piece.** `pkg/svg` already exists and is
+substantial — cascade, color, gradients, arcs, and a `draw` subpackage — and is
+referenced from `pkg/layout/page.go`. What is missing is the *HTML frontend*
+wiring: nothing in `pkg/html` maps an inline `<svg>` element to that renderer,
+so in a document the element is still unknown and collapses.
+
+So this is likely a smaller job than it first appears: give `<svg>` a replaced-
+element box (intrinsic size from `width`/`height`/`viewBox`) and paint its
+subtree through `pkg/svg`.
+
+Checked against doctaculous `main`; the tree also has in-progress SVG work on
+`feat/shader-describe`, so some of this may already be underway.
 
 ## 1. CSS custom properties — `var()`
 
