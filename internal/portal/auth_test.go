@@ -71,3 +71,24 @@ func TestEmptyPasswordNeverAuthenticates(t *testing.T) {
 		t.Error("empty password accepted with no MAC and no hash")
 	}
 }
+
+func TestDefaultPasswordRejectsMalformedMAC(t *testing.T) {
+	// Malformed MACs (non-hex or truncated sysfs reads) must not become
+	// real, guessable passwords. They should degrade to the safe empty case.
+	malformed := []string{
+		"unknown",          // arbitrary text
+		"N/A driver",       // a status message
+		"error: no wifi",   // an error message
+		"not-a-mac-at-all", // intentionally wrong
+		"??????",           // non-hex characters
+	}
+	for _, mac := range malformed {
+		if got := DefaultPassword(mac); got != "" {
+			t.Errorf("DefaultPassword(%q) = %q, want empty (should not mint a real password from garbage)", mac, got)
+		}
+		// Confirm that a malformed MAC cannot authenticate either.
+		if CheckPassword("", "", mac) {
+			t.Errorf("empty password accepted against malformed MAC %q", mac)
+		}
+	}
+}

@@ -12,7 +12,7 @@ import (
 // last six hex digits, lowercase, no separators. It is per-device rather than a
 // shared constant, and it is shown on the panel while the board is unconfigured
 // so first-run needs no documentation. Returns "" when the MAC is unavailable
-// (driver not loaded), which never authenticates -- see CheckPassword.
+// (driver not loaded) or malformed, which never authenticates -- see CheckPassword.
 func DefaultPassword(mac string) string {
 	clean := strings.ToLower(mac)
 	clean = strings.ReplaceAll(clean, ":", "")
@@ -20,7 +20,15 @@ func DefaultPassword(mac string) string {
 	if len(clean) < 6 {
 		return ""
 	}
-	return clean[len(clean)-6:]
+	suffix := clean[len(clean)-6:]
+	// Validate rather than trust: this function mints the credential guarding
+	// the portal, and a malformed MAC ("unknown", a truncated sysfs read) would
+	// otherwise become a real, guessable password rather than the safe empty
+	// case the caller expects.
+	if _, err := hex.DecodeString(suffix); err != nil {
+		return ""
+	}
+	return suffix
 }
 
 // HashPassword hashes an admin password for storage in config.json.
@@ -47,6 +55,9 @@ func CheckPassword(pw, hash, mac string) bool {
 		if def == "" {
 			return false
 		}
+		// ConstantTimeCompare on variable-length strings leaks whether a guess
+		// matches the 6-byte default length, but this is accepted under the
+		// stated threat model (a houseguest on the LAN, not a timing attacker).
 		return subtle.ConstantTimeCompare([]byte(pw), []byte(def)) == 1
 	}
 	return subtle.ConstantTimeCompare([]byte(HashPassword(pw)), []byte(hash)) == 1
