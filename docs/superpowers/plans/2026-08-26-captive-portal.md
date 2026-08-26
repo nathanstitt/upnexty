@@ -2156,7 +2156,7 @@ func (s *Server) page(w http.ResponseWriter, errMsg string, code int) {
 		}
 	}
 	if s.MAC != "" {
-		data.APName = apNameFor(s.MAC)
+		data.APName = wifi.APName(s.MAC)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
@@ -2351,25 +2351,16 @@ func calendarColor(i int) string {
 
 Add `"time"` to the imports.
 
-- [ ] **Step 8: Add the two small helpers**
+- [ ] **Step 8: Add the brightness helper**
 
-Append to `auth.go`:
+Use `wifi.APName` for the AP name rather than duplicating it -- this package
+already imports `wifi` for `Server.WiFi`, so there is no import to avoid.
 
-```go
-// apNameFor mirrors wifi.APName without importing it, so the portal's page
-// rendering does not depend on the wifi package.
-func apNameFor(mac string) string {
-	clean := strings.ToLower(mac)
-	clean = strings.ReplaceAll(clean, ":", "")
-	clean = strings.ReplaceAll(clean, "-", "")
-	if len(clean) < 4 {
-		return "upnext-setup"
-	}
-	return "upnext-" + clean[len(clean)-4:]
-}
-```
+In `handlers.go`, replace the `apNameFor(s.MAC)` call with `wifi.APName(s.MAC)`
+and add `"github.com/nathanstitt/luckfox-dashboard/internal/wifi"` to its
+imports.
 
-Create the brightness helper in `handlers.go`:
+Then add the brightness helper in `handlers.go`:
 
 ```go
 // applyBrightness writes the panel's sysfs control. A failure is not fatal --
@@ -2821,9 +2812,9 @@ Thread it into the `model.Build` call inside `renderOnce`.
 
 ```go
 func TestRenderShowsSetupHint(t *testing.T) {
-	vm, w := fixtureVM(t)
+	vm := fixtureVM(t)
 	vm.Setup = &model.SetupHint{APName: "upnext-1bfd", Password: "4c1bfd"}
-	got, err := Render(vm, w)
+	got, err := Render(vm)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2835,9 +2826,9 @@ func TestRenderShowsSetupHint(t *testing.T) {
 }
 
 func TestRenderOmitsSetupHintWhenConfigured(t *testing.T) {
-	vm, w := fixtureVM(t)
+	vm := fixtureVM(t)
 	vm.Setup = nil
-	got, err := Render(vm, w)
+	got, err := Render(vm)
 	if err != nil {
 		t.Fatal(err)
 	}
