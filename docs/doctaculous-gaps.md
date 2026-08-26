@@ -1,6 +1,8 @@
 # doctaculous gaps found while building the Luckfox dashboard
 
-Seven CSS features below, plus one API issue (context cancellation, §7).
+Inline `<svg>` (§0, highest impact), seven CSS features, one API issue (context
+cancellation, §7), and a font-fallback failure mode (§9). §0 and §9 were found
+on real hardware; the rest by rasterizing on the host.
 
 Found while rendering `internal/view/assets/style.css` (a 1920×480 dark-theme
 dashboard) through `doctaculous.OpenHTMLBytes` + `RasterizePage`. Every item
@@ -18,7 +20,31 @@ img, _ := doc.RasterizePage(ctx, 0, doctaculous.RasterOptions{
     MaxWidthPx: 1920, MaxHeightPx: 480, Background: color.White})
 ```
 
-## 1. CSS custom properties — `var()` (highest impact)
+## 0. Inline `<svg>` renders nothing (highest impact — found on hardware)
+
+An inline `<svg>` element produces no box and no paint. It is not a known
+element anywhere in the engine — no handling in `pkg/html`, `pkg/layout/cssbox`,
+or the UA stylesheet — so it is treated as an unknown inline element with no
+intrinsic size and silently collapses to zero.
+
+Isolated: a page with `text / <svg width="40" height="40">…</svg> / text`
+renders the two text lines directly adjacent, with no 40px gap between them.
+
+Impact here: **all 11 weather icons are invisible on the panel.** This is the
+sharpest version of the silent-failure problem, because SVG icons were chosen
+*specifically* to fix §9's emoji gap — the board has no emoji font, so the
+original emoji rendered as nothing. Both paths to a weather icon currently
+produce the same empty space.
+
+It also costs layout: the icon's 24px is missing from every forecast column, so
+the column content no longer matches the space budgeted for it.
+
+Note `<svg>` is not the same as the SVG *format* support discussed elsewhere;
+the need here is only for the engine to lay out and paint an inline `<svg>`
+subtree (paths, circles, strokes, fills) that the rasterizer's primitives
+already cover.
+
+## 1. CSS custom properties — `var()`
 
 `var(--x)` silently resolves to nothing and the property falls back to its
 default. No `var()` or custom-property handling exists in `pkg/css`, and the
@@ -120,6 +146,20 @@ nothing clips it. Cosmetic — the surrounding layout is unaffected because the
 box is out-of-flow — but the diagnostic becomes unreadable exactly when it
 matters.
 
+## 9. Missing glyphs render as nothing, with no fallback or warning
+
+Not strictly an engine defect — the board genuinely has no emoji font (DejaVu
+and Liberation only) — but the *failure mode* is worth fixing. A character with
+no glyph in any available font renders as empty space: no tofu box, no
+`.notdef`, no warning.
+
+Measured on the board with the 9 weather emoji the previous Pi dashboard used:
+3 rendered (☀ ☁ ❄, as monochrome DejaVu glyphs) and 6 rendered as nothing.
+
+Because some rendered and some didn't, the result reads as a layout gap rather
+than a font problem — the hardest kind of bug to spot. Drawing `.notdef` (or
+logging once per missing glyph) would turn a silent hole into an obvious one.
+
 ## Confirmed working
 
 No action needed on these; recording them so the gaps above are unambiguous.
@@ -134,9 +174,11 @@ markup (the dashboard embeds `<svg>` directly and it rasterizes correctly).
 
 ## Suggested priority
 
-1. **`var()`** — blocks any stylesheet using a palette, which is most modern CSS.
-2. **alpha colors** — silently drops UI elements; the failure looks like a bug in the page.
-3. **context cancellation** (§7) — correctness/robustness rather than appearance; matters for any long-running renderer.
-4. **`linear-gradient`** — parses today, so the gap is surprising.
-5. **`border-radius`**, **`letter-spacing`**, **`overflow-wrap`** — visual polish; `overflow-wrap` matters most when rendering diagnostics (§8).
-6. **`box-shadow`** — lowest; `border-left` covers the common inset-spine case.
+1. **inline `<svg>`** (§0) — every weather icon is invisible; blocks the feature that was meant to fix §9.
+2. **`var()`** — blocks any stylesheet using a palette, which is most modern CSS.
+3. **alpha colors** — silently drops UI elements; the failure looks like a bug in the page.
+4. **missing-glyph fallback** (§9) — a `.notdef` box would make font gaps visible instead of silent.
+5. **context cancellation** (§7) — correctness/robustness rather than appearance; matters for any long-running renderer.
+6. **`linear-gradient`** — parses today, so the gap is surprising.
+7. **`border-radius`**, **`letter-spacing`**, **`overflow-wrap`** — visual polish; `overflow-wrap` matters most when rendering diagnostics (§8).
+8. **`box-shadow`** — lowest; `border-left` covers the common inset-spine case.
