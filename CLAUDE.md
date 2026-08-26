@@ -179,6 +179,46 @@ Vendor display test, if you suspect the pipeline:
 adb shell modetest -M rockchip -s 74@71:480x1920
 ```
 
+## Dashboard
+
+The `dashboard` service renders the UpNext display: it fetches iCal calendars
+and Open-Meteo weather, generates HTML+SVG, rasterizes with doctaculous, and
+writes `/dev/fb0`. Display-only — no touch, no HTTP server.
+
+```bash
+scripts/build.sh dashboard
+scripts/deploy.sh build/dashboard
+adb push config.sample.json /root/config.json     # then edit in the iCal URLs
+adb shell /root/dashboard --once                  # single frame
+adb shell 'nohup /root/dashboard >/root/dashboard.log 2>&1 &'
+```
+
+Measured on the board: **~1.05–1.18s per frame**, ~167MB RSS at the peak of a
+render, settling to **~46MB between renders**. The loop wakes on the minute
+boundary; verified re-rendering on rollover.
+
+**`WithPageSize(1920, 480)` is required.** doctaculous defaults to a 1280px
+layout viewport, and its fit-within sizing preserves aspect ratio — so without
+it the page renders 1280×480 and is pillarboxed with white.
+
+Verify what the panel actually shows:
+
+```bash
+adb shell cat /dev/fb0 > /tmp/fb.raw
+go run ./tools/fb2png /tmp/fb.raw /tmp/panel.png 480 1920 unrotate
+```
+
+**Some of the design does not render yet.** doctaculous does not implement
+inline `<svg>`, `var()`, alpha colors, and several other features, so the
+weather icons are invisible and the dark theme renders black-on-white. These
+are being fixed upstream, not worked around here — see
+`docs/doctaculous-gaps.md` for the list, each with an isolated repro.
+
+A browser preview cannot find these (browsers implement them all); only
+rasterizing through doctaculous can. And some bugs only appear on the panel —
+the forecast row's clipped bottom line was invisible in both the golden HTML
+and the host-side raster, because nothing clips at the document level.
+
 ## Gotchas
 
 - **`/tmp`, `/var/log`, `/run` are tmpfs** — they vanish on reboot. `/root` is
