@@ -107,3 +107,90 @@ func TestStopAPIgnoresNotRunning(t *testing.T) {
 		t.Errorf("StopAP should tolerate daemons that are not running: %v", err)
 	}
 }
+
+func TestStartAPIsIdempotent(t *testing.T) {
+	// StartAP must be safe to call multiple times. If not, a second call spawns
+	// a second hostapd/dnsmasq, which causes beacon conflicts and corruption.
+	dir := t.TempDir()
+	f := &fakeRunner{out: map[string][]byte{}}
+	c := &Client{R: f, HostapdConf: dir + "/hostapd.conf", DnsmasqConf: dir + "/dnsmasq-ap.conf"}
+
+	// First call brings up the AP.
+	if err := c.StartAP("54:01:4a:4c:1b:fd"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reset the call log to see what the second call does.
+	f.call = nil
+
+	// Second call should kill existing daemons before starting new ones.
+	if err := c.StartAP("54:01:4a:4c:1b:fd"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify killall hostapd and killall dnsmasq are in the second call.
+	var killedHostapd, killedDnsmasq bool
+	for _, call := range f.call {
+		switch {
+		case call == "killall hostapd":
+			killedHostapd = true
+		case call == "killall dnsmasq":
+			killedDnsmasq = true
+		}
+	}
+	if !killedHostapd || !killedDnsmasq {
+		t.Errorf("second StartAP must kill existing daemons; calls were %v", f.call)
+	}
+}
+
+func TestStartAPRestoresSTAOnHostapdFailure(t *testing.T) {
+	// If StartAP fails after killing the supplicant, it must restore STA mode.
+	// Otherwise the board has no supplicant and no AP: unreachable over WiFi.
+	dir := t.TempDir()
+	f := &fakeRunner{
+		out: map[string][]byte{},
+		err: map[string]error{
+			"hostapd -B " + dir + "/hostapd.conf": errors.New("failed to start"),
+		},
+	}
+	c := &Client{R: f, HostapdConf: dir + "/hostapd.conf", DnsmasqConf: dir + "/dnsmasq-ap.conf"}
+
+	err := c.StartAP("54:01:4a:4c:1b:fd")
+	if err == nil {
+		t.Fatal("expected an error from failed hostapd")
+	}
+
+	// Verify that /etc/init.d/S99wlan0 restart was called (the rescue path).
+	var restarted bool
+	for _, call := range f.call {
+		if call == "/etc/init.d/S99wlan0 restart" {
+			restarted = true
+			break
+		}
+	}
+	if !restarted {
+		t.Errorf("StartAP must call restoreSTA on failure (which includes restart); calls were %v", f.call)
+	}
+}
+
+func TestStopAPReturnsToSTA(t *testing.T) {
+	// StopAP must restart networking to return the board to STA mode, not leave it
+	// with no supplicant.
+	f := &fakeRunner{out: map[string][]byte{}}
+	c := &Client{R: f}
+	if err := c.StopAP(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify that /etc/init.d/S99wlan0 restart was called.
+	var restarted bool
+	for _, call := range f.call {
+		if call == "/etc/init.d/S99wlan0 restart" {
+			restarted = true
+			break
+		}
+	}
+	if !restarted {
+		t.Errorf("StopAP must call /etc/init.d/S99wlan0 restart; calls were %v", f.call)
+	}
+}
