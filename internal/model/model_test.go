@@ -11,7 +11,6 @@ import (
 
 func testConfig() *config.Config {
 	c := &config.Config{}
-	c.Location.Name = "Home"
 	c.Location.Timezone = "UTC"
 	c.Units.Clock24h = false
 	return c

@@ -18,7 +18,6 @@ func fixtureVM(t *testing.T) model.ViewModel {
 	t.Helper()
 	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
 	c := &config.Config{}
-	c.Location.Name = "Home"
 	c.Location.Timezone = "UTC"
 
 	evs := []calendar.Event{

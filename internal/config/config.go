@@ -15,19 +15,34 @@ type CalendarSource struct {
 	URL   string `json:"url"`
 }
 
+// WiFiConfig holds the credentials the board associates with. Written by the
+// portal; also templated into /etc/wpa_supplicant.conf by the wifi package.
+type WiFiConfig struct {
+	SSID     string `json:"ssid"`
+	Password string `json:"password"`
+}
+
+// PortalConfig holds the admin password hash. Empty means "not set" -- the
+// portal then accepts the MAC-derived default (see internal/portal/auth.go).
+type PortalConfig struct {
+	PasswordHash string `json:"password_hash"`
+}
+
+// DisplayConfig holds panel settings applied via sysfs.
+type DisplayConfig struct {
+	Brightness int `json:"brightness"` // 0-255, matches the panel's range
+}
+
 // Config mirrors config.json. Zero values are replaced by defaults in Load.
 type Config struct {
 	Location struct {
-		Name      string  `json:"name"`
 		Latitude  float64 `json:"latitude"`
 		Longitude float64 `json:"longitude"`
 		Timezone  string  `json:"timezone"`
 	} `json:"location"`
 	Units struct {
-		Temperature   string `json:"temperature"`
-		WindSpeed     string `json:"wind_speed"`
-		Precipitation string `json:"precipitation"`
-		Clock24h      bool   `json:"clock_24h"`
+		Temperature string `json:"temperature"`
+		Clock24h    bool   `json:"clock_24h"`
 	} `json:"units"`
 	Refresh struct {
 		WeatherMinutes  int `json:"weather_minutes"`
@@ -37,6 +52,9 @@ type Config struct {
 		DaysAhead int `json:"days_ahead"`
 		MaxEvents int `json:"max_events"`
 	} `json:"agenda"`
+	WiFi      WiFiConfig       `json:"wifi"`
+	Portal    PortalConfig     `json:"portal"`
+	Display   DisplayConfig    `json:"display"`
 	Calendars []CalendarSource `json:"calendars"`
 }
 
@@ -61,12 +79,6 @@ func (c *Config) applyDefaults() {
 	if c.Units.Temperature == "" {
 		c.Units.Temperature = "fahrenheit"
 	}
-	if c.Units.WindSpeed == "" {
-		c.Units.WindSpeed = "mph"
-	}
-	if c.Units.Precipitation == "" {
-		c.Units.Precipitation = "inch"
-	}
 	if c.Refresh.WeatherMinutes <= 0 {
 		c.Refresh.WeatherMinutes = 15
 	}
@@ -78,6 +90,14 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Agenda.MaxEvents <= 0 {
 		c.Agenda.MaxEvents = 40
+	}
+	// 200/255 is the shipped default and a reasonable indoor level. Zero would
+	// be a black panel, which is indistinguishable from a crash.
+	if c.Display.Brightness <= 0 {
+		c.Display.Brightness = 200
+	}
+	if c.Display.Brightness > 255 {
+		c.Display.Brightness = 255
 	}
 }
 

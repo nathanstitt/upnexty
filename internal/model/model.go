@@ -44,10 +44,9 @@ type ViewModel struct {
 	ClockTime string
 	ClockDate string
 
-	LocationName string
-	Current      *weather.Conditions
-	Forecast     []weather.DayPoint
-	Hourly       []weather.HourPoint
+	Current  *weather.Conditions
+	Forecast []weather.DayPoint
+	Hourly   []weather.HourPoint
 
 	NextEvent *calendar.Event
 	UntilNext string
@@ -82,11 +81,10 @@ func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Wea
 	}
 
 	vm := ViewModel{
-		Now:          now,
-		ClockTime:    local.Format(clockLayout),
-		ClockDate:    local.Format("Monday, January 2"),
-		LocationName: c.Location.Name,
-		Errors:       errs,
+		Now:       now,
+		ClockTime: local.Format(clockLayout),
+		ClockDate: local.Format("Monday, January 2"),
+		Errors:    errs,
 		// Stale means "something failed this fetch cycle, so what's on
 		// screen may be older than it looks" — derived from errs, not from
 		// whether both sources happened to fail together. A calendar
