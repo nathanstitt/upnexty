@@ -179,6 +179,55 @@ Vendor display test, if you suspect the pipeline:
 adb shell modetest -M rockchip -s 74@71:480x1920
 ```
 
+## WiFi
+
+**The stock `Luckfox_Lyra_Flash_*` image has no WiFi driver.** It is built for
+the base Lyra, which has no radio. The Zero W's **AIC8800DC** (USB `a69c:88dc`)
+is present and enumerated either way — its Bluetooth half binds `btusb` and
+works — but USB interface 1.2, the WiFi function, is left unclaimed. The kernel
+side is all there (`cfg80211`, `mac80211`, `S35wifibt-poweron.sh`,
+`rfkill_wlan_init` at boot); only the chip driver is absent.
+
+The fix is to take the driver from the **Zero W** image, which ships it. Both
+images use the same kernel, so the modules load as-is:
+
+```bash
+scripts/setup-wifi.sh                  # extract from the Zero W image + install
+adb shell '/usr/bin/wifi-connect.sh <SSID> <PASSWORD>'
+# make it survive reboot -- wifi-connect.sh only writes /tmp, which is tmpfs:
+adb shell 'sed "s/SSID/<SSID>/; s/PASSWORD/<PASSWORD>/" /etc/wpa_supplicant.conf > /tmp/w && cp /tmp/w /etc/wpa_supplicant.conf'
+adb reboot
+```
+
+`setup-wifi.sh` needs `Luckfox_Lyra_Zero_W_Flash_<date>.zip` unzipped in
+`~/Downloads` (override with `LUCKFOX_ZERO_W_DIR`). Get it from the wiki's
+Google Drive under **Firmware → Buildroot** — note the `_W_` and `Flash`
+(SPI NAND, not MicroSD; this board has no card slot). It installs:
+
+| | |
+|---|---|
+| `aic8800_fdrv`, `aic_load_fw`, `aic_btusb` | into `/lib/modules/6.1.99/kernel/drivers/net/wireless/` |
+| `modules.dep` entries | written by hand — **there is no `depmod`** on this image |
+| `/lib/firmware/aic8800DC/` | 20 blobs; `/lib/firmware` does not otherwise exist |
+| `wifi-connect.sh` + WPA2 template | ours ships an open-network stub |
+| **CA certificates** | `/etc/ssl/certs/` is empty in *both* images |
+| `board/etc/init.d/S99wlan0` | associate, DHCP, then set the clock |
+
+`S03modules_init.sh` modprobes every `.ko` under `/lib/modules/$(uname -r)/kernel/`
+at boot, so the driver auto-loads once it is installed there and listed in
+`modules.dep`.
+
+**The CA bundle is easy to miss.** Without it WiFi associates and pings fine,
+but every HTTPS request fails with `x509: certificate signed by unknown
+authority` — so the dashboard connects and still shows STALE.
+
+**The clock** has no RTC and boots at 1970. There is no `ntpd`/`ntpdate`/
+`chrony`, but `rdate` is present; `S99wlan0` uses it once an address exists.
+The system stays on UTC — the dashboard converts via its configured timezone.
+
+Verified from a cold boot: modules auto-load, `wlan0` associates, DHCP lease,
+clock set, dashboard fetches live weather. ~2.0–2.5s per frame with the fetch.
+
 ## Dashboard
 
 The `dashboard` service renders the UpNext display: it fetches iCal calendars
