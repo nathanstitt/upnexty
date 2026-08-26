@@ -226,3 +226,40 @@ func TestSaveKeepsPreviousAsBackup(t *testing.T) {
 		t.Errorf("backup holds %q, want the previous value UTC", bak.Location.Timezone)
 	}
 }
+
+func TestSaveFailureLeavesPreviousConfig(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.json")
+
+	// Write an initial config.
+	old := &Config{}
+	old.Location.Timezone = "UTC"
+	if err := old.Save(p); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make the directory read-only, so any subsequent rename will fail.
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// Restore permissions so cleanup can remove the temp dir.
+		os.Chmod(dir, 0o755)
+	})
+
+	// Try to save a different config. This will fail at the install rename.
+	new := &Config{}
+	new.Location.Timezone = "America/Chicago"
+	if err := new.Save(p); err == nil {
+		t.Fatal("expected Save to fail with read-only directory")
+	}
+
+	// Verify the old config is still there and unchanged.
+	loaded, err := Load(p)
+	if err != nil {
+		t.Fatalf("config missing or unreadable after failed Save: %v", err)
+	}
+	if loaded.Location.Timezone != "UTC" {
+		t.Errorf("config was corrupted; got timezone %q, want UTC", loaded.Location.Timezone)
+	}
+}

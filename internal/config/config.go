@@ -156,16 +156,35 @@ func (c *Config) Save(path string) error {
 		tmp.Close()
 		return fmt.Errorf("sync temp config: %w", err)
 	}
+	// 0600: this file holds the WiFi password. os.CreateTemp already uses 0600
+	// and os.Rename preserves it, but set it explicitly so the intent is clear
+	// and does not depend on CreateTemp's default.
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("set config permissions: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp config: %w", err)
 	}
 
-	// Keep the previous version. Ignore a missing original (first save).
-	if _, err := os.Stat(path); err == nil {
-		if err := os.Rename(path, path+".bak"); err != nil {
+	// Back up the current config by copying, not renaming. A rename would
+	// briefly leave no file at path, and if the install below then failed the
+	// board would have no config at all -- Load has no .bak fallback and main
+	// exits when Load fails. A copy leaves the original in place until the
+	// atomic rename replaces it.
+	if old, err := os.ReadFile(path); err == nil {
+		if err := os.WriteFile(path+".bak", old, 0o600); err != nil {
 			return fmt.Errorf("back up config: %w", err)
 		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read config for backup: %w", err)
 	}
+
+	// The commit point. Until this succeeds, path still holds the old config.
+	// After this succeeds, path holds the new config. There is no window where
+	// it is missing. Directory entry fsync is not done (dir inode is not synced);
+	// on UBIFS the realistic worst case after a power loss is reverting to the
+	// previous config, which is safe.
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("install config: %w", err)
 	}
