@@ -2,6 +2,7 @@ package wifi
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +29,16 @@ type Network struct {
 // Client talks to the board's wifi tooling.
 type Client struct {
 	R Runner
+	// ConfPath is the persistent supplicant config. Defaults to
+	// /etc/wpa_supplicant.conf when empty.
+	ConfPath string
+}
+
+func (c *Client) confPath() string {
+	if c.ConfPath == "" {
+		return "/etc/wpa_supplicant.conf"
+	}
+	return c.ConfPath
 }
 
 // Status reports the current association.
@@ -113,4 +124,54 @@ func (c *Client) Scan() ([]Network, error) {
 		return nets[i].SSID < nets[j].SSID
 	})
 	return nets, nil
+}
+
+// wpaEscape quotes a value for wpa_supplicant.conf. Without this an SSID or
+// password containing a quote would terminate the value early and corrupt the
+// file -- leaving a board that cannot associate and cannot be reached to fix.
+func wpaEscape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `"`, `\"`)
+}
+
+// Connect writes the supplicant config and restarts the supplicant.
+//
+// It writes the persistent /etc/wpa_supplicant.conf rather than the /tmp copy
+// the vendor's wifi-connect.sh uses -- /tmp is tmpfs, so credentials written
+// there are lost on reboot.
+func (c *Client) Connect(ssid, password string) error {
+	if strings.TrimSpace(ssid) == "" {
+		return fmt.Errorf("ssid is required")
+	}
+
+	conf := fmt.Sprintf(`ctrl_interface=/var/run/wpa_supplicant
+ap_scan=1
+update_config=1
+
+network={
+	ssid="%s"
+	psk="%s"
+	key_mgmt=WPA-PSK
+}
+`, wpaEscape(ssid), wpaEscape(password))
+
+	// Written via a temp file + rename for the same reason config.Save is:
+	// a torn write here leaves a board that cannot get back on the network.
+	path := c.confPath()
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(conf), 0o600); err != nil {
+		return fmt.Errorf("write supplicant config: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("install supplicant config: %w", err)
+	}
+
+	// S99wlan0 restart re-runs the whole bring-up: supplicant, DHCP, and the
+	// clock sync. Simpler and more reliable than driving wpa_cli reconfigure
+	// and udhcpc separately.
+	if out, err := c.R.Run("/etc/init.d/S99wlan0", "restart"); err != nil {
+		return fmt.Errorf("restart networking: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

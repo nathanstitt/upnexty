@@ -2,6 +2,8 @@ package wifi
 
 import (
 	"errors"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -245,4 +247,63 @@ func equal(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestConnectWritesConfigAndRestarts(t *testing.T) {
+	f := &fakeRunner{out: map[string][]byte{}}
+	c := &Client{R: f, ConfPath: t.TempDir() + "/wpa_supplicant.conf"}
+
+	if err := c.Connect("HomeNet", "s3cret"); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := os.ReadFile(c.ConfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := string(b)
+	if !strings.Contains(conf, `ssid="HomeNet"`) {
+		t.Errorf("config missing ssid:\n%s", conf)
+	}
+	if !strings.Contains(conf, `psk="s3cret"`) {
+		t.Errorf("config missing psk:\n%s", conf)
+	}
+	if !strings.Contains(conf, "ctrl_interface=") {
+		t.Errorf("config missing ctrl_interface, wpa_cli will not work:\n%s", conf)
+	}
+
+	// It must actually restart the supplicant, or nothing takes effect.
+	var restarted bool
+	for _, call := range f.call {
+		if strings.Contains(call, "wpa_supplicant") || strings.Contains(call, "S99wlan0") {
+			restarted = true
+		}
+	}
+	if !restarted {
+		t.Errorf("no restart issued; calls were %v", f.call)
+	}
+}
+
+func TestConnectRejectsEmptySSID(t *testing.T) {
+	c := &Client{R: &fakeRunner{}, ConfPath: t.TempDir() + "/w.conf"}
+	if err := c.Connect("", "pw"); err == nil {
+		t.Error("expected an error for an empty SSID")
+	}
+}
+
+func TestConnectEscapesQuotes(t *testing.T) {
+	// A quote in the SSID would otherwise break out of the quoted value and
+	// corrupt the config file.
+	c := &Client{R: &fakeRunner{}, ConfPath: t.TempDir() + "/w.conf"}
+	if err := c.Connect(`My"Net`, `pa"ss`); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(c.ConfPath)
+	conf := string(b)
+	if strings.Contains(conf, `ssid="My"Net"`) {
+		t.Errorf("unescaped quote corrupts the config:\n%s", conf)
+	}
+	if !strings.Contains(conf, `\"`) {
+		t.Errorf("expected escaped quotes:\n%s", conf)
+	}
 }
