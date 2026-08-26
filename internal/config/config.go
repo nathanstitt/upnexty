@@ -22,15 +22,18 @@ type WiFiConfig struct {
 	Password string `json:"password"`
 }
 
-// PortalConfig holds the admin password hash. Empty means "not set" -- the
-// portal then accepts the MAC-derived default (see internal/portal/auth.go).
+// PortalConfig holds the admin password hash. Empty means no password has been
+// set; the portal then accepts a device-derived default.
 type PortalConfig struct {
 	PasswordHash string `json:"password_hash"`
 }
 
 // DisplayConfig holds panel settings applied via sysfs.
 type DisplayConfig struct {
-	Brightness int `json:"brightness"` // 0-255, matches the panel's range
+	// Brightness is 0-255, matching the panel's sysfs range. A pointer so an
+	// explicit 0 ("screen off") is distinguishable from an absent key, which
+	// defaults to 200 -- a plain int makes those two cases identical.
+	Brightness *int `json:"brightness"`
 }
 
 // Config mirrors config.json. Zero values are replaced by defaults in Load.
@@ -91,14 +94,26 @@ func (c *Config) applyDefaults() {
 	if c.Agenda.MaxEvents <= 0 {
 		c.Agenda.MaxEvents = 40
 	}
-	// 200/255 is the shipped default and a reasonable indoor level. Zero would
-	// be a black panel, which is indistinguishable from a crash.
-	if c.Display.Brightness <= 0 {
-		c.Display.Brightness = 200
+	// Handle brightness: clamp out-of-range values to 0-255. The BrightnessValue()
+	// accessor handles the default (200) for absent keys.
+	if c.Display.Brightness != nil {
+		if *c.Display.Brightness < 0 {
+			v := 0
+			c.Display.Brightness = &v
+		} else if *c.Display.Brightness > 255 {
+			v := 255
+			c.Display.Brightness = &v
+		}
 	}
-	if c.Display.Brightness > 255 {
-		c.Display.Brightness = 255
+}
+
+// BrightnessValue returns the configured brightness, or the default when
+// unset. Callers should use this rather than dereferencing the pointer.
+func (c *Config) BrightnessValue() int {
+	if c.Display.Brightness == nil {
+		return 200
 	}
+	return *c.Display.Brightness
 }
 
 // TimeLocation resolves the configured timezone, falling back to UTC when the

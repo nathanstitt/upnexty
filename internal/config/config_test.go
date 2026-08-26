@@ -90,8 +90,8 @@ func TestLoadNewSections(t *testing.T) {
 	if c.Portal.PasswordHash != "abc123" {
 		t.Errorf("PasswordHash = %q", c.Portal.PasswordHash)
 	}
-	if c.Display.Brightness != 120 {
-		t.Errorf("Brightness = %d, want 120", c.Display.Brightness)
+	if c.Display.Brightness == nil || *c.Display.Brightness != 120 {
+		t.Errorf("Brightness = %v, want 120", c.Display.Brightness)
 	}
 }
 
@@ -101,16 +101,44 @@ func TestBrightnessDefaultsAndClamps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Display.Brightness != 200 {
-		t.Errorf("default Brightness = %d, want 200", c.Display.Brightness)
+	if c.Display.Brightness != nil {
+		t.Errorf("unset Brightness pointer = %v, want nil", c.Display.Brightness)
 	}
+	if c.BrightnessValue() != 200 {
+		t.Errorf("BrightnessValue() = %d, want 200", c.BrightnessValue())
+	}
+
+	// Explicit 0 -> stays 0 (the bug: must fail before fix, pass after).
+	c, err = Load(writeTemp(t, `{"display":{"brightness":0}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Display.Brightness == nil || *c.Display.Brightness != 0 {
+		t.Errorf("explicit 0 Brightness = %v, want 0", c.Display.Brightness)
+	}
+	if c.BrightnessValue() != 0 {
+		t.Errorf("BrightnessValue() for explicit 0 = %d, want 0", c.BrightnessValue())
+	}
+
+	// Negative -> clamped to 0.
+	c, err = Load(writeTemp(t, `{"display":{"brightness":-10}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Display.Brightness == nil || *c.Display.Brightness != 0 {
+		t.Errorf("negative Brightness = %v, want 0", c.Display.Brightness)
+	}
+
 	// Out of range -> clamped to the panel's 0-255.
 	c, err = Load(writeTemp(t, `{"display":{"brightness":999}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Display.Brightness != 255 {
-		t.Errorf("clamped Brightness = %d, want 255", c.Display.Brightness)
+	if c.Display.Brightness == nil || *c.Display.Brightness != 255 {
+		t.Errorf("clamped Brightness = %v, want 255", c.Display.Brightness)
+	}
+	if c.BrightnessValue() != 255 {
+		t.Errorf("BrightnessValue() for clamped = %d, want 255", c.BrightnessValue())
 	}
 }
 
