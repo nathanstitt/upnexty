@@ -18,6 +18,20 @@ if [ ${#files[@]} -eq 0 ]; then
 	[ ${#files[@]} -gt 0 ] || die "nothing to deploy -- run scripts/build.sh first"
 fi
 
+# Board-side init scripts live outside /root, so they are pushed separately
+# rather than through the loop below (which targets BOARD_BIN_DIR).
+install_init_scripts() {
+	shopt -s nullglob
+	local s
+	for s in "$REPO_ROOT"/board/etc/init.d/*; do
+		adb push "$s" "/etc/init.d/$(basename "$s")" >/dev/null ||
+			die "push failed: $s"
+		adb shell "chmod +x '/etc/init.d/$(basename "$s")'"
+		printf '    %s -> /etc/init.d/\n' "$(basename "$s")"
+	done
+	shopt -u nullglob
+}
+
 for f in "${files[@]}"; do
 	[ -f "$f" ] || die "not a file: $f"
 	dest="$BOARD_BIN_DIR/$(basename "$f")"
@@ -27,3 +41,11 @@ for f in "${files[@]}"; do
 done
 
 info "deployed ${#files[@]} file(s) to $BOARD_BIN_DIR"
+
+# Only refresh the init scripts on a full deploy; a targeted `deploy.sh <file>`
+# is usually an iteration loop that should not restart services.
+if [ $# -eq 0 ]; then
+	info "installing init scripts"
+	install_init_scripts
+	info "restart a service with: adb shell /etc/init.d/<name> restart"
+fi

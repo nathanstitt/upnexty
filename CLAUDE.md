@@ -236,11 +236,18 @@ writes `/dev/fb0`. Display-only — no touch, no HTTP server.
 
 ```bash
 scripts/build.sh dashboard
-scripts/deploy.sh build/dashboard
+scripts/deploy.sh                                 # binaries + board/etc/init.d/
 adb push config.sample.json /root/config.json     # then edit in the iCal URLs
 adb shell /root/dashboard --once                  # single frame
-adb shell 'nohup /root/dashboard >/root/dashboard.log 2>&1 &'
+adb shell /etc/init.d/S99zdashboard restart       # run it as a service
 ```
+
+`scripts/deploy.sh` with no arguments also installs everything under
+`board/etc/init.d/`; passing explicit files skips that, so an iteration loop
+does not restart services. `S99zdashboard` sorts after `S99wlan0` (rcS runs
+these sequentially, and wlan0 blocks up to ~45s on DHCP) so the first frame has
+live data. It has `start|stop|restart|status` and truncates its log at boot —
+`/root` is UBI with ~50MB free and this runs every minute forever.
 
 Measured on the board: **~1.05–1.18s per frame**, ~167MB RSS at the peak of a
 render, settling to **~46MB between renders**. The loop wakes on the minute
