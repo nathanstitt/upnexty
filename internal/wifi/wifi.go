@@ -32,6 +32,10 @@ type Client struct {
 	// ConfPath is the persistent supplicant config. Defaults to
 	// /etc/wpa_supplicant.conf when empty.
 	ConfPath string
+	// HostapdConf and DnsmasqConf default to /tmp paths when empty; tests
+	// point them at a temp dir.
+	HostapdConf string
+	DnsmasqConf string
 }
 
 func (c *Client) confPath() string {
