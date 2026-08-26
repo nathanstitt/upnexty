@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Module path:** `github.com/nathanstitt/luckfox-dashboard` — this repo has no `go.mod` yet; Task 1 creates it.
-- **Go version:** `go 1.25.0` in `go.mod`. Host toolchain is 1.26.3; doctaculous requires 1.25.0.
+- **Go version:** `go 1.26.0` in `go.mod`, matching the host toolchain (1.26.3). doctaculous declares 1.25.0; a newer declaration builds it fine under the replace directive.
 - **Dependencies:** stdlib only, plus doctaculous via a `replace` directive to a local path. No other third-party modules.
 - **Cross-compile:** `GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0`, `-ldflags="-s -w"`. Binaries must be 32-bit ARM ELF or they fail on the board with a confusing exec error.
 - **Panel geometry:** framebuffer is 480×1920 portrait XR24 (stride 1920, 3686400 bytes). The UI is 1920×480 landscape, rotated 270° at blit time.
@@ -75,7 +75,7 @@ cd /Users/nas/code/upnext/luckfox
 cat > go.mod <<'EOF'
 module github.com/nathanstitt/luckfox-dashboard
 
-go 1.25.0
+go 1.26.0
 
 require github.com/nathanstitt/doctaculous v0.0.0
 
@@ -784,7 +784,30 @@ curl -s 'https://api.open-meteo.com/v1/forecast?latitude=38.5693&longitude=-92.1
 head -c 400 internal/weather/testdata/openmeteo.json
 ```
 
-Expected: JSON containing `"current"`, `"hourly"`, and `"daily"` objects. If the network is unavailable, this task cannot proceed — the fixture must reflect the real schema.
+Expected: JSON containing `"current"`, `"hourly"`, and `"daily"` objects.
+
+**If the network is unavailable,** hand-write `internal/weather/testdata/openmeteo.json` from the schema below instead — the field names must match exactly, since that is what the parser binds to. Include at least 24 hourly entries and exactly 7 daily entries so `TestParseOpenMeteo`'s length assertion holds:
+
+```json
+{
+  "current": {"time": "2026-08-25T10:00", "temperature_2m": 72.4, "weather_code": 2, "is_day": 1},
+  "hourly": {
+    "time": ["2026-08-25T00:00", "2026-08-25T01:00"],
+    "temperature_2m": [64.2, 63.8],
+    "precipitation_probability": [0, 5],
+    "weather_code": [0, 1]
+  },
+  "daily": {
+    "time": ["2026-08-25", "2026-08-26"],
+    "temperature_2m_max": [88.1, 90.3],
+    "temperature_2m_min": [64.0, 66.2],
+    "precipitation_probability_max": [20, 0],
+    "weather_code": [2, 0]
+  }
+}
+```
+
+Note the shape: `hourly` and `daily` are objects of parallel arrays, not arrays of objects. Timestamps carry no zone suffix — they are local to the requested timezone, which is why `parseLocal` resolves them against a `*time.Location`.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -2151,11 +2174,12 @@ func Hourly(w *weather.Weather, win model.Window, heightPx float64) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg viewBox="0 0 %.0f %.0f" width="%.0f" height="%.0f" class="wx-chart">`,
 		win.WidthPx, heightPx, win.WidthPx, heightPx)
-	defer func() { b.WriteString(`</svg>`) }()
 
+	// Every return closes the element explicitly. A deferred WriteString would
+	// not work: b.String() is evaluated before deferred calls run.
 	chartH := heightPx - labelBandPx
 	if w == nil || len(w.Hourly) == 0 || chartH <= 0 {
-		return b.String() + `</svg>`[:0] + ""
+		return b.String() + "</svg>"
 	}
 
 	// Only points inside the window matter.
@@ -2175,7 +2199,7 @@ func Hourly(w *weather.Weather, win model.Window, heightPx float64) string {
 		}
 	}
 	if len(pts) == 0 {
-		return b.String() + `</svg>`[:0] + ""
+		return b.String() + "</svg>"
 	}
 	if maxT-minT < 1 { // avoid divide-by-zero on a flat forecast
 		maxT = minT + 1
@@ -2206,33 +2230,11 @@ func Hourly(w *weather.Weather, win model.Window, heightPx float64) string {
 	}
 	b.WriteString(`"/>`)
 
-	return b.String() + `</svg>`
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-```
-
-Note: the two early returns above must produce a valid closed `<svg>`. Replace the placeholder expressions with a plain `return b.String() + "</svg>"` and drop the `defer` — the deferred write does not run before `b.String()` is evaluated in a return statement. Write it as:
-
-```go
-func Hourly(w *weather.Weather, win model.Window, heightPx float64) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, `<svg viewBox="0 0 %.0f %.0f" width="%.0f" height="%.0f" class="wx-chart">`,
-		win.WidthPx, heightPx, win.WidthPx, heightPx)
-
-	chartH := heightPx - labelBandPx
-	if w == nil || len(w.Hourly) == 0 || chartH <= 0 {
-		return b.String() + "</svg>"
-	}
-	// ... rest as above ...
 	return b.String() + "</svg>"
 }
 ```
+
+Go 1.21+ has a builtin `max` for ordered types, so do not define one.
 
 - [ ] **Step 6: Create the golden and run the tests**
 

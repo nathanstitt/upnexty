@@ -1,0 +1,25 @@
+{
+  "location": {
+    "name": "Home",
+    "latitude": 38.5693164,
+    "longitude": -92.1629241,
+    "timezone": "America/Chicago"
+  },
+  "units": {
+    "temperature": "fahrenheit",
+    "wind_speed": "mph",
+    "precipitation": "inch",
+    "clock_24h": false
+  },
+  "refresh": {
+    "weather_minutes": 15,
+    "calendar_minutes": 10
+  },
+  "agenda": {
+    "days_ahead": 7,
+    "max_events": 40
+  },
+  "calendars": [
+    { "name": "Personal", "color": "#4f9cff", "url": "PASTE_ICAL_URL" }
+  ]
+}

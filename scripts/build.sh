@@ -20,7 +20,11 @@ fi
 
 # doctaculous is the HTML/document renderer these tools are built around.
 DOCTACULOUS="${DOCTACULOUS_DIR:-$HOME/code/doctaculous}"
-if [ "$MODULE_DIR" = "$REPO_ROOT" ] && [ $# -eq 0 ]; then
+# "dashboard" builds this repo's service; no args builds the doctaculous tools.
+if [ "${1:-}" = "dashboard" ]; then
+	shift
+	set -- ./cmd/dashboard "$@"
+elif [ "$MODULE_DIR" = "$REPO_ROOT" ] && [ $# -eq 0 ]; then
 	[ -d "$DOCTACULOUS" ] || die "doctaculous not found at $DOCTACULOUS
 set DOCTACULOUS_DIR, or pass packages to build"
 	MODULE_DIR="$DOCTACULOUS"

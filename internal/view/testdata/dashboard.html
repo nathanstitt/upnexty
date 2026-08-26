@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>UpNext</title>
+<style>:root {
+  --bg: #0b0d12;
+  --panel: #141924;
+  --border: #263041;
+  --text: #e8ecf3;
+  --text-mid: #8b97ab;
+  --text-dim: #5b6678;
+  --blue: #4f9cff;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  width: 1920px; height: 480px;
+  background: var(--bg); color: var(--text);
+  font-family: "DejaVu Sans", sans-serif;
+  overflow: hidden;
+}
+#app { display: flex; width: 1920px; height: 480px; }
+
+/* Left: fixed-width now block */
+#now-block {
+  width: 380px; flex-shrink: 0; height: 480px;
+  border-right: 1px solid var(--border);
+  padding: 20px 22px; display: flex; flex-direction: column;
+}
+#clock-time { font-size: 78px; font-weight: 700; line-height: 1; letter-spacing: -2px; }
+#clock-date { font-size: 19px; color: var(--text-mid); text-transform: uppercase;
+  letter-spacing: 1px; margin-top: 10px; }
+#now-wx { display: flex; align-items: center; gap: 10px; margin-top: 26px; font-size: 30px; }
+#now-wx svg { width: 34px; height: 34px; color: var(--text-mid); }
+#next-label { font-size: 15px; color: var(--text-dim); text-transform: uppercase;
+  letter-spacing: 1px; margin-top: 30px; }
+#next-title { font-size: 25px; font-weight: 600; margin-top: 6px; }
+#next-when { font-size: 19px; color: var(--blue); margin-top: 4px; }
+
+/* Right: timeline track */
+#track { position: relative; width: 1540px; height: 480px; }
+.ad-ribbon { position: absolute; top: 0; left: 0; height: 30px;
+  display: flex; gap: 8px; padding: 5px 8px; }
+.ad-pill { font-size: 15px; padding: 2px 10px; border-radius: 9px; }
+
+.block { position: absolute; top: 118px; height: 54px; border-radius: 5px;
+  background: var(--panel); border-left: 3px solid var(--blue); }
+/* font-size here MUST stay 19px: model.estimateTextWidth (internal/model/model.go)
+   assumes 19px when it estimates label widths for PlaceLabels' collision
+   avoidance. Changing this without changing that constant will make labels
+   overlap or get dropped incorrectly. */
+.label { position: absolute; font-size: 19px; white-space: nowrap; }
+.label .lt { font-weight: 600; }
+.label .lm { color: var(--text-mid); font-size: 15px; margin-left: 7px; }
+.leader { position: absolute; top: 108px; width: 1px; height: 10px;
+  background: var(--text-dim); }
+
+/* top starts below the all-day ribbon band (0-30px) so the "NOW" tag (drawn
+   above the line via ::after) never overlaps an all-day pill sitting at a
+   similar X. */
+#now-line { position: absolute; top: 48px; width: 2px; height: 286px;
+  background: var(--blue); }
+#now-line::after { content: "NOW"; position: absolute; top: -16px; left: -13px;
+  font-size: 12px; color: var(--blue); letter-spacing: 1px; }
+
+#wx { position: absolute; bottom: 96px; left: 0; }
+.wx-chart { display: block; }
+.wx-temp { fill: none; stroke: #ffb454; stroke-width: 2; }
+.wx-precip { fill: rgba(79,156,255,0.35); }
+
+#forecast { position: absolute; bottom: 0; left: 0; width: 1540px; height: 92px;
+  display: flex; border-top: 1px solid var(--border); }
+.fc-col { flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 3px; border-right: 1px solid #1b2230; }
+.fc-dow { font-size: 14px; color: var(--text-dim); text-transform: uppercase; }
+.fc-col svg { width: 24px; height: 24px; color: var(--text-mid); }
+.fc-hi { font-size: 21px; font-weight: 700; }
+.fc-lo { font-size: 17px; color: var(--text-mid); margin-left: 5px; }
+.fc-pp { font-size: 14px; color: var(--blue); }
+
+/* Stale and Errors can render together (model.Build sets Stale whenever
+   Errors is non-empty), so #errors sits below #stale-flag rather than
+   sharing its top offset. max-width plus overflow-wrap keeps a long error
+   string (e.g. a full "ical(Name): GET ...: 401 Unauthorized" message) from
+   running off the right edge of the 1540px track. */
+#stale-flag { position: absolute; top: 4px; right: 8px; font-size: 13px; color: #ff7a59;
+  text-transform: uppercase; letter-spacing: 1px; }
+#errors { position: absolute; top: 22px; right: 8px; max-width: 460px;
+  font-size: 13px; color: #ff7a59; text-align: right; overflow-wrap: break-word; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="now-block">
+    <div id="clock-time">10:42</div>
+    <div id="clock-date">Tuesday, August 25</div>
+    
+    <div id="now-wx"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="7.5" r="3.5" fill="currentColor" stroke="none"/><path d="M8 2v1.6M3.3 7.5h1.6M4.4 3.9l1.1 1.1"/><path d="M8.5 19a4 4 0 0 1 .4-8 5.5 5.5 0 0 1 10.5 1.4A3.5 3.5 0 0 1 19 19z" fill="currentColor" stroke="none"/></svg>
+<span>72&deg;</span></div>
+    
+    
+    <div id="next-label">Next</div>
+    <div id="next-title">Standup</div>
+    <div id="next-when">10m</div>
+    
+  </aside>
+
+  <div id="track">
+    
+    <div class="ad-ribbon">
+      <div class="ad-pill" style="background:#4f9cff22;color:#4f9cff">Company Holiday</div>
+    </div>
+    
+
+    
+    <div class="block" style="left:192.5px;width:64.2px;border-left-color:#4f9cff"></div>
+    
+    <div class="block" style="left:231.0px;width:186.1px;border-left-color:#ff7a59"></div>
+    
+
+    
+    
+    <div class="label" style="left:192.5px;top:78.0px"><span class="lt">Standup</span></div>
+    
+    <div class="leader" style="left:231.0px"></div>
+    <div class="label" style="left:271.7px;top:78.0px"><span class="lt">Design Review Sync</span></div>
+    
+
+    <div id="now-line" style="left:128.3px"></div>
+
+    <div id="wx" style="width:1540.0px"><svg viewBox="0 0 1540 104" width="1540" height="104" class="wx-chart"><rect x="513.3" y="78.0" width="231.0" height="2.0" class="wx-precip"/><rect x="898.3" y="76.0" width="231.0" height="4.0" class="wx-precip"/><rect x="1283.3" y="74.0" width="231.0" height="6.0" class="wx-precip"/><path class="wx-temp" d="M128.3 68.0 L513.3 49.3 L898.3 30.7 L1283.3 12.0 "/></svg></div>
+
+    <div id="forecast">
+      
+      <div class="fc-col">
+        <div class="fc-dow">Today</div>
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="7.5" r="3.5" fill="currentColor" stroke="none"/><path d="M8 2v1.6M3.3 7.5h1.6M4.4 3.9l1.1 1.1"/><path d="M8.5 19a4 4 0 0 1 .4-8 5.5 5.5 0 0 1 10.5 1.4A3.5 3.5 0 0 1 19 19z" fill="currentColor" stroke="none"/></svg>
+
+        <div><span class="fc-hi">88&deg;</span><span class="fc-lo">64&deg;</span></div>
+        <div class="fc-pp">20%</div>
+      </div>
+      
+      <div class="fc-col">
+        <div class="fc-dow">Wed</div>
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5" fill="currentColor" stroke="none"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>
+
+        <div><span class="fc-hi">90&deg;</span><span class="fc-lo">66&deg;</span></div>
+        <div class="fc-pp">—</div>
+      </div>
+      
+    </div>
+
+    
+    
+  </div>
+</div>
+</body>
+</html>

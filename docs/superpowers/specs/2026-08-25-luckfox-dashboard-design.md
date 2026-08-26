@@ -214,9 +214,17 @@ mute toggle. `fbtouch` exists and the renderer should not make touch
 *impossible* later, but no hit-testing or input state machine is built now.
 
 Also dropped: the HTTP server, static file serving, and the `data.json` schema —
-all browser-era plumbing. The Pi's `past_temps.json` history (used to extend the
-temperature curve left of NOW) is worth keeping, since it survives restarts and
-the board has no RTC.
+all browser-era plumbing.
+
+**Deferred to a follow-up:** the Pi's `past_temps.json` history, which extends
+the temperature curve left of NOW. It is worth keeping — it survives restarts,
+and the board has no RTC — but it did not ship in the first implementation, so
+the curve currently starts at the first forecast sample and runs forward only.
+Implementing it means: record each observed current temp beside the config file,
+load it at boot, and feed the recorded points into `chart.Hourly` so it can plot
+left of the NOW line. Note the chart's window is half-open `[Start, End)`, and
+`ComputeWindow`'s `PastContext` already reserves space to the left of NOW for
+exactly this.
 
 ## Testing
 
