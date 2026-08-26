@@ -53,68 +53,37 @@ Rationale: `wifi` is separated from `portal` because the AP/STA lifecycle is the
 
 ---
 
-### Task 1: Prove the AIC8800DC supports AP mode
+### Task 1: Confirm AP mode — ALREADY DONE
 
-**Files:**
-- Create: `docs/ap-mode-probe.md`
+**Status: complete.** See `docs/ap-mode-probe.md` (committed).
 
-**Interfaces:**
-- Consumes: nothing
-- Produces: a documented yes/no answer that every later task depends on
+This task existed to gate the rest of the plan: the captive portal's AP fallback
+assumes the AIC8800DC supports AP mode, and nothing confirmed it. That question
+is now answered on the running board, without disturbing the interface:
 
-**This task exists because the whole feature rests on an unverified assumption.** The AIC8800DC is a USB WiFi chip with a vendor out-of-tree driver; nothing confirms it supports AP mode. There is no `iw` on this image to ask. If the answer is no, the captive portal cannot work as specified and the design needs revisiting before any code is written.
-
-A previous attempt at this probe stranded the board and required a physical power cycle, because `hostapd` tore down the association that adb depends on. **The probe below is self-restoring** — it runs detached, and restores STA mode unconditionally after 20 seconds whether it succeeded, failed, or hung.
-
-- [ ] **Step 1: Write the probe config and run it detached**
-
-```bash
-adb shell 'cat > /tmp/ap-probe.conf <<EOF
-interface=wlan0
-driver=nl80211
-ssid=upnext-probe
-hw_mode=g
-channel=6
-EOF
-nohup sh -c "hostapd -dd /tmp/ap-probe.conf > /tmp/ap-probe.log 2>&1 & sleep 20; killall hostapd 2>/dev/null; /etc/init.d/S99wlan0 restart" > /dev/null 2>&1 &
-echo "probe running detached; restores STA in ~20s"'
+```
+# wpa_cli -i wlan0 get_capability modes
+AP
 ```
 
-The `nohup ... &` matters: if this ran in the foreground and hostapd killed the link, the restore would never execute.
+`get_capability modes` queries nl80211 for supported interface types. It is a
+read-only query, safe on a live board — unlike running `hostapd` directly, which
+in an earlier attempt tore down the association and, because adb rides the same
+USB/WiFi path, stranded the board until it was power-cycled.
 
-- [ ] **Step 2: Wait for the restore, then confirm the board is back**
+Corroborated by the driver binary, which implements the cfg80211 callbacks
+hostapd needs (`start_ap`, `stop_ap`, `change_beacon`, `del_station`,
+`change_station`) plus a full APM command set and `"AP started: ch=%d"` log
+strings.
 
-```bash
-until adb shell 'ip -o addr show wlan0 2>/dev/null | grep -q "inet "' 2>/dev/null; do sleep 3; done
-adb shell 'echo "recovered: $(ip -o addr show wlan0 | grep -o "inet [0-9.]*")"'
-```
+Also learned, and relevant to Task 7: the radio is **2.4 GHz only**, channels
+1–14. Channel 6 is valid.
 
-If this never returns, the board is stranded: try `adb kill-server && adb start-server` first (the gadget often re-enumerates as `rk3xxx` while the adb function is wedged), then SSH to the WiFi address, then power cycle. Do not proceed until the board is back.
+**Nothing to implement. Start at Task 2.**
 
-- [ ] **Step 3: Read the probe log for the verdict**
-
-```bash
-adb shell 'grep -iE "AP-ENABLED|Setup of interface done|nl80211: Failed|not support|driver initialization failed|Failed to set" /tmp/ap-probe.log | head -10'
-```
-
-Interpretation:
-- `AP-ENABLED` or `Setup of interface done` → **AP mode works.** Proceed.
-- `nl80211: Failed to set interface ... mode` or `driver initialization failed` → **AP mode is unsupported.** STOP and report; the design needs a different approach (e.g. configuration only over the existing LAN, or a USB-gadget-based setup mode).
-- Empty log → hostapd never started; check `adb shell 'head -20 /tmp/ap-probe.log'` for the actual error.
-
-- [ ] **Step 4: Record the finding**
-
-Create `docs/ap-mode-probe.md` with: the exact hostapd config used, the relevant log lines verbatim, the verdict, and the date. If AP mode is unsupported, include the full log — that becomes the evidence for redesigning.
-
-- [ ] **Step 5: Clean up and commit**
-
-```bash
-adb shell 'rm -f /tmp/ap-probe.conf /tmp/ap-probe.log'
-git add docs/ap-mode-probe.md
-git commit -m "docs: record whether the AIC8800DC supports AP mode"
-```
-
-**If the verdict is "unsupported", stop here and escalate.** Tasks 2–11 assume AP mode works.
+Still unproven, and only testable by raising a real AP (Task 13 covers it):
+whether the driver sustains a stable AP with clients attached. Concurrency of AP
+and STA is *not* required — AP is a fallback for when STA has already failed.
 
 ---
 
@@ -2987,7 +2956,7 @@ Update `CLAUDE.md` with the measured portal behaviour and anything surprising. C
 
 **Deviations, flagged:**
 - **BOOT-button password recovery is NOT implemented.** The spec lists it; reading the button at boot needs GPIO work that is a separate concern from the portal. Recovery today is editing `config.json` over adb. Worth a follow-up task.
-- **Task 1 is a gate, not a feature.** If the AIC8800DC does not support AP mode, Tasks 7, 11, and half of 13 are invalid and the design needs revisiting. That is why it comes first.
+- **Task 1 is resolved.** The AIC8800DC reports `AP` from `wpa_cli get_capability modes`, and the driver implements the cfg80211 AP callbacks. Tasks 7, 11, and 13 are viable as designed. Implementation starts at Task 2. Noted for Task 7: the radio is 2.4 GHz only, channels 1-14, so channel 6 is valid.
 - The spec's "one orchestrated moment" motion on save is not implemented — forms use plain post-redirect-get. Adding it needs JavaScript, which conflicts with the old-WebView constraint. The status strip still reflects the new state after the redirect.
 
 **Type consistency:** `Runner`, `Client`, `Status`, `Network` are consistent across Tasks 5–7 and 10. `ConfigStore` (Task 9) matches the `Config()`/`SetConfig()` pair from Task 8. `DefaultPassword`/`HashPassword`/`CheckPassword` (Task 4) are used unchanged in Task 9. `SetupHint` (Task 12) matches its use in `main.go`.
