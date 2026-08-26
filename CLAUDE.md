@@ -277,6 +277,20 @@ and the host-side raster, because nothing clips at the document level.
 
 ## Gotchas
 
+- **Anything that touches `wlan0` can strand the board.** adb rides the USB
+  gadget stack and the board's other route is WiFi, so an experiment that
+  disrupts the interface can take out both at once. Running `hostapd` directly
+  against `wlan0` did exactly that and needed a physical power cycle. Make such
+  experiments self-restoring — background them with an unconditional restore:
+
+  ```bash
+  adb shell 'nohup sh -c "hostapd /tmp/ap.conf & sleep 20; killall hostapd; /etc/init.d/S99wlan0 restart" >/tmp/probe.log 2>&1 &'
+  ```
+
+  Recovery, in order: `adb kill-server && adb start-server` (the gadget often
+  re-enumerates as `rk3xxx` while the adb function is wedged — this clears it),
+  then SSH to the WiFi address, then a power cycle.
+
 - **`/tmp`, `/var/log`, `/run` are tmpfs** — they vanish on reboot. `/root` is
   persistent (UBI on NAND).
 - **Rootfs has ~90MB free.** A Go binary is 2–15MB; put large data on a microSD
