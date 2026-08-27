@@ -148,7 +148,7 @@ func TestFetchLoopRetryIsPerSourceIndependent(t *testing.T) {
 		return true // this source always succeeds
 	})
 
-	go fetchLoop(s, interval, fn)
+	go fetchLoop(s, func(*config.Config) time.Duration { return interval }, fn)
 
 	var times []time.Time
 	for i := 0; i < 3; i++ {
@@ -190,7 +190,7 @@ func TestFetchLoopRetriesSoonerOnlyOnItsOwnFailure(t *testing.T) {
 		return ok
 	})
 
-	go fetchLoop(s, interval, fn)
+	go fetchLoop(s, func(*config.Config) time.Duration { return interval }, fn)
 
 	var times []time.Time
 	for i := 0; i < 2; i++ {
@@ -205,6 +205,97 @@ func TestFetchLoopRetriesSoonerOnlyOnItsOwnFailure(t *testing.T) {
 	gap := times[1].Sub(times[0])
 	if gap >= interval {
 		t.Errorf("gap after own failure = %v, want well under interval (%v) — should retry at ~%v", gap, interval, retryDelay)
+	}
+}
+
+// TestIntervalSelectorsFollowConfig guards against reverting fetchLoop's
+// interval selector to a plain time.Duration captured once at startup. The
+// production selectors (calendarInterval, weatherInterval) must derive their
+// result from whatever config they're handed, not a closed-over value — so
+// two different configs must yield two different durations.
+func TestIntervalSelectorsFollowConfig(t *testing.T) {
+	c5 := &config.Config{}
+	c5.Refresh.CalendarMinutes = 5
+	c5.Refresh.WeatherMinutes = 5
+
+	c20 := &config.Config{}
+	c20.Refresh.CalendarMinutes = 20
+	c20.Refresh.WeatherMinutes = 20
+
+	if got, want := calendarInterval(c5), 5*time.Minute; got != want {
+		t.Errorf("calendarInterval(5) = %v, want %v", got, want)
+	}
+	if got, want := calendarInterval(c20), 20*time.Minute; got != want {
+		t.Errorf("calendarInterval(20) = %v, want %v", got, want)
+	}
+	if got, want := weatherInterval(c5), 5*time.Minute; got != want {
+		t.Errorf("weatherInterval(5) = %v, want %v", got, want)
+	}
+	if got, want := weatherInterval(c20), 20*time.Minute; got != want {
+		t.Errorf("weatherInterval(20) = %v, want %v", got, want)
+	}
+}
+
+// TestFetchLoopCadenceFollowsConfigSwap is the end-to-end proof: a config
+// swapped into the Store mid-run (as the portal would do after a save) must
+// change fetchLoop's actual sleep cadence, not just the cfg value handed to
+// fn. Each iteration reads cfg once and uses it for both the call and that
+// iteration's sleep, so a swap made while iteration N is asleep cannot affect
+// iteration N's already-computed wait — it takes effect starting with
+// iteration N+1's read. The test swaps in a short-interval config right after
+// iteration 1 fires (while iteration 1 is still asleep for the long
+// interval), then asserts the gap between iteration 2 and iteration 3 — both
+// entirely after the swap — is short. Under the old frozen-interval bug that
+// gap would still be `long` regardless of the swap.
+func TestFetchLoopCadenceFollowsConfigSwap(t *testing.T) {
+	s := &Store{}
+	longCfg := &config.Config{}
+	s.SetConfig(longCfg)
+
+	const long = 300 * time.Millisecond
+	const short = 10 * time.Millisecond
+	selector := func(c *config.Config) time.Duration {
+		if c == longCfg {
+			return long
+		}
+		return short
+	}
+
+	calls := make(chan time.Time, 3)
+	fn := fetchFunc(func(ctx context.Context, cfg *config.Config, store *Store) bool {
+		calls <- time.Now()
+		return true
+	})
+
+	go fetchLoop(s, selector, fn)
+
+	select {
+	case <-calls: // iteration 1, using longCfg
+	case <-time.After(1 * time.Second):
+		t.Fatal("fetchLoop did not invoke fn for its first tick in time")
+	}
+
+	// Swap in the short-interval config right away; fetchLoop is asleep for
+	// `long` at this point (that wait was already computed from longCfg), so
+	// this lands well before iteration 2's config read, mimicking a portal
+	// save landing mid-cycle.
+	shortCfg := &config.Config{}
+	s.SetConfig(shortCfg)
+
+	var second time.Time
+	select {
+	case second = <-calls: // iteration 2, using shortCfg for its own wait
+	case <-time.After(1 * time.Second):
+		t.Fatal("fetchLoop did not reach a second tick in time")
+	}
+
+	select {
+	case third := <-calls: // iteration 3, entirely after the swap
+		if gap := third.Sub(second); gap >= long {
+			t.Errorf("gap between iterations 2 and 3 = %v, want well under the old interval (%v) — cadence is still frozen at startup", gap, long)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("fetchLoop did not pick up the shortened interval after the config swap")
 	}
 }
 

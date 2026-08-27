@@ -74,8 +74,8 @@ func main() {
 		return
 	}
 
-	go fetchLoop(store, time.Duration(cfg.Refresh.CalendarMinutes)*time.Minute, fetchCalendars)
-	go fetchLoop(store, time.Duration(cfg.Refresh.WeatherMinutes)*time.Minute, fetchWeather)
+	go fetchLoop(store, calendarInterval, fetchCalendars)
+	go fetchLoop(store, weatherInterval, fetchWeather)
 
 	for {
 		time.Sleep(nextTick(time.Now()))
@@ -158,23 +158,39 @@ func renderOnce(cfg *config.Config, store *Store, dev string, fbW, fbH int, html
 // each loop's retry decision must depend only on its own fetch's outcome.
 type fetchFunc func(context.Context, *config.Config, *Store) (ok bool)
 
+// calendarInterval and weatherInterval are the interval selectors passed to
+// fetchLoop for each source. Named (rather than inline closures) so tests can
+// assert directly that they derive from Refresh.CalendarMinutes /
+// Refresh.WeatherMinutes on whatever config fetchLoop hands them, instead of
+// a value captured once at startup.
+func calendarInterval(c *config.Config) time.Duration {
+	return time.Duration(c.Refresh.CalendarMinutes) * time.Minute
+}
+
+func weatherInterval(c *config.Config) time.Duration {
+	return time.Duration(c.Refresh.WeatherMinutes) * time.Minute
+}
+
 // fetchLoop runs one fetcher forever, retrying sooner after a failure so a boot
 // with no DNS recovers in seconds rather than a full interval. The retry
 // decision is based solely on fn's own return value, never on shared Store
 // state that another loop also writes to.
 //
 // cfg is read from the store fresh at the top of each iteration rather than
-// captured once, so a config change the portal saves mid-run (e.g. a new
-// refresh interval) takes effect on the next cycle instead of being frozen at
-// startup.
-func fetchLoop(store *Store, interval time.Duration, fn fetchFunc) {
+// captured once, so a config change the portal saves mid-run (e.g. new
+// calendar URLs, timezone, or MaxEvents) takes effect on the next cycle
+// instead of being frozen at startup. interval is a selector rather than a
+// plain time.Duration for the same reason: it is invoked against that same
+// fresh cfg each iteration, so a refresh interval changed in the portal also
+// takes effect on the next cycle instead of requiring a restart.
+func fetchLoop(store *Store, interval func(*config.Config) time.Duration, fn fetchFunc) {
 	for {
 		cfg := store.Config()
 		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 		ok := fn(ctx, cfg, store)
 		cancel()
 
-		wait := interval
+		wait := interval(cfg)
 		if !ok {
 			wait = retryDelay
 		}
