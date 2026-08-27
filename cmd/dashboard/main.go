@@ -76,12 +76,15 @@ func main() {
 	store.SetConfig(cfg)
 
 	// Created before the *once branch so both the single-frame path and the
-	// service loop can derive the setup hint from the same client.
+	// service loop can derive the setup hint from the same client. The
+	// tracker is likewise shared and long-lived (not reconstructed per tick)
+	// -- its whole purpose is remembering consecutive misses across ticks.
 	wc := &wifi.Client{R: wifi.ExecRunner{}}
+	hintTracker := &setupHintTracker{}
 
 	if *once {
 		fetchAll(context.Background(), cfg, store)
-		if err := renderOnce(store.Config(), store, wc, *fbDev, fbW, fbH, *htmlOut); err != nil {
+		if err := renderOnce(store.Config(), store, wc, hintTracker, *fbDev, fbW, fbH, *htmlOut); err != nil {
 			log.Fatalf("render: %v", err)
 		}
 		return
@@ -116,7 +119,7 @@ func main() {
 
 	for {
 		time.Sleep(nextTick(time.Now()))
-		if err := renderSafely(store.Config(), store, wc, *fbDev, fbW, fbH, *htmlOut); err != nil {
+		if err := renderSafely(store.Config(), store, wc, hintTracker, *fbDev, fbW, fbH, *htmlOut); err != nil {
 			log.Printf("render: %v", err)
 		}
 	}
@@ -143,9 +146,9 @@ func applyStartupBrightness(path string, v int) error {
 // failing fast at startup (see main): that is a misconfiguration, not a
 // transient bad frame, so refusing to start is the right response for it.
 // This recover is for everything else.
-func renderSafely(cfg *config.Config, store *Store, wc *wifi.Client, dev string, fbW, fbH int, htmlOut string) error {
+func renderSafely(cfg *config.Config, store *Store, wc *wifi.Client, hintTracker *setupHintTracker, dev string, fbW, fbH int, htmlOut string) error {
 	return recoverRender(func() error {
-		return renderOnce(cfg, store, wc, dev, fbW, fbH, htmlOut)
+		return renderOnce(cfg, store, wc, hintTracker, dev, fbW, fbH, htmlOut)
 	})
 }
 
@@ -163,16 +166,71 @@ func recoverRender(fn func() error) (err error) {
 	return fn()
 }
 
-// setupHint returns a panel hint while the board has no network configured,
-// and nil once it does. It computes both strings up front, via the wifi and
-// portal packages, rather than passing wc/cfg through to the template -- the
-// template must not reach into other packages, and this keeps the panel and
-// the portal's own login page unable to disagree about what the password is.
-func setupHint(cfg *config.Config, wc *wifi.Client) *model.SetupHint {
-	if cfg.WiFi.SSID != "" {
+// setupHintMissThreshold is how many consecutive non-connected Status() polls
+// are required before the panel shows the setup hint. Status() reports
+// transient non-COMPLETED states (e.g. SCANNING) during wpa_supplicant's
+// ordinary re-scans on a board that is, and remains, connected -- showing the
+// hint on the first such poll would make it blink on and off every minute on
+// a healthy board, which is its own defect. Requiring 2 consecutive misses
+// (i.e. confirmed on the poll after the first miss) rides out a one-tick
+// blip while still surfacing the wrong-password/AP-fallback case within two
+// render ticks (two minutes) of it happening -- fast enough to matter for a
+// user standing in front of the panel. This does not apply to Status()
+// *errors*: those show the hint immediately (see setupHintTracker.Update).
+const setupHintMissThreshold = 2
+
+// setupHintTracker decides whether to show the setup hint from live
+// association state rather than saved WiFi credentials. It must be gated on
+// wifi.Client.Status()'s Connected field (wpa_state == COMPLETED), not on
+// cfg.WiFi.SSID: the portal sets WiFi.SSID the moment credentials are saved
+// (see internal/portal/handlers.go's handleSaveWiFi), before anything tries
+// to associate -- gating on that field hides the hint the instant a wrong
+// password is typed in, exactly when the board falls back to broadcasting
+// its setup AP and the hint is the only thing telling the user its name and
+// password.
+//
+// Holds a consecutive-miss counter (see setupHintMissThreshold) rather than
+// consulting the clock, so the hysteresis decision is a pure function of the
+// poll sequence and is testable without time.Now() or sleeps.
+type setupHintTracker struct {
+	misses int
+}
+
+// Update runs one Status() poll through the tracker and returns the hint to
+// show this tick, or nil. wc and mac are separated (rather than deriving mac
+// from wc again here) because the caller already has wc.MAC() from building
+// the Status call in some paths; passing it in also keeps this method free of
+// its own wifi.Client method calls beyond Status, which simplifies testing.
+func (t *setupHintTracker) Update(status wifi.Status, statusErr error, mac string) *model.SetupHint {
+	switch {
+	case statusErr != nil:
+		// An error (wpa_cli missing, supplicant not running) is not evidence
+		// the board is fine -- it is evidence we cannot tell. Show the hint
+		// immediately, bypassing the miss counter entirely: an error is not
+		// the "ordinary re-scan on a working board" case the hysteresis
+		// exists to smooth over, and erring toward showing is required
+		// regardless of how many consecutive polls have failed.
+		t.misses = 0
+		return hint(mac)
+	case status.Connected:
+		t.misses = 0
 		return nil
+	default:
+		t.misses++
+		if t.misses < setupHintMissThreshold {
+			return nil
+		}
+		return hint(mac)
 	}
-	mac := wc.MAC()
+}
+
+// hint builds the panel's setup hint from the board's WiFi MAC. Computing
+// both strings here, via the wifi and portal packages, rather than passing
+// wc/cfg through to the template keeps the template independent of whether
+// those packages are reachable, and keeps the panel and the portal's own
+// login page unable to disagree about what the password is -- both derive it
+// from the same portal.DefaultPassword call.
+func hint(mac string) *model.SetupHint {
 	return &model.SetupHint{
 		APName:   wifi.APName(mac),
 		Password: portal.DefaultPassword(mac),
@@ -180,9 +238,16 @@ func setupHint(cfg *config.Config, wc *wifi.Client) *model.SetupHint {
 }
 
 // renderOnce builds the model, renders HTML, and blits it to the framebuffer.
-func renderOnce(cfg *config.Config, store *Store, wc *wifi.Client, dev string, fbW, fbH int, htmlOut string) error {
+func renderOnce(cfg *config.Config, store *Store, wc *wifi.Client, hintTracker *setupHintTracker, dev string, fbW, fbH int, htmlOut string) error {
 	evs, wx, errs := store.Snapshot()
-	vm := model.Build(time.Now(), cfg, evs, wx, errs, setupHint(cfg, wc))
+
+	// One wpa_cli subprocess per render tick (once a minute; see nextTick),
+	// not tighter -- renderOnce is only ever called from the once-per-minute
+	// service loop or the single -once invocation.
+	status, statusErr := wc.Status()
+	setup := hintTracker.Update(status, statusErr, wc.MAC())
+
+	vm := model.Build(time.Now(), cfg, evs, wx, errs, setup)
 
 	html, err := view.Render(vm)
 	if err != nil {
