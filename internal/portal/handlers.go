@@ -2,6 +2,7 @@ package portal
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -20,6 +21,7 @@ func (s *Server) page(w http.ResponseWriter, errMsg string, code int) {
 		APName:          "upnext-setup",
 		DefaultPassword: DefaultPassword(s.MAC),
 		Error:           errMsg,
+		WiFiError:       s.getWiFiErr(),
 	}
 	if s.WiFi != nil {
 		if st, err := s.WiFi.Status(); err == nil {
@@ -217,11 +219,34 @@ func (s *Server) handleSaveWiFi(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Associating drops the connection this request arrived on, so the
-	// redirect is sent first and the reconnect happens after.
+	// redirect is sent first and the reconnect happens after -- this cannot
+	// be made synchronous without blocking the response on tearing down the
+	// very AP the browser is talking to.
 	if s.WiFi != nil {
-		go func() {
-			_ = s.WiFi.Connect(ssid, pw)
-		}()
+		// Single-flight: if a previous submit's connect attempt is still
+		// running, don't stack a second `S99wlan0 restart` on top of it --
+		// concurrent restarts can kill each other's supplicant (see
+		// Server.connecting's doc comment). The config is still saved above
+		// either way; only the reconnect attempt is skipped.
+		if s.connecting.CompareAndSwap(false, true) {
+			go func() {
+				defer s.connecting.Store(false)
+				if err := s.WiFi.Connect(ssid, pw); err != nil {
+					// Connect runs after the response is already sent, so this
+					// is the only place the failure can still be reported: at
+					// minimum in the log, and on the settings page for the
+					// next load. Without this, a bad password or a write
+					// failure (read-only rootfs, ENOSPC) leaves config.json
+					// pointing at a network the board never actually joined,
+					// with no signal to the user that re-entering the same
+					// credentials will fail the same way.
+					log.Printf("portal: wifi connect to %q failed: %v", ssid, err)
+					s.setWiFiErr(fmt.Errorf("could not connect to %q: %w", ssid, err))
+				} else {
+					s.setWiFiErr(nil)
+				}
+			}()
+		}
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

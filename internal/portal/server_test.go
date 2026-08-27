@@ -1,13 +1,16 @@
 package portal
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nathanstitt/luckfox-dashboard/internal/config"
+	"github.com/nathanstitt/luckfox-dashboard/internal/wifi"
 )
 
 type fakeStore struct {
@@ -287,6 +290,208 @@ func TestSavePlaceRejectsInvalidTimezone(t *testing.T) {
 	if s.Store.Config().Location.Timezone != "America/Chicago" {
 		t.Errorf("Timezone = %q, want unchanged America/Chicago", s.Store.Config().Location.Timezone)
 	}
+}
+
+// TestConcurrentSavesToDifferentSectionsBothSurvive is the handler-level
+// counterpart of cmd/dashboard's Store-level regression test: it drives the
+// bug through the actual HTTP path (concurrent POSTs to /save/wifi and
+// /save/display, as in the reported reproduction) rather than calling
+// Store.Update directly, proving the fix holds at the layer users actually
+// hit. Looped the same 40 times as the original reproduction, which failed
+// every run under the old Config()+SetConfig() save path.
+func TestConcurrentSavesToDifferentSectionsBothSurvive(t *testing.T) {
+	const iterations = 40
+
+	for i := 0; i < iterations; i++ {
+		s := newTestServer(t)
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			<-start
+			req := httptest.NewRequest("POST", "/save/wifi", strings.NewReader("ssid=NewNetwork&password=hunter2"))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.SetBasicAuth("admin", "4c1bfd")
+			s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			req := httptest.NewRequest("POST", "/save/display", strings.NewReader("brightness=42"))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.SetBasicAuth("admin", "4c1bfd")
+			s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		}()
+
+		close(start)
+		wg.Wait()
+
+		got := s.Store.Config()
+		if got.WiFi.SSID != "NewNetwork" {
+			t.Fatalf("iteration %d: WiFi.SSID = %q, want %q (lost update)", i, got.WiFi.SSID, "NewNetwork")
+		}
+		if got.BrightnessValue() != 42 {
+			t.Fatalf("iteration %d: BrightnessValue() = %d, want 42 (lost update)", i, got.BrightnessValue())
+		}
+
+		// Must also have reached disk, not just memory -- a reboot would lose
+		// whichever save lost the race otherwise.
+		saved, err := config.Load(s.ConfigPath)
+		if err != nil {
+			t.Fatalf("iteration %d: config was not written: %v", i, err)
+		}
+		if saved.WiFi.SSID != "NewNetwork" || saved.BrightnessValue() != 42 {
+			t.Fatalf("iteration %d: saved config = %+v, want both changes present", i, saved)
+		}
+	}
+}
+
+// failRunner makes wifi.Client.Connect fail deterministically at the restart
+// step, without touching hardware or exec'ing a real command -- Connect gets
+// as far as writing the supplicant config successfully and then fails on the
+// `S99wlan0 restart` call, which is the failure mode the finding describes
+// (association/restart failing after the config write succeeded).
+type failRunner struct{ calls chan string }
+
+func (f *failRunner) Run(name string, args ...string) ([]byte, error) {
+	if f.calls != nil {
+		f.calls <- name
+	}
+	if name == "/etc/init.d/S99wlan0" {
+		return nil, errors.New("simulated restart failure")
+	}
+	return nil, nil
+}
+
+func TestSaveWiFiLogsAndSurfacesConnectFailure(t *testing.T) {
+	s := newTestServer(t)
+	calls := make(chan string, 4)
+	s.WiFi = &wifi.Client{
+		R:        &failRunner{calls: calls},
+		ConfPath: t.TempDir() + "/wpa_supplicant.conf",
+	}
+
+	req := httptest.NewRequest("POST", "/save/wifi", strings.NewReader("ssid=BadNetwork&password=wrongpass"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("admin", "4c1bfd")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303 -- Connect must not block the response", w.Code)
+	}
+
+	// Wait for the background goroutine's restart call rather than sleeping:
+	// the channel receive blocks exactly until Connect reaches that step.
+	select {
+	case <-calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Connect's background goroutine never ran")
+	}
+
+	// The error surfaces asynchronously; poll getWiFiErr without a fixed
+	// sleep so the test isn't a timing gamble under load.
+	deadline := time.After(2 * time.Second)
+	for {
+		if s.getWiFiErr() != "" {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("wifi connect failure was never recorded")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	got := s.getWiFiErr()
+	if !strings.Contains(got, "BadNetwork") {
+		t.Errorf("recorded error = %q, want it to name the SSID", got)
+	}
+
+	// It must also reach the settings page so a human looking at the portal
+	// (not just logs) can see the connect failed.
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.SetBasicAuth("admin", "4c1bfd")
+	w2 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w2, req2)
+	if !strings.Contains(w2.Body.String(), "BadNetwork") {
+		t.Error("settings page does not show the connect failure")
+	}
+}
+
+// TestSaveWiFiSingleFlightsConcurrentConnects covers the "repeated submits
+// stack restarts" issue: two /save/wifi submits close together must not both
+// get a background Connect goroutine running at once, since concurrent
+// `S99wlan0 restart` invocations can kill each other's supplicant. The second
+// submit's config save must still succeed either way -- only the redundant
+// connect attempt is the thing being dropped.
+func TestSaveWiFiSingleFlightsConcurrentConnects(t *testing.T) {
+	s := newTestServer(t)
+	release := make(chan struct{})
+	started := make(chan struct{}, 2)
+	blocking := &blockingRunner{release: release, started: started}
+	s.WiFi = &wifi.Client{R: blocking, ConfPath: t.TempDir() + "/wpa_supplicant.conf"}
+
+	post := func(ssid string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/save/wifi", strings.NewReader("ssid="+ssid+"&password=pw"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.SetBasicAuth("admin", "4c1bfd")
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, req)
+		return w
+	}
+
+	w1 := post("First")
+	if w1.Code != http.StatusSeeOther {
+		t.Fatalf("first save status = %d, want 303", w1.Code)
+	}
+	// Wait for the first Connect to actually be the in-flight one before
+	// firing the second, so this deterministically exercises the guard
+	// instead of racing to see which goroutine's CompareAndSwap wins.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first connect never started")
+	}
+
+	w2 := post("Second")
+	if w2.Code != http.StatusSeeOther {
+		t.Fatalf("second save status = %d, want 303 (config save must still succeed)", w2.Code)
+	}
+
+	// The second submit's config save must have gone through even though its
+	// connect attempt was skipped.
+	if got := s.Store.Config().WiFi.SSID; got != "Second" {
+		t.Errorf("WiFi.SSID = %q, want %q -- second save must not be blocked by the single-flight guard", got, "Second")
+	}
+
+	close(release) // let the first (only) Connect finish
+
+	select {
+	case <-started:
+		t.Error("a second Connect ran concurrently with the first; single-flight guard did not hold")
+	case <-time.After(100 * time.Millisecond):
+		// Expected: no second signal on `started`.
+	}
+}
+
+// blockingRunner lets a test hold one Connect call open (via release) while
+// observing exactly when it starts (via started), so concurrency can be
+// driven deterministically instead of guessed at with sleeps.
+type blockingRunner struct {
+	release chan struct{}
+	started chan struct{}
+}
+
+func (b *blockingRunner) Run(name string, args ...string) ([]byte, error) {
+	if name == "/etc/init.d/S99wlan0" {
+		b.started <- struct{}{}
+		<-b.release
+	}
+	return nil, nil
 }
 
 func TestCSSIsServed(t *testing.T) {

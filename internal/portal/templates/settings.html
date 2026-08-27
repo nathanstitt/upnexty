@@ -2,6 +2,7 @@
 {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
 
 <h1>Network</h1>
+{{if .WiFiError}}<p class="error">{{.WiFiError}}</p>{{end}}
 <form method="post" action="/save/wifi">
   <div class="row">
     <label for="ssid">Network</label><span class="rule"></span>
