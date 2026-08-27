@@ -121,6 +121,14 @@ func (s *Server) handleSaveCalendars(w http.ResponseWriter, r *http.Request) {
 	names := r.Form["name"]
 	urls := r.Form["url"]
 
+	// The form carries only name and url, so colors must be preserved from the
+	// stored config rather than re-derived positionally -- otherwise deleting
+	// one feed silently recolors every feed after it.
+	prev := map[string]string{}
+	for _, c := range s.Store.Config().Calendars {
+		prev[c.URL] = c.Color
+	}
+
 	var feeds []config.CalendarSource
 	for i := range urls {
 		u := strings.TrimSpace(urls[i])
@@ -139,9 +147,13 @@ func (s *Server) handleSaveCalendars(w http.ResponseWriter, r *http.Request) {
 		if name == "" {
 			name = "Calendar"
 		}
+		color := prev[u]
+		if color == "" {
+			color = calendarColor(len(feeds))
+		}
 		feeds = append(feeds, config.CalendarSource{
 			Name:  name,
-			Color: calendarColor(len(feeds)),
+			Color: color,
 			URL:   u,
 		})
 	}
@@ -213,9 +225,11 @@ func (s *Server) handleSaveWiFi(w http.ResponseWriter, r *http.Request) {
 }
 
 // calendarColor assigns feed colours from the dashboard's palette in order, so
-// a user never has to pick a hex value.
+// a user never has to pick a hex value. #ff7a59 (the alarm colour) is
+// deliberately excluded -- that hue is reserved for errors, and handing it to
+// an ordinary calendar feed would make routine events look like an alert.
 func calendarColor(i int) string {
-	palette := []string{"#4f9cff", "#ff7a59", "#8b97ab", "#e8ecf3"}
+	palette := []string{"#4f9cff", "#8b97ab", "#e8ecf3"}
 	return palette[i%len(palette)]
 }
 

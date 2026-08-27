@@ -138,6 +138,87 @@ func TestSaveRejectsInvalidBrightness(t *testing.T) {
 	}
 }
 
+func TestSaveCalendarsPreservesColorsOnDelete(t *testing.T) {
+	s := newTestServer(t)
+	s.Store.SetConfig(&config.Config{
+		Calendars: []config.CalendarSource{
+			{Name: "A", Color: "#4f9cff", URL: "https://example.com/a.ics"},
+			{Name: "B", Color: "#8b97ab", URL: "https://example.com/b.ics"},
+			{Name: "C", Color: "#e8ecf3", URL: "https://example.com/c.ics"},
+		},
+	})
+
+	// Delete A by clearing its URL, leaving B and C untouched.
+	form := "name=&url=&name=B&url=" + "https://example.com/b.ics" +
+		"&name=C&url=" + "https://example.com/c.ics"
+	req := httptest.NewRequest("POST", "/save/calendars", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("admin", "4c1bfd")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", w.Code)
+	}
+	got := s.Store.Config().Calendars
+	if len(got) != 2 {
+		t.Fatalf("Calendars = %d entries, want 2: %+v", len(got), got)
+	}
+	if got[0].URL != "https://example.com/b.ics" || got[0].Color != "#8b97ab" {
+		t.Errorf("B = %+v, want Color #8b97ab unchanged", got[0])
+	}
+	if got[1].URL != "https://example.com/c.ics" || got[1].Color != "#e8ecf3" {
+		t.Errorf("C = %+v, want Color #e8ecf3 unchanged", got[1])
+	}
+}
+
+func TestSavePasswordDisablesMACDefault(t *testing.T) {
+	s := newTestServer(t)
+	req := httptest.NewRequest("POST", "/save/password", strings.NewReader("password=newpassword"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("admin", "4c1bfd")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", w.Code)
+	}
+
+	// The MAC-derived default must no longer authenticate.
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.SetBasicAuth("admin", "4c1bfd")
+	w2 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w2, req2)
+	if w2.Code != http.StatusUnauthorized {
+		t.Errorf("status with MAC default after password set = %d, want 401", w2.Code)
+	}
+
+	// The new password must authenticate.
+	req3 := httptest.NewRequest("GET", "/", nil)
+	req3.SetBasicAuth("admin", "newpassword")
+	w3 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Errorf("status with new password = %d, want 200", w3.Code)
+	}
+}
+
+func TestSavePlaceRejectsInvalidTimezone(t *testing.T) {
+	s := newTestServer(t)
+	req := httptest.NewRequest("POST", "/save/place",
+		strings.NewReader("latitude=10&longitude=20&timezone=Not/AZone"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("admin", "4c1bfd")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if s.Store.Config().Location.Timezone != "America/Chicago" {
+		t.Errorf("Timezone = %q, want unchanged America/Chicago", s.Store.Config().Location.Timezone)
+	}
+}
+
 func TestCSSIsServed(t *testing.T) {
 	s := newTestServer(t)
 	// The stylesheet must not require auth, or an unauthenticated 401 page

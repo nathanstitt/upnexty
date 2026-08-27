@@ -95,7 +95,11 @@
     <label for="adminpw">New password</label><span class="rule"></span>
     <div class="field">
       <input id="adminpw" name="password" type="password" placeholder="Leave blank to keep current">
+      {{if not .Config.Portal.PasswordHash}}
       <p class="hint">Currently the device default: <span class="mono">{{.DefaultPassword}}</span></p>
+      {{else}}
+      <p class="hint">A password is set. If you lose it, the only way back in is to clear <span class="mono">portal.password_hash</span> in config.json over a USB cable.</p>
+      {{end}}
     </div>
   </div>
   <button type="submit">Save password</button>
