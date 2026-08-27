@@ -60,9 +60,8 @@ func newTestServer(t *testing.T) *Server {
 	c.Calendars = []config.CalendarSource{{Name: "Work", Color: "#4f9cff", URL: "https://example.com/w.ics"}}
 	configPath := t.TempDir() + "/config.json"
 	return &Server{
-		Store:      &fakeStore{c: c, configPath: configPath},
-		MAC:        "54:01:4a:4c:1b:fd",
-		ConfigPath: configPath,
+		Store: &fakeStore{c: c, configPath: configPath},
+		MAC:   "54:01:4a:4c:1b:fd",
 	}
 }
 
@@ -150,7 +149,7 @@ func TestSaveDisplayUpdatesConfigAndPersists(t *testing.T) {
 		t.Error("Clock24h = false, want true")
 	}
 	// It must reach disk, not just memory -- a reboot would lose it otherwise.
-	saved, err := config.Load(s.ConfigPath)
+	saved, err := config.Load(s.Store.(*fakeStore).configPath)
 	if err != nil {
 		t.Fatalf("config was not written: %v", err)
 	}
@@ -339,7 +338,7 @@ func TestConcurrentSavesToDifferentSectionsBothSurvive(t *testing.T) {
 
 		// Must also have reached disk, not just memory -- a reboot would lose
 		// whichever save lost the race otherwise.
-		saved, err := config.Load(s.ConfigPath)
+		saved, err := config.Load(s.Store.(*fakeStore).configPath)
 		if err != nil {
 			t.Fatalf("iteration %d: config was not written: %v", i, err)
 		}

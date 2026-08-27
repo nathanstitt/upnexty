@@ -100,10 +100,9 @@ func main() {
 	}
 
 	ps := &portal.Server{
-		Store:      store,
-		WiFi:       wc,
-		MAC:        wc.MAC(),
-		ConfigPath: *cfgPath,
+		Store: store,
+		WiFi:  wc,
+		MAC:   wc.MAC(),
 	}
 	go func() {
 		// The portal is a goroutine in this process, not a second binary, so a

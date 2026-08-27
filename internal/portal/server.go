@@ -28,10 +28,9 @@ type ConfigStore interface {
 
 // Server serves the configuration UI.
 type Server struct {
-	Store      ConfigStore
-	WiFi       *wifi.Client
-	MAC        string
-	ConfigPath string
+	Store ConfigStore
+	WiFi  *wifi.Client
+	MAC   string
 
 	// connecting single-flights the background Connect goroutine started by
 	// handleSaveWiFi: association tears down the AP the request arrived on
