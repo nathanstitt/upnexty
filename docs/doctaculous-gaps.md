@@ -1,28 +1,35 @@
 # doctaculous gaps found while building the Luckfox dashboard
 
-> **Re-tested 2026-08-27 against doctaculous `957c9e1`.** Two are now FIXED
-> upstream: **§0 inline `<svg>`** and **§4 `border-radius`** both render. The
-> rest still reproduce. Re-run the probes before trusting any entry below —
-> this file goes stale as the engine advances.
+> **Re-tested 2026-08-27 against doctaculous `957c9e1`**, by rasterizing each
+> case and counting painted pixels rather than eyeballing output.
 >
-> | Gap | Status |
-> |---|---|
-> | §0 inline `<svg>` | **fixed** — paints; weather icons appear on the panel |
-> | §4 `border-radius` | **fixed** — paints |
-> | §1 `var()` | still broken — element vanishes entirely |
-> | §2 alpha (`rgba()`, `#RRGGBBAA`) | still broken — element vanishes entirely |
-> | §3 `linear-gradient` | still broken |
-> | §5 `box-shadow` | still broken |
-> | §6 `letter-spacing` | still broken — parses, no effect on glyph positions |
-> | §8 `overflow-wrap` | still broken — parses, no mid-word break |
+> | Gap | Status | Evidence |
+> |---|---|---|
+> | §0 inline `<svg>` | **FIXED** | empty svg paints 0, `<circle r=35>` paints 3924, `<rect>` fills 6400 — subtree renders with correct geometry |
+> | §1 `var()` | broken | `background:var(--c)` paints **0** where `background:black` paints 6400 |
+> | §2 alpha | broken | same: `rgba(…,0.9)` and `#000000e6` each paint 0 |
+> | §3 `linear-gradient` | broken | paints 0 |
+> | §4 `border-radius` | broken | 80×80 box, `border-radius:40px` paints 6400 — identical to the square box, so corners are not rounded (a circle would be ~5024) |
+> | §5 `box-shadow` | broken | paints 0 |
+> | §6 `letter-spacing` | broken in CSS | glyph run paints 321px with and without it — byte-identical |
+> | §8 `overflow-wrap` | broken | identical output with and without; no mid-word break |
 >
-> `var()` and alpha do not degrade — a `background` set through either paints
-> **zero** pixels where a literal color paints the full box. The element is not
-> mis-colored; it is absent.
+> **§0 is the only one fixed since this file was written.** Weather icons now
+> render on the panel.
+>
+> Two failure modes are worth distinguishing, because they point at different
+> parts of the pipeline:
+>
+> - **Element absent** (§1, §2, §3, §5) — nothing is painted at all. Not a
+>   wrong color: zero pixels where a literal paints the full box.
+> - **Declaration ignored** (§4, §6, §8) — the element paints correctly, but
+>   the property has no effect on geometry.
+>
+> Reproduce with the probe harness described under *Testing method* below.
 
-Inline `<svg>` (§0, highest impact), seven CSS features, one API issue (context
-cancellation, §7), and a font-fallback failure mode (§9). §0 and §9 were found
-on real hardware; the rest by rasterizing on the host.
+Six CSS features, one API issue (context cancellation, §7), and a font-fallback
+failure mode (§9). §9 was found on real hardware; the rest by rasterizing on the
+host.
 
 Found while rendering `internal/view/assets/style.css` (a 1920×480 dark-theme
 dashboard) through `doctaculous.OpenHTMLBytes` + `RasterizePage`. Every item
@@ -32,45 +39,59 @@ below was isolated in a minimal page and confirmed against the engine source.
 written as correct CSS; it will render properly once these land.
 
 Testing method — a browser preview cannot find these, because browsers
-implement all of them. Only rasterizing through doctaculous shows the gap:
+implement all of them. Only rasterizing through doctaculous shows the gap.
+
+Counting painted pixels beats looking at the image: it distinguishes "element
+absent" from "declaration ignored," and it caught one wrong conclusion in an
+earlier revision of this file (a `border-radius` box *painted*, which looked
+like success until the count showed the corners were still square).
 
 ```go
-doc, _ := doctaculous.OpenHTMLBytes(html, doctaculous.WithPageSize(1920, 480))
-img, _ := doc.RasterizePage(ctx, 0, doctaculous.RasterOptions{
-    MaxWidthPx: 1920, MaxHeightPx: 480, Background: color.White})
+import "github.com/nathanstitt/doctaculous/pkg/doctaculous"
+
+// nonWhite counts pixels that are not the white background.
+func nonWhite(img image.Image) int {
+    b, n := img.Bounds(), 0
+    for y := b.Min.Y; y < b.Max.Y; y++ {
+        for x := b.Min.X; x < b.Max.X; x++ {
+            if r, g, bl, _ := img.At(x, y).RGBA(); r>>8 < 250 || g>>8 < 250 || bl>>8 < 250 {
+                n++
+            }
+        }
+    }
+    return n
+}
+
+func render(html string) (int, error) {
+    doc, err := doctaculous.OpenHTMLBytes([]byte(html), doctaculous.WithPageSize(400, 200))
+    if err != nil {
+        return 0, err
+    }
+    img, err := doc.RasterizePage(context.Background(), 0, doctaculous.RasterOptions{
+        MaxWidthPx: 400, MaxHeightPx: 200, Background: color.White})
+    if err != nil {
+        return 0, err
+    }
+    return nonWhite(img), nil
+}
 ```
 
-## 0. Inline `<svg>` renders nothing (highest impact — found on hardware)
+Compare each case against a reference: `<div style="width:80px;height:80px;
+background:black">` paints 6400. Anything that should paint and returns 0 is
+absent; anything that returns exactly 6400 when it should differ is ignored.
 
-An inline `<svg>` element produces no box and no paint. It is not a known
-element anywhere in the engine — no handling in `pkg/html`, `pkg/layout/cssbox`,
-or the UA stylesheet — so it is treated as an unknown inline element with no
-intrinsic size and silently collapses to zero.
+## 0. Inline `<svg>` — FIXED, no action needed
 
-Isolated: a page with `text / <svg width="40" height="40">…</svg> / text`
-renders the two text lines directly adjacent, with no 40px gap between them.
+**Resolved upstream as of `957c9e1`.** Recorded here because it was this
+project's highest-impact gap and the note may still be circulating.
 
-Impact here: **all 11 weather icons are invisible on the panel.** This is the
-sharpest version of the silent-failure problem, because SVG icons were chosen
-*specifically* to fix §9's emoji gap — the board has no emoji font, so the
-original emoji rendered as nothing. Both paths to a weather icon currently
-produce the same empty space.
+Inline `<svg>` now produces a box and paints its subtree with correct geometry.
+Verified: an empty `<svg width=80 height=80>` paints 0 pixels; the same element
+containing `<circle cx=40 cy=40 r=35>` paints 3924 (right for that radius); with
+`<rect width=80 height=80>` it fills 6400. Weather icons render on the panel.
 
-It also costs layout: the icon's 24px is missing from every forecast column, so
-the column content no longer matches the space budgeted for it.
-
-**The renderer is not the missing piece.** `pkg/svg` already exists and is
-substantial — cascade, color, gradients, arcs, and a `draw` subpackage — and is
-referenced from `pkg/layout/page.go`. What is missing is the *HTML frontend*
-wiring: nothing in `pkg/html` maps an inline `<svg>` element to that renderer,
-so in a document the element is still unknown and collapses.
-
-So this is likely a smaller job than it first appears: give `<svg>` a replaced-
-element box (intrinsic size from `width`/`height`/`viewBox`) and paint its
-subtree through `pkg/svg`.
-
-Checked against doctaculous `main`; the tree also has in-progress SVG work on
-`feat/shader-describe`, so some of this may already be underway.
+The original diagnosis was that `pkg/svg` already existed and only the HTML
+frontend wiring was missing — that appears to be what landed.
 
 ## 1. CSS custom properties — `var()`
 
@@ -109,21 +130,34 @@ Notably this is specifically about *alpha*, not the color functions:
 | `rgba(79,156,255,0.35)` | renders nothing |
 | `#4f9cff59` | renders nothing |
 
-`rgba` appears in `pkg/css/shorthand.go`, so it parses; the alpha does not
-reach paint.
+**A complete parser already exists in the SVG path.** `pkg/svg/color.go` parses
+the full CSS Color 4 named table, `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa`, and
+`rgb()`/`rgba()`/`hsl()`/`hsla()` — including alpha. The CSS path does not reach
+it. That makes this look like a wiring job rather than new parsing work.
 
 Impact here: all-day event pills and the precipitation bars under the
 temperature curve are tinted with alpha and vanish entirely.
 
 ## 3. `linear-gradient()`
 
-Renders nothing. Present in `pkg/css/background.go`, so it parses, but no
-gradient is painted for the background shorthand path used here.
+Renders nothing — paints 0 pixels.
+
+It is **explicitly rejected, not silently dropped**: `pkg/css/background.go:143`
+treats `linear-gradient(...)` as an unsupported `<image>` and returns `ok=false`.
+So the engine knows it cannot handle this; there is simply no gradient painter
+on the CSS background path. (`pkg/render/raster/shading.go` has an axial shader
+for SVG gradients, which may be reusable.)
 
 ## 4. `border-radius`
 
 Ignored — corners render square. Not found anywhere in `pkg/css` or
-`pkg/layout`. Cosmetic, but it is what makes event blocks read as cards.
+`pkg/layout` (0 non-test hits).
+
+Verified by pixel count rather than by eye: an 80×80 black box paints 6400
+pixels with and without `border-radius:40px`. A 40px radius on that box should
+produce a circle of roughly 5024 pixels, so the identical count shows the
+corners are untouched. Cosmetic, but it is what makes event blocks read as
+cards.
 
 ## 5. `box-shadow` (including `inset`)
 
@@ -131,11 +165,19 @@ Ignored. Not found in `pkg/css` or `pkg/layout`. The dashboard uses
 `inset 3px 0 0 <color>` as a calendar-color spine on all-day pills; the
 `border-left` fallback works, so this one is lowest priority.
 
-## 6. `letter-spacing`
+## 6. `letter-spacing` — implemented in SVG, absent in CSS
 
-Ignored — glyph advance is unchanged. Not found in `pkg/css` or
-`pkg/layout`. Used on small uppercase labels (`NEXT`, `NOW`, weekday
-headers), where the tracking matters for legibility at a distance.
+Ignored on the CSS path: `III` at 30px paints 321 pixels with and without
+`letter-spacing:20px` — byte-identical, so glyph advance is unchanged.
+
+**But it already works in SVG.** `pkg/svg/style.go:156` resolves
+`letterSpacingPt`/`wordSpacingPt`, and a comment there notes that after that
+change "letter-spacing works in SVG and silently does nothing" elsewhere. So
+the property is understood by the engine; the CSS/layout text path just does
+not consult it.
+
+Used on small uppercase labels (`NEXT`, `NOW`, weekday headers, and the panel's
+`SET ME UP`), where tracking matters for legibility at a distance.
 
 ## 7. Context cancellation is a no-op on the HTML path (API, not CSS)
 
@@ -169,8 +211,9 @@ Neither property exists in `pkg/css` or `pkg/layout`. Line breaking is
 whitespace-only (`pkg/layout/inline/break.go`): a token with no break
 opportunity keeps filling past its box rather than breaking mid-word.
 
-`max-width` IS honoured (verified — `resolveContentWidth`/`clampMaxMin` apply
-it, including to absolutely-positioned boxes), so the box is constrained; the
+`max-width` IS honoured (verified — `resolveContentWidth` and `clampMaxMin`
+in `pkg/layout/css/block.go:1148,1219` apply it, including to
+absolutely-positioned boxes), so the box is constrained; the
 text simply overflows it.
 
 Impact here: the error line renders a fetch failure like
@@ -204,16 +247,18 @@ No action needed on these; recording them so the gaps above are unambiguous.
 `border-left` and solid borders · `background`/`color` with literal hex and
 `rgb()` · `text-transform:uppercase` · `opacity` on an element ·
 `font-weight` · `white-space:nowrap` with `overflow:hidden` ·
-`@font-face`-free system font selection · SVG icons inline via `<img>`-free
-markup (the dashboard embeds `<svg>` directly and it rasterizes correctly).
+`max-width` including on absolutely-positioned boxes ·
+`@font-face`-free system font selection · **inline `<svg>`** (§0 — fixed
+upstream; the dashboard embeds `<svg>` directly and it rasterizes correctly).
 
 ## Suggested priority
 
-1. **inline `<svg>`** (§0) — every weather icon is invisible; blocks the feature that was meant to fix §9.
-2. **`var()`** — blocks any stylesheet using a palette, which is most modern CSS.
-3. **alpha colors** — silently drops UI elements; the failure looks like a bug in the page.
-4. **missing-glyph fallback** (§9) — a `.notdef` box would make font gaps visible instead of silent.
-5. **context cancellation** (§7) — correctness/robustness rather than appearance; matters for any long-running renderer.
-6. **`linear-gradient`** — parses today, so the gap is surprising.
-7. **`border-radius`**, **`letter-spacing`**, **`overflow-wrap`** — visual polish; `overflow-wrap` matters most when rendering diagnostics (§8).
-8. **`box-shadow`** — lowest; `border-left` covers the common inset-spine case.
+1. **`var()`** (§1) — blocks any stylesheet using a palette, which is most modern CSS. On this project it is the difference between the intended dark theme and black-on-white.
+2. **alpha colors** (§2) — silently drops UI elements; the failure looks like a bug in the page. `pkg/svg/color.go` already parses alpha, so this may be wiring rather than new work.
+3. **missing-glyph fallback** (§9) — a `.notdef` box would make font gaps visible instead of silent.
+4. **context cancellation** (§7) — correctness/robustness rather than appearance; matters for any long-running renderer.
+5. **`linear-gradient`** (§3) — explicitly rejected today, and `pkg/render/raster/shading.go` has an axial shader that may be reusable.
+6. **`border-radius`**, **`letter-spacing`**, **`overflow-wrap`** — visual polish. `letter-spacing` already works in SVG (§6), so the CSS path is the gap; `overflow-wrap` matters most when rendering diagnostics (§8).
+7. **`box-shadow`** — lowest; `border-left` covers the common inset-spine case.
+
+§0 (inline `<svg>`) was previously first on this list and is now resolved.
