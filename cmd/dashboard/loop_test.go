@@ -14,6 +14,63 @@ import (
 	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
 )
 
+func TestStoreConfigSwap(t *testing.T) {
+	s := &Store{}
+	first := &config.Config{}
+	first.Location.Timezone = "UTC"
+	s.SetConfig(first)
+
+	if got := s.Config(); got.Location.Timezone != "UTC" {
+		t.Errorf("Timezone = %q, want UTC", got.Location.Timezone)
+	}
+
+	second := &config.Config{}
+	second.Location.Timezone = "America/Chicago"
+	s.SetConfig(second)
+
+	if got := s.Config(); got.Location.Timezone != "America/Chicago" {
+		t.Errorf("Timezone = %q, want the swapped value", got.Location.Timezone)
+	}
+}
+
+func TestStoreConfigSnapshotIsStable(t *testing.T) {
+	// A reader that grabbed the pointer must keep seeing its own snapshot even
+	// if the portal swaps in a new config mid-tick.
+	s := &Store{}
+	first := &config.Config{}
+	first.Location.Timezone = "UTC"
+	s.SetConfig(first)
+
+	held := s.Config()
+	swapped := &config.Config{}
+	swapped.Location.Timezone = "America/Chicago"
+	s.SetConfig(swapped)
+
+	if held.Location.Timezone != "UTC" {
+		t.Error("a held snapshot changed underneath the reader")
+	}
+}
+
+func TestStoreConfigRace(t *testing.T) {
+	// Run with -race: concurrent readers and a writer must not race.
+	s := &Store{}
+	s.SetConfig(&config.Config{})
+
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 100; i++ {
+			c := &config.Config{}
+			c.Agenda.MaxEvents = i
+			s.SetConfig(c)
+		}
+		close(done)
+	}()
+	for i := 0; i < 100; i++ {
+		_ = s.Config().Agenda.MaxEvents
+	}
+	<-done
+}
+
 func TestNextTickAlignsToMinute(t *testing.T) {
 	now := time.Date(2026, 8, 25, 10, 42, 17, 0, time.UTC)
 	if got, want := nextTick(now), 43*time.Second; got != want {
@@ -77,6 +134,7 @@ func TestStoreReplacesOnSuccess(t *testing.T) {
 // errors, it would wait retryDelay every time instead of interval.
 func TestFetchLoopRetryIsPerSourceIndependent(t *testing.T) {
 	s := &Store{}
+	s.SetConfig(&config.Config{})
 	s.SetEvents(nil, []string{"ical: persistently broken"})
 
 	const interval = 40 * time.Millisecond
@@ -90,7 +148,7 @@ func TestFetchLoopRetryIsPerSourceIndependent(t *testing.T) {
 		return true // this source always succeeds
 	})
 
-	go fetchLoop(&config.Config{}, s, interval, fn)
+	go fetchLoop(s, interval, fn)
 
 	var times []time.Time
 	for i := 0; i < 3; i++ {
@@ -122,6 +180,7 @@ func TestFetchLoopRetriesSoonerOnlyOnItsOwnFailure(t *testing.T) {
 	defer func() { retryDelay = oldRetry }()
 
 	s := &Store{}
+	s.SetConfig(&config.Config{})
 	calls := make(chan time.Time, 2)
 	fail := true
 	fn := fetchFunc(func(ctx context.Context, cfg *config.Config, store *Store) bool {
@@ -131,7 +190,7 @@ func TestFetchLoopRetriesSoonerOnlyOnItsOwnFailure(t *testing.T) {
 		return ok
 	})
 
-	go fetchLoop(&config.Config{}, s, interval, fn)
+	go fetchLoop(s, interval, fn)
 
 	var times []time.Time
 	for i := 0; i < 2; i++ {

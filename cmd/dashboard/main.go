@@ -65,20 +65,21 @@ func main() {
 	}
 
 	store := &Store{}
+	store.SetConfig(cfg)
 	if *once {
 		fetchAll(context.Background(), cfg, store)
-		if err := renderOnce(cfg, store, *fbDev, fbW, fbH, *htmlOut); err != nil {
+		if err := renderOnce(store.Config(), store, *fbDev, fbW, fbH, *htmlOut); err != nil {
 			log.Fatalf("render: %v", err)
 		}
 		return
 	}
 
-	go fetchLoop(cfg, store, time.Duration(cfg.Refresh.CalendarMinutes)*time.Minute, fetchCalendars)
-	go fetchLoop(cfg, store, time.Duration(cfg.Refresh.WeatherMinutes)*time.Minute, fetchWeather)
+	go fetchLoop(store, time.Duration(cfg.Refresh.CalendarMinutes)*time.Minute, fetchCalendars)
+	go fetchLoop(store, time.Duration(cfg.Refresh.WeatherMinutes)*time.Minute, fetchWeather)
 
 	for {
 		time.Sleep(nextTick(time.Now()))
-		if err := renderSafely(cfg, store, *fbDev, fbW, fbH, *htmlOut); err != nil {
+		if err := renderSafely(store.Config(), store, *fbDev, fbW, fbH, *htmlOut); err != nil {
 			log.Printf("render: %v", err)
 		}
 	}
@@ -161,8 +162,14 @@ type fetchFunc func(context.Context, *config.Config, *Store) (ok bool)
 // with no DNS recovers in seconds rather than a full interval. The retry
 // decision is based solely on fn's own return value, never on shared Store
 // state that another loop also writes to.
-func fetchLoop(cfg *config.Config, store *Store, interval time.Duration, fn fetchFunc) {
+//
+// cfg is read from the store fresh at the top of each iteration rather than
+// captured once, so a config change the portal saves mid-run (e.g. a new
+// refresh interval) takes effect on the next cycle instead of being frozen at
+// startup.
+func fetchLoop(store *Store, interval time.Duration, fn fetchFunc) {
 	for {
+		cfg := store.Config()
 		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 		ok := fn(ctx, cfg, store)
 		cancel()

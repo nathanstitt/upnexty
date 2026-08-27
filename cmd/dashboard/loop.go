@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
+	"github.com/nathanstitt/luckfox-dashboard/internal/config"
 	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
 )
 
@@ -15,10 +16,28 @@ import (
 // field is guarded by mu.
 type Store struct {
 	mu      sync.RWMutex
+	cfg     *config.Config
 	events  []calendar.Event
 	weather *weather.Weather
 	evErrs  []string
 	wxErrs  []string
+}
+
+// Config returns the current configuration. The pointer is replaced rather
+// than mutated on save, so the returned value is a stable snapshot: a reader
+// keeps seeing its own version even if the portal swaps in a new one mid-tick.
+func (s *Store) Config() *config.Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg
+}
+
+// SetConfig installs a new configuration. Called by the portal after a
+// successful save; the next tick renders with it.
+func (s *Store) SetConfig(c *config.Config) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg = c
 }
 
 // SetEvents records the result of a calendar fetch attempt. On failure (errs
