@@ -30,6 +30,12 @@ start() {
 
 	ip link set wlan0 up
 
+	if grep -q 'ssid="SSID"' /etc/wpa_supplicant.conf 2>/dev/null; then
+		echo "no network configured"
+		start_ap
+		return 0
+	fi
+
 	if ! pidof wpa_supplicant >/dev/null 2>&1; then
 		wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf >/dev/null 2>&1
 	fi
@@ -49,7 +55,8 @@ start() {
 		echo "OK"
 	else
 		echo "FAIL (no lease)"
-		return 1
+		start_ap
+		return 0
 	fi
 
 	# Clock: try each host, stop at the first that answers.
@@ -61,9 +68,86 @@ start() {
 	done
 }
 
+# start_ap raises the setup access point so the portal stays reachable when
+# there is no network to join. Named from the WiFi MAC's last two octets, so a
+# returning user sees the same name every time.
+#
+# STA is not torn down until hostapd is confirmed running -- if hostapd never
+# comes up (missing binary, driver refuses AP mode, rejected config), the
+# board must not be left with neither STA nor AP: that is the exact failure
+# that stranded this board once already and needed a physical power cycle.
+start_ap() {
+	printf "Starting setup AP: "
+
+	mac=$(cat /sys/class/net/wlan0/address 2>/dev/null | tr -d ':' | tr 'A-Z' 'a-z')
+	if [ -n "$mac" ]; then
+		suffix=$(echo "$mac" | tail -c 5)
+		ssid="upnext-$suffix"
+	else
+		ssid="upnext-setup"
+	fi
+
+	cat > /tmp/hostapd.conf <<EOF
+interface=wlan0
+driver=nl80211
+ssid=$ssid
+hw_mode=g
+channel=6
+auth_algs=1
+wmm_enabled=0
+EOF
+
+	# address=/#/ answers every DNS name with the portal's address. There is no
+	# iptables on this image, so that wildcard IS the captive-portal redirect.
+	cat > /tmp/dnsmasq-ap.conf <<EOF
+interface=wlan0
+bind-interfaces
+dhcp-range=192.168.4.10,192.168.4.100,12h
+address=/#/192.168.4.1
+no-resolv
+EOF
+
+	ip addr add 192.168.4.1/24 dev wlan0 2>/dev/null
+	ip link set wlan0 up
+
+	# Only kill the supplicant once we are about to attempt hostapd -- up to
+	# this point STA is still the fallback if something below goes wrong.
+	killall wpa_supplicant 2>/dev/null
+
+	if ! hostapd -B /tmp/hostapd.conf >/dev/null 2>&1; then
+		echo "FAIL (hostapd did not start) -- restoring STA"
+		ip addr del 192.168.4.1/24 dev wlan0 2>/dev/null
+		# Guarded the same way start() launches it -- killall ran just above so
+		# this is normally a no-op check, but a call site that reaches start_ap
+		# without having just killed the supplicant (e.g. a manual invocation)
+		# must not end up with two supplicants fighting over wlan0.
+		if ! pidof wpa_supplicant >/dev/null 2>&1; then
+			wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf >/dev/null 2>&1
+		fi
+		return 1
+	fi
+
+	if dnsmasq -C /tmp/dnsmasq-ap.conf >/dev/null 2>&1; then
+		echo "$ssid at 192.168.4.1"
+	else
+		echo "$ssid at 192.168.4.1 -- dnsmasq FAILED (no DHCP/DNS redirect)"
+	fi
+}
+
 stop() {
 	printf "Stopping wlan0: "
 	killall wpa_supplicant 2>/dev/null
+	# Also tear down AP mode, in case start_ap raised one -- otherwise a
+	# restart leaves hostapd/dnsmasq bound to wlan0 while start() tries to
+	# associate against an interface AP mode still owns, which reaches the
+	# same neither-STA-nor-AP state this task exists to prevent. killall
+	# dnsmasq is safe unconditionally: the board's own S80dnsmasq instance
+	# runs against an empty /etc/dnsmasq.conf and exits immediately, so there
+	# is nothing long-running for this to disturb (see internal/wifi/ap.go's
+	# StopAP, which this mirrors).
+	killall hostapd 2>/dev/null
+	killall dnsmasq 2>/dev/null
+	ip addr del 192.168.4.1/24 dev wlan0 2>/dev/null
 	ip link set wlan0 down 2>/dev/null
 	echo "OK"
 }

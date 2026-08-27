@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +15,127 @@ import (
 	"github.com/nathanstitt/luckfox-dashboard/internal/config"
 	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
 )
+
+func TestStoreConfigSwap(t *testing.T) {
+	s := &Store{}
+	first := &config.Config{}
+	first.Location.Timezone = "UTC"
+	s.SetConfig(first)
+
+	if got := s.Config(); got.Location.Timezone != "UTC" {
+		t.Errorf("Timezone = %q, want UTC", got.Location.Timezone)
+	}
+
+	second := &config.Config{}
+	second.Location.Timezone = "America/Chicago"
+	s.SetConfig(second)
+
+	if got := s.Config(); got.Location.Timezone != "America/Chicago" {
+		t.Errorf("Timezone = %q, want the swapped value", got.Location.Timezone)
+	}
+}
+
+func TestStoreConfigSnapshotIsStable(t *testing.T) {
+	// A reader that grabbed the pointer must keep seeing its own snapshot even
+	// if the portal swaps in a new config mid-tick.
+	s := &Store{}
+	first := &config.Config{}
+	first.Location.Timezone = "UTC"
+	s.SetConfig(first)
+
+	held := s.Config()
+	swapped := &config.Config{}
+	swapped.Location.Timezone = "America/Chicago"
+	s.SetConfig(swapped)
+
+	if held.Location.Timezone != "UTC" {
+		t.Error("a held snapshot changed underneath the reader")
+	}
+}
+
+// TestConcurrentUpdatesToDifferentSectionsBothSurvive is the regression test
+// for the lost-update bug: two concurrent Update calls, each mutating a
+// different section of the config (WiFi SSID and display brightness), must
+// both land -- neither may silently overwrite the other's change, in memory
+// or on disk.
+//
+// This does NOT reduce to a data race: each goroutine mutates its own copy,
+// and every individual Store field access is correctly locked, so
+// `go test -race` is silent on the old, buggy Config()+SetConfig() sequence.
+// The bug is at the transaction level (read snapshot -> mutate -> write back
+// as three unsynchronized steps), which only shows up as a *lost update* --
+// so this test proves correctness by asserting the outcome (both writes
+// present after every iteration), not by asking the race detector.
+//
+// Looped many times with two goroutines released via a barrier (not a sleep)
+// so each iteration is a genuine interleaving race rather than one lucky
+// (or unlucky) ordering -- the finding's own reproduction needed 40 runs to
+// fail every time under the old code, so this test uses the same count.
+func TestConcurrentUpdatesToDifferentSectionsBothSurvive(t *testing.T) {
+	const iterations = 40
+
+	for i := 0; i < iterations; i++ {
+		cfg := &config.Config{}
+		b := 200
+		cfg.Display.Brightness = &b
+		cfg.WiFi.SSID = "OldNetwork"
+
+		store := NewStore(cfg, filepath.Join(t.TempDir(), "config.json"))
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = store.Update(func(c *config.Config) error {
+				c.WiFi.SSID = "NewNetwork"
+				return nil
+			})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			v := 42
+			_ = store.Update(func(c *config.Config) error {
+				c.Display.Brightness = &v
+				return nil
+			})
+		}()
+
+		close(start) // release both goroutines at once to force contention
+		wg.Wait()
+
+		got := store.Config()
+		if got.WiFi.SSID != "NewNetwork" {
+			t.Fatalf("iteration %d: WiFi.SSID = %q, want %q (lost update)", i, got.WiFi.SSID, "NewNetwork")
+		}
+		if got.BrightnessValue() != 42 {
+			t.Fatalf("iteration %d: BrightnessValue() = %d, want 42 (lost update)", i, got.BrightnessValue())
+		}
+	}
+}
+
+func TestStoreConfigRace(t *testing.T) {
+	// Run with -race: concurrent readers and a writer must not race.
+	s := &Store{}
+	s.SetConfig(&config.Config{})
+
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 100; i++ {
+			c := &config.Config{}
+			c.Agenda.MaxEvents = i
+			s.SetConfig(c)
+		}
+		close(done)
+	}()
+	for i := 0; i < 100; i++ {
+		_ = s.Config().Agenda.MaxEvents
+	}
+	<-done
+}
 
 func TestNextTickAlignsToMinute(t *testing.T) {
 	now := time.Date(2026, 8, 25, 10, 42, 17, 0, time.UTC)
@@ -77,6 +200,7 @@ func TestStoreReplacesOnSuccess(t *testing.T) {
 // errors, it would wait retryDelay every time instead of interval.
 func TestFetchLoopRetryIsPerSourceIndependent(t *testing.T) {
 	s := &Store{}
+	s.SetConfig(&config.Config{})
 	s.SetEvents(nil, []string{"ical: persistently broken"})
 
 	const interval = 40 * time.Millisecond
@@ -90,7 +214,7 @@ func TestFetchLoopRetryIsPerSourceIndependent(t *testing.T) {
 		return true // this source always succeeds
 	})
 
-	go fetchLoop(&config.Config{}, s, interval, fn)
+	go fetchLoop(s, func(*config.Config) time.Duration { return interval }, fn)
 
 	var times []time.Time
 	for i := 0; i < 3; i++ {
@@ -122,6 +246,7 @@ func TestFetchLoopRetriesSoonerOnlyOnItsOwnFailure(t *testing.T) {
 	defer func() { retryDelay = oldRetry }()
 
 	s := &Store{}
+	s.SetConfig(&config.Config{})
 	calls := make(chan time.Time, 2)
 	fail := true
 	fn := fetchFunc(func(ctx context.Context, cfg *config.Config, store *Store) bool {
@@ -131,7 +256,7 @@ func TestFetchLoopRetriesSoonerOnlyOnItsOwnFailure(t *testing.T) {
 		return ok
 	})
 
-	go fetchLoop(&config.Config{}, s, interval, fn)
+	go fetchLoop(s, func(*config.Config) time.Duration { return interval }, fn)
 
 	var times []time.Time
 	for i := 0; i < 2; i++ {
@@ -146,6 +271,97 @@ func TestFetchLoopRetriesSoonerOnlyOnItsOwnFailure(t *testing.T) {
 	gap := times[1].Sub(times[0])
 	if gap >= interval {
 		t.Errorf("gap after own failure = %v, want well under interval (%v) — should retry at ~%v", gap, interval, retryDelay)
+	}
+}
+
+// TestIntervalSelectorsFollowConfig guards against reverting fetchLoop's
+// interval selector to a plain time.Duration captured once at startup. The
+// production selectors (calendarInterval, weatherInterval) must derive their
+// result from whatever config they're handed, not a closed-over value — so
+// two different configs must yield two different durations.
+func TestIntervalSelectorsFollowConfig(t *testing.T) {
+	c5 := &config.Config{}
+	c5.Refresh.CalendarMinutes = 5
+	c5.Refresh.WeatherMinutes = 5
+
+	c20 := &config.Config{}
+	c20.Refresh.CalendarMinutes = 20
+	c20.Refresh.WeatherMinutes = 20
+
+	if got, want := calendarInterval(c5), 5*time.Minute; got != want {
+		t.Errorf("calendarInterval(5) = %v, want %v", got, want)
+	}
+	if got, want := calendarInterval(c20), 20*time.Minute; got != want {
+		t.Errorf("calendarInterval(20) = %v, want %v", got, want)
+	}
+	if got, want := weatherInterval(c5), 5*time.Minute; got != want {
+		t.Errorf("weatherInterval(5) = %v, want %v", got, want)
+	}
+	if got, want := weatherInterval(c20), 20*time.Minute; got != want {
+		t.Errorf("weatherInterval(20) = %v, want %v", got, want)
+	}
+}
+
+// TestFetchLoopCadenceFollowsConfigSwap is the end-to-end proof: a config
+// swapped into the Store mid-run (as the portal would do after a save) must
+// change fetchLoop's actual sleep cadence, not just the cfg value handed to
+// fn. Each iteration reads cfg once and uses it for both the call and that
+// iteration's sleep, so a swap made while iteration N is asleep cannot affect
+// iteration N's already-computed wait — it takes effect starting with
+// iteration N+1's read. The test swaps in a short-interval config right after
+// iteration 1 fires (while iteration 1 is still asleep for the long
+// interval), then asserts the gap between iteration 2 and iteration 3 — both
+// entirely after the swap — is short. Under the old frozen-interval bug that
+// gap would still be `long` regardless of the swap.
+func TestFetchLoopCadenceFollowsConfigSwap(t *testing.T) {
+	s := &Store{}
+	longCfg := &config.Config{}
+	s.SetConfig(longCfg)
+
+	const long = 300 * time.Millisecond
+	const short = 10 * time.Millisecond
+	selector := func(c *config.Config) time.Duration {
+		if c == longCfg {
+			return long
+		}
+		return short
+	}
+
+	calls := make(chan time.Time, 3)
+	fn := fetchFunc(func(ctx context.Context, cfg *config.Config, store *Store) bool {
+		calls <- time.Now()
+		return true
+	})
+
+	go fetchLoop(s, selector, fn)
+
+	select {
+	case <-calls: // iteration 1, using longCfg
+	case <-time.After(1 * time.Second):
+		t.Fatal("fetchLoop did not invoke fn for its first tick in time")
+	}
+
+	// Swap in the short-interval config right away; fetchLoop is asleep for
+	// `long` at this point (that wait was already computed from longCfg), so
+	// this lands well before iteration 2's config read, mimicking a portal
+	// save landing mid-cycle.
+	shortCfg := &config.Config{}
+	s.SetConfig(shortCfg)
+
+	var second time.Time
+	select {
+	case second = <-calls: // iteration 2, using shortCfg for its own wait
+	case <-time.After(1 * time.Second):
+		t.Fatal("fetchLoop did not reach a second tick in time")
+	}
+
+	select {
+	case third := <-calls: // iteration 3, entirely after the swap
+		if gap := third.Sub(second); gap >= long {
+			t.Errorf("gap between iterations 2 and 3 = %v, want well under the old interval (%v) — cadence is still frozen at startup", gap, long)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("fetchLoop did not pick up the shortened interval after the config swap")
 	}
 }
 

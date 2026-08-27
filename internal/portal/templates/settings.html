@@ -1,0 +1,108 @@
+{{define "content"}}
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+
+<h1>Network</h1>
+{{if .WiFiError}}<p class="error">{{.WiFiError}}</p>{{end}}
+<form method="post" action="/save/wifi">
+  <div class="row">
+    <label for="ssid">Network</label><span class="rule"></span>
+    <div class="field">
+      <input id="ssid" name="ssid" type="text" value="{{.Config.WiFi.SSID}}" autocapitalize="off" autocorrect="off">
+    </div>
+  </div>
+  <div class="row">
+    <label for="wifipw">Password</label><span class="rule"></span>
+    <div class="field">
+      <input id="wifipw" name="password" type="password" placeholder="Leave blank to keep current">
+    </div>
+  </div>
+  <button type="submit">Save network</button>
+</form>
+
+<h1>Calendars</h1>
+<form method="post" action="/save/calendars">
+  {{if not .Config.Calendars}}
+    <p class="empty">No calendars yet — add a feed to see your agenda.</p>
+  {{end}}
+  {{range $i, $c := .Config.Calendars}}
+  <div class="row">
+    <label for="calname{{$i}}">Feed {{$i}}</label><span class="rule"></span>
+    <div class="field">
+      <input id="calname{{$i}}" name="name" type="text" value="{{$c.Name}}" placeholder="Name">
+      <input name="url" type="url" value="{{$c.URL}}" placeholder="https://…" class="mono" style="margin-top:8px">
+    </div>
+  </div>
+  {{end}}
+  <div class="row">
+    <label for="newname">Add</label><span class="rule"></span>
+    <div class="field">
+      <input id="newname" name="name" type="text" placeholder="Name">
+      <input name="url" type="url" placeholder="Calendar address (webcal or https)" class="mono" style="margin-top:8px">
+      <p class="hint">Find this in your calendar's sharing settings, as a secret address in iCal format.</p>
+    </div>
+  </div>
+  <button type="submit">Save calendars</button>
+</form>
+
+<h1>Place</h1>
+<form method="post" action="/save/place">
+  <div class="row">
+    <label for="lat">Where you are</label><span class="rule"></span>
+    <div class="field">
+      <input id="lat" name="latitude" type="text" value="{{.Config.Location.Latitude}}" class="mono" placeholder="Latitude">
+      <input name="longitude" type="text" value="{{.Config.Location.Longitude}}" class="mono" placeholder="Longitude" style="margin-top:8px">
+      <p class="hint">Used for the weather forecast.</p>
+    </div>
+  </div>
+  <div class="row">
+    <label for="tz">Time zone</label><span class="rule"></span>
+    <div class="field">
+      <input id="tz" name="timezone" type="text" value="{{.Config.Location.Timezone}}" class="mono" placeholder="America/Chicago">
+    </div>
+  </div>
+  <button type="submit">Save place</button>
+</form>
+
+<h1>Display</h1>
+<form method="post" action="/save/display">
+  <div class="row">
+    <label for="bright">Brightness</label><span class="rule"></span>
+    <div class="field">
+      <input id="bright" name="brightness" type="range" min="0" max="255" value="{{.Config.BrightnessValue}}">
+      <p class="hint">Zero turns the panel off.</p>
+    </div>
+  </div>
+  <div class="row">
+    <label for="clock">Clock</label><span class="rule"></span>
+    <div class="field">
+      <label><input id="clock" name="clock_24h" type="checkbox" {{if .Config.Units.Clock24h}}checked{{end}}> 24-hour</label>
+    </div>
+  </div>
+  <div class="row">
+    <label for="unit">Temperature</label><span class="rule"></span>
+    <div class="field">
+      <select id="unit" name="temperature">
+        <option value="fahrenheit" {{if eq .Config.Units.Temperature "fahrenheit"}}selected{{end}}>Fahrenheit</option>
+        <option value="celsius" {{if eq .Config.Units.Temperature "celsius"}}selected{{end}}>Celsius</option>
+      </select>
+    </div>
+  </div>
+  <button type="submit">Save display</button>
+</form>
+
+<h1>Admin password</h1>
+<form method="post" action="/save/password">
+  <div class="row">
+    <label for="adminpw">New password</label><span class="rule"></span>
+    <div class="field">
+      <input id="adminpw" name="password" type="password" placeholder="Leave blank to keep current">
+      {{if not .Config.Portal.PasswordHash}}
+      <p class="hint">Currently the device default: <span class="mono">{{.DefaultPassword}}</span></p>
+      {{else}}
+      <p class="hint">A password is set. If you lose it, the only way back in is to clear <span class="mono">portal.password_hash</span> in config.json over a USB cable.</p>
+      {{end}}
+    </div>
+  </div>
+  <button type="submit">Save password</button>
+</form>
+{{end}}

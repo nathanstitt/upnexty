@@ -212,7 +212,8 @@ And in `applyDefaults`:
 	// 200/255 is the shipped default and a reasonable indoor level. Zero would
 	// be a black panel, which is indistinguishable from a crash.
 	if c.Display.Brightness <= 0 {
-		c.Display.Brightness = 200
+		b200 := 200
+	c.Display.Brightness = &b200
 	}
 	if c.Display.Brightness > 255 {
 		c.Display.Brightness = 255
@@ -302,7 +303,8 @@ func TestSaveRoundTrips(t *testing.T) {
 	c.Location.Timezone = "America/Chicago"
 	c.Location.Latitude = 38.5
 	c.WiFi.SSID = "HomeNet"
-	c.Display.Brightness = 120
+	b120 := 120
+	c.Display.Brightness = &b120
 	c.Calendars = []CalendarSource{{Name: "Work", Color: "#4f9cff", URL: "https://example.com/c.ics"}}
 
 	if err := c.Save(p); err != nil {
@@ -315,8 +317,8 @@ func TestSaveRoundTrips(t *testing.T) {
 	if got.Location.Timezone != "America/Chicago" || got.WiFi.SSID != "HomeNet" {
 		t.Errorf("round trip lost data: %+v", got)
 	}
-	if got.Display.Brightness != 120 {
-		t.Errorf("Brightness = %d, want 120", got.Display.Brightness)
+	if got.BrightnessValue() != 120 {
+		t.Errorf("Brightness = %d, want 120", got.BrightnessValue())
 	}
 	if len(got.Calendars) != 1 || got.Calendars[0].Name != "Work" {
 		t.Errorf("Calendars = %+v", got.Calendars)
@@ -1638,7 +1640,8 @@ func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	c := &config.Config{}
 	c.Location.Timezone = "America/Chicago"
-	c.Display.Brightness = 200
+	b200 := 200
+	c.Display.Brightness = &b200
 	c.Calendars = []config.CalendarSource{{Name: "Work", Color: "#4f9cff", URL: "https://example.com/w.ics"}}
 	return &Server{
 		Store:      &fakeStore{c: c},
@@ -1724,8 +1727,8 @@ func TestSaveDisplayUpdatesConfigAndPersists(t *testing.T) {
 		t.Errorf("status = %d, want 303 (post-redirect-get)", w.Code)
 	}
 	got := s.Store.Config()
-	if got.Display.Brightness != 90 {
-		t.Errorf("Brightness = %d, want 90", got.Display.Brightness)
+	if got.BrightnessValue() != 90 {
+		t.Errorf("Brightness = %d, want 90", got.BrightnessValue())
 	}
 	if !got.Units.Clock24h {
 		t.Error("Clock24h = false, want true")
@@ -1735,8 +1738,8 @@ func TestSaveDisplayUpdatesConfigAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config was not written: %v", err)
 	}
-	if saved.Display.Brightness != 90 {
-		t.Errorf("saved Brightness = %d, want 90", saved.Display.Brightness)
+	if saved.BrightnessValue() != 90 {
+		t.Errorf("saved Brightness = %d, want 90", saved.BrightnessValue())
 	}
 }
 
@@ -1752,7 +1755,7 @@ func TestSaveRejectsInvalidBrightness(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
-	if s.Store.Config().Display.Brightness != 200 {
+	if s.Store.Config().BrightnessValue() != 200 {
 		t.Error("invalid input must not change the stored config")
 	}
 }
@@ -1998,7 +2001,8 @@ Create `internal/portal/templates/settings.html`:
   <div class="row">
     <label for="bright">Brightness</label><span class="rule"></span>
     <div class="field">
-      <input id="bright" name="brightness" type="range" min="10" max="255" value="{{.Config.Display.Brightness}}">
+      <input id="bright" name="brightness" type="range" min="0" max="255" value="{{.Config.BrightnessValue}}">
+      <p class="hint">Zero turns the panel off.</p>
     </div>
   </div>
   <div class="row">
@@ -2156,7 +2160,7 @@ func (s *Server) page(w http.ResponseWriter, errMsg string, code int) {
 		}
 	}
 	if s.MAC != "" {
-		data.APName = apNameFor(s.MAC)
+		data.APName = wifi.APName(s.MAC)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
@@ -2202,7 +2206,7 @@ func (s *Server) handleSaveDisplay(w http.ResponseWriter, r *http.Request) {
 	clock := r.FormValue("clock_24h") != ""
 
 	if err := s.save(func(c *config.Config) error {
-		c.Display.Brightness = b
+		c.Display.Brightness = &b
 		c.Units.Clock24h = clock
 		c.Units.Temperature = temp
 		return nil
@@ -2351,25 +2355,16 @@ func calendarColor(i int) string {
 
 Add `"time"` to the imports.
 
-- [ ] **Step 8: Add the two small helpers**
+- [ ] **Step 8: Add the brightness helper**
 
-Append to `auth.go`:
+Use `wifi.APName` for the AP name rather than duplicating it -- this package
+already imports `wifi` for `Server.WiFi`, so there is no import to avoid.
 
-```go
-// apNameFor mirrors wifi.APName without importing it, so the portal's page
-// rendering does not depend on the wifi package.
-func apNameFor(mac string) string {
-	clean := strings.ToLower(mac)
-	clean = strings.ReplaceAll(clean, ":", "")
-	clean = strings.ReplaceAll(clean, "-", "")
-	if len(clean) < 4 {
-		return "upnext-setup"
-	}
-	return "upnext-" + clean[len(clean)-4:]
-}
-```
+In `handlers.go`, replace the `apNameFor(s.MAC)` call with `wifi.APName(s.MAC)`
+and add `"github.com/nathanstitt/luckfox-dashboard/internal/wifi"` to its
+imports.
 
-Create the brightness helper in `handlers.go`:
+Then add the brightness helper in `handlers.go`:
 
 ```go
 // applyBrightness writes the panel's sysfs control. A failure is not fatal --
@@ -2518,7 +2513,7 @@ Apply the saved brightness once at startup, right after the config loads:
 ```go
 	// The panel keeps whatever brightness it had; apply the configured value so
 	// a reboot honours it.
-	if b := cfg.Display.Brightness; b > 0 {
+	if b := cfg.BrightnessValue(); b > 0 {
 		_ = os.WriteFile("/sys/class/backlight/waveshare_bl/brightness",
 			[]byte(strconv.Itoa(b)), 0o644)
 	}
@@ -2821,9 +2816,9 @@ Thread it into the `model.Build` call inside `renderOnce`.
 
 ```go
 func TestRenderShowsSetupHint(t *testing.T) {
-	vm, w := fixtureVM(t)
+	vm := fixtureVM(t)
 	vm.Setup = &model.SetupHint{APName: "upnext-1bfd", Password: "4c1bfd"}
-	got, err := Render(vm, w)
+	got, err := Render(vm)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2835,9 +2830,9 @@ func TestRenderShowsSetupHint(t *testing.T) {
 }
 
 func TestRenderOmitsSetupHintWhenConfigured(t *testing.T) {
-	vm, w := fixtureVM(t)
+	vm := fixtureVM(t)
 	vm.Setup = nil
-	got, err := Render(vm, w)
+	got, err := Render(vm)
 	if err != nil {
 		t.Fatal(err)
 	}

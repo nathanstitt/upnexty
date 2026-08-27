@@ -37,6 +37,16 @@ var (
 	minBlockPx = 4.0 // visibility floor, not a layout min-width
 )
 
+// SetupHint is shown on the panel while the board is not associated with a
+// network -- which covers a fresh board, but also wrong credentials, a router
+// that went away, and a move out of range. It carries the setup AP's name and
+// the admin password so first-run needs no documentation. Anyone who can see
+// the panel learns the password; that trade is accepted for a home display.
+type SetupHint struct {
+	APName   string
+	Password string
+}
+
 // ViewModel is everything the template needs. No method on it may consult the
 // clock; every time-dependent value is resolved in Build.
 type ViewModel struct {
@@ -44,10 +54,9 @@ type ViewModel struct {
 	ClockTime string
 	ClockDate string
 
-	LocationName string
-	Current      *weather.Conditions
-	Forecast     []weather.DayPoint
-	Hourly       []weather.HourPoint
+	Current  *weather.Conditions
+	Forecast []weather.DayPoint
+	Hourly   []weather.HourPoint
 
 	NextEvent *calendar.Event
 	UntilNext string
@@ -68,11 +77,19 @@ type ViewModel struct {
 	// indicator on Stale, not on whether a particular section is empty.
 	Stale  bool
 	Errors []string
+
+	// Setup is non-nil only while the board is not associated with a network,
+	// and carries the setup AP name and admin password so first-run needs no
+	// documentation. Callers must compute it themselves (see cmd/dashboard's
+	// setupHintTracker) -- Build must not reach into wifi/portal to derive it,
+	// so the template stays independent of whether those packages are reachable.
+	Setup *SetupHint
 }
 
 // Build assembles the view model. It tolerates nil weather and no events so a
-// boot with no network still renders a clock.
-func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Weather, errs []string) ViewModel {
+// boot with no network still renders a clock. setup is nil once the board is
+// configured; see SetupHint.
+func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Weather, errs []string, setup *SetupHint) ViewModel {
 	loc := c.TimeLocation()
 	local := now.In(loc)
 
@@ -82,11 +99,10 @@ func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Wea
 	}
 
 	vm := ViewModel{
-		Now:          now,
-		ClockTime:    local.Format(clockLayout),
-		ClockDate:    local.Format("Monday, January 2"),
-		LocationName: c.Location.Name,
-		Errors:       errs,
+		Now:       now,
+		ClockTime: local.Format(clockLayout),
+		ClockDate: local.Format("Monday, January 2"),
+		Errors:    errs,
 		// Stale means "something failed this fetch cycle, so what's on
 		// screen may be older than it looks" — derived from errs, not from
 		// whether both sources happened to fail together. A calendar
@@ -94,6 +110,7 @@ func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Wea
 		// must catch: the agenda shown is stale even though Current is
 		// fresh.
 		Stale: len(errs) > 0,
+		Setup: setup,
 	}
 
 	if w != nil {

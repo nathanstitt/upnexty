@@ -228,11 +228,45 @@ The system stays on UTC — the dashboard converts via its configured timezone.
 Verified from a cold boot: modules auto-load, `wlan0` associates, DHCP lease,
 clock set, dashboard fetches live weather. ~2.0–2.5s per frame with the fetch.
 
+**No network means the board becomes one.** If `S99wlan0` cannot associate — no
+credentials, wrong password, router down — it raises an open AP named
+`upnext-<4 hex of the MAC>` at `192.168.4.1` and serves the portal there.
+`dnsmasq` answers every DNS query with that address, which is what makes a phone
+offer its "sign in to network" sheet; there is no `iptables` on this image, so
+that wildcard is the entire redirect.
+
+The portal is on `:8080` in both modes. The admin password defaults to the last
+6 hex of the WiFi MAC and is shown on the panel whenever the board is **not
+associated** — which covers a fresh board, but also a wrong password, a router
+that went away, and a move out of range. Gating on saved credentials instead
+would hide the hint in exactly the case a user needs it.
+
+Verified end to end on hardware (2026-08-27), including the AP path:
+
+| | |
+|---|---|
+| AP raised | `upnext-1bfd` at `192.168.4.1`, hostapd + dnsmasq up |
+| Panel showed | `SET ME UP / Join Wi-Fi upnext-1bfd / Password 4c1bfd` |
+| Settings changes | apply live — **same PID**, no restart, no dropped frame |
+| After reboot | brightness and clock format persisted and re-applied |
+
+The SSID on the panel is the SSID hostapd actually broadcasts: `S99wlan0` and
+`internal/wifi`'s `APName` derive it identically from the MAC. If you change one,
+change the other — nothing fails a test when they drift.
+
+**`S99wlan0 restart` while in AP mode is safe.** `stop()` tears down hostapd,
+dnsmasq, and the `192.168.4.1/24` address before downing the link, so `start()`
+does not try to associate against an interface AP mode still owns. Getting this
+wrong is how the board gets stranded.
+
 ## Dashboard
 
 The `dashboard` service renders the UpNext display: it fetches iCal calendars
 and Open-Meteo weather, generates HTML+SVG, rasterizes with doctaculous, and
-writes `/dev/fb0`. Display-only — no touch, no HTTP server.
+writes `/dev/fb0`. No touch. It also serves the configuration portal on `:8080`
+as a goroutine in the same process — a settings save swaps the config pointer
+under the `Store` mutex and the next tick picks it up, so there is no IPC, no
+second binary, and nothing to restart.
 
 ```bash
 scripts/build.sh dashboard

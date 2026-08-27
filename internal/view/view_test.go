@@ -18,7 +18,6 @@ func fixtureVM(t *testing.T) model.ViewModel {
 	t.Helper()
 	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
 	c := &config.Config{}
-	c.Location.Name = "Home"
 	c.Location.Timezone = "UTC"
 
 	evs := []calendar.Event{
@@ -46,7 +45,7 @@ func fixtureVM(t *testing.T) model.ViewModel {
 			Time: now.Add(time.Duration(i) * time.Hour), TempF: 70 + float64(i), PrecipProb: i * 5,
 		})
 	}
-	return model.Build(now, c, evs, w, nil)
+	return model.Build(now, c, evs, w, nil, nil)
 }
 
 func TestRenderProducesCompleteDocument(t *testing.T) {
@@ -129,7 +128,7 @@ func TestRenderHandlesEmptyModel(t *testing.T) {
 	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
 	c := &config.Config{}
 	c.Location.Timezone = "UTC"
-	got, err := Render(model.Build(now, c, nil, nil, []string{"weather: timeout"}))
+	got, err := Render(model.Build(now, c, nil, nil, []string{"weather: timeout"}, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +147,7 @@ func TestRenderShowsStaleFlagWhenStale(t *testing.T) {
 	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
 	c := &config.Config{}
 	c.Location.Timezone = "UTC"
-	vm := model.Build(now, c, nil, nil, []string{"weather: timeout"})
+	vm := model.Build(now, c, nil, nil, []string{"weather: timeout"}, nil)
 	if !vm.Stale {
 		t.Fatal("fixture does not set Stale; test no longer exercises this branch")
 	}
@@ -174,7 +173,7 @@ func TestRenderShowsErrorTextWhenStale(t *testing.T) {
 	c := &config.Config{}
 	c.Location.Timezone = "UTC"
 	wantErr := "ical(Personal): GET https://example.com/cal.ics: 401 Unauthorized"
-	vm := model.Build(now, c, nil, nil, []string{wantErr})
+	vm := model.Build(now, c, nil, nil, []string{wantErr}, nil)
 	got, err := Render(vm)
 	if err != nil {
 		t.Fatal(err)
@@ -202,6 +201,55 @@ func TestRenderHidesStaleFlagWhenFresh(t *testing.T) {
 	}
 	if strings.Contains(got, `id="stale-flag"`) {
 		t.Error(`output has id="stale-flag" when Stale is false`)
+	}
+}
+
+func TestRenderShowsSetupHint(t *testing.T) {
+	vm := fixtureVM(t)
+	vm.Setup = &model.SetupHint{APName: "upnext-1bfd", Password: "4c1bfd"}
+	got, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"upnext-1bfd", "4c1bfd", "Set me up"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q", want)
+		}
+	}
+}
+
+func TestRenderOmitsSetupHintWhenConfigured(t *testing.T) {
+	vm := fixtureVM(t)
+	vm.Setup = nil
+	got, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Match the div, not the bare substring "setup-hint": that string also
+	// appears in the inlined <style> block's #setup-hint selector, which is
+	// always present regardless of whether the {{with .VM.Setup}} div rendered.
+	if strings.Contains(got, `id="setup-hint"`) {
+		t.Error("setup hint rendered when the board is configured")
+	}
+}
+
+// TestRenderSetupHintShowsUnavailablePasswordWhenEmpty guards resolution #2:
+// an empty Password (DefaultPassword's return when the MAC is unreadable or
+// malformed) must never render as a blank credential -- that reads as a real
+// but invisible password, which is worse than no hint at all. The template
+// must show explicit "unavailable" text instead.
+func TestRenderSetupHintShowsUnavailablePasswordWhenEmpty(t *testing.T) {
+	vm := fixtureVM(t)
+	vm.Setup = &model.SetupHint{APName: "upnext-setup", Password: ""}
+	got, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "upnext-setup") {
+		t.Error("output missing the fallback AP name")
+	}
+	if !strings.Contains(got, "unavailable") {
+		t.Error(`output missing "unavailable" when Password is empty`)
 	}
 }
 

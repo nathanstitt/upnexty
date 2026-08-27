@@ -1,0 +1,116 @@
+/* The portal inherits the dashboard's palette so the two surfaces read as one
+   product. Literal hex throughout -- this file is served to a browser, but the
+   values are kept in sync with the panel's stylesheet by hand. */
+:root {
+  --bg: #0b0d12;
+  --raised: #141924;
+  --rule: #263041;
+  --text: #e8ecf3;
+  --dim: #8b97ab;
+  --accent: #4f9cff;
+  --alarm: #ff7a59;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+.wrap { max-width: 420px; margin: 0 auto; padding: 0 20px 64px; }
+
+/* Status strip: answers "is it working?" before any form appears, because that
+   is the question that brought someone here. */
+.status {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 20px 0 18px;
+  border-bottom: 1px solid var(--rule);
+}
+.status .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; }
+.status.down .dot { background: var(--alarm); }
+.status .what { font-weight: 600; letter-spacing: -0.01em; }
+.status .where { color: var(--dim); font-size: 14px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+h1 {
+  font-family: "Helvetica Neue", Inter, system-ui, sans-serif;
+  font-size: 15px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--dim);
+  margin: 32px 0 0;
+}
+
+/* THE SIGNATURE: the panel is 1920x480 with a fixed 380px block and a hairline
+   divider. Every row repeats that 380:1540 proportion with the same rule
+   colour, so scrolling the portal echoes the geometry of the thing being
+   configured. */
+.row {
+  display: grid;
+  grid-template-columns: 98px 1px 1fr;   /* 380:1540 of a 420px column */
+  gap: 0 16px;
+  align-items: start;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.row > .rule { background: var(--rule); align-self: stretch; }
+.row > label:first-child {
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--dim);
+  padding-top: 10px;
+}
+.row .field { min-width: 0; }
+
+input[type="text"], input[type="url"], input[type="password"], input[type="number"], select {
+  width: 100%;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  padding: 10px 12px;
+}
+input:focus, select:focus, button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+.hint { color: var(--dim); font-size: 13px; margin-top: 6px; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+button {
+  background: var(--accent);
+  color: #06121f;
+  border: 0; border-radius: 6px;
+  font: 600 15px/1 inherit;
+  padding: 13px 18px;
+  margin-top: 20px;
+  width: 100%;
+  cursor: pointer;
+}
+
+.error {
+  color: var(--alarm);
+  border-left: 2px solid var(--alarm);
+  padding-left: 10px;
+  margin: 12px 0;
+  font-size: 14px;
+}
+
+.empty { color: var(--dim); font-size: 14px; padding: 4px 0 8px; }
+
+/* On a narrow phone the columns stack and the rule turns horizontal -- the
+   label-above-field rhythm survives even though the vertical seam cannot. */
+@media (max-width: 380px) {
+  .row { grid-template-columns: 1fr; gap: 8px; }
+  .row > .rule { height: 1px; align-self: auto; }
+  .row > label:first-child { padding-top: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
