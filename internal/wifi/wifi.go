@@ -38,6 +38,9 @@ type Client struct {
 	// whereas the supplicant config holds credentials that must survive.
 	HostapdConf string
 	DnsmasqConf string
+	// SysfsNet is the interface's sysfs directory. Defaults to
+	// /sys/class/net/wlan0 when empty; tests point it at a temp dir.
+	SysfsNet string
 }
 
 func (c *Client) confPath() string {
@@ -45,6 +48,21 @@ func (c *Client) confPath() string {
 		return "/etc/wpa_supplicant.conf"
 	}
 	return c.ConfPath
+}
+
+// MAC returns the interface's hardware address, or "" if it cannot be read
+// (driver not loaded). Callers must treat "" as "no MAC available" rather than
+// substituting a constant -- the admin password derives from this.
+func (c *Client) MAC() string {
+	dir := c.SysfsNet
+	if dir == "" {
+		dir = "/sys/class/net/" + Iface
+	}
+	b, err := os.ReadFile(dir + "/address")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // Status reports the current association.

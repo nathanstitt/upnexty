@@ -356,6 +356,26 @@ func TestConnectSecuredNetworkHasWPAPSK(t *testing.T) {
 	}
 }
 
+func TestMACReadsSysfs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/address", []byte("54:01:4a:4c:1b:fd\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{R: &fakeRunner{}, SysfsNet: dir}
+	if got := c.MAC(); got != "54:01:4a:4c:1b:fd" {
+		t.Errorf("MAC = %q, want the trimmed address", got)
+	}
+}
+
+func TestMACMissingIsEmpty(t *testing.T) {
+	// Driver not loaded: must return empty rather than panic, so the portal
+	// falls back to a usable AP name and refuses the MAC default password.
+	c := &Client{R: &fakeRunner{}, SysfsNet: t.TempDir()}
+	if got := c.MAC(); got != "" {
+		t.Errorf("MAC = %q, want empty", got)
+	}
+}
+
 func TestConnectRestartsWithExactCommand(t *testing.T) {
 	// Assert the exact restart invocation, not just a substring match.
 	f := &fakeRunner{out: map[string][]byte{}}

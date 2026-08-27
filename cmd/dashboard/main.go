@@ -11,23 +11,30 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
 	"github.com/nathanstitt/luckfox-dashboard/internal/config"
 	"github.com/nathanstitt/luckfox-dashboard/internal/fb"
 	"github.com/nathanstitt/luckfox-dashboard/internal/model"
+	"github.com/nathanstitt/luckfox-dashboard/internal/portal"
 	"github.com/nathanstitt/luckfox-dashboard/internal/view"
 	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
+	"github.com/nathanstitt/luckfox-dashboard/internal/wifi"
 )
 
 const (
 	pageW, pageH = 1920, 480
 	rotate       = 270
 	fetchTimeout = 60 * time.Second
+
+	// brightnessPath is the panel's sysfs backlight control.
+	brightnessPath = "/sys/class/backlight/waveshare_bl/brightness"
 )
 
 // retryDelay is how soon a fetch loop retries after ITS OWN fetch fails,
@@ -40,6 +47,7 @@ func main() {
 	fbDev := flag.String("fb", "/dev/fb0", "framebuffer device")
 	cfgPath := flag.String("config", "/root/config.json", "path to config.json")
 	htmlOut := flag.String("html-out", "", "also write the generated HTML here (debugging)")
+	portalAddr := flag.String("portal", ":8080", "address for the configuration portal")
 	flag.Parse()
 
 	cfg, err := config.Load(*cfgPath)
@@ -74,6 +82,31 @@ func main() {
 		return
 	}
 
+	// The panel keeps whatever brightness it had; apply the configured value so
+	// a reboot honours it. Applying it again on later config changes is the
+	// portal's job (see internal/portal/handlers.go's applyBrightness), not
+	// this startup path's.
+	if err := applyStartupBrightness(brightnessPath, cfg.BrightnessValue()); err != nil {
+		log.Printf("brightness: %v", err)
+	}
+
+	wc := &wifi.Client{R: wifi.ExecRunner{}}
+	ps := &portal.Server{
+		Store:      store,
+		WiFi:       wc,
+		MAC:        wc.MAC(),
+		ConfigPath: *cfgPath,
+	}
+	go func() {
+		// The portal is a goroutine in this process, not a second binary, so a
+		// save can swap the config pointer directly. A failure here must not
+		// stop the dashboard: a panel that renders without a config UI is far
+		// better than no panel.
+		if err := http.ListenAndServe(*portalAddr, ps.Handler()); err != nil {
+			log.Printf("portal: %v", err)
+		}
+	}()
+
 	go fetchLoop(store, calendarInterval, fetchCalendars)
 	go fetchLoop(store, weatherInterval, fetchWeather)
 
@@ -83,6 +116,19 @@ func main() {
 			log.Printf("render: %v", err)
 		}
 	}
+}
+
+// applyStartupBrightness writes v to the panel's sysfs backlight control once
+// at process start. path is a parameter (rather than the brightnessPath
+// constant used directly) so a test can point it at a temp file instead of
+// real hardware. A non-positive v is left alone -- BrightnessValue() only
+// returns <=0 for an explicit 0, which the panel already treats as "off" by
+// default, so there is nothing useful to write.
+func applyStartupBrightness(path string, v int) error {
+	if v <= 0 {
+		return nil
+	}
+	return os.WriteFile(path, []byte(strconv.Itoa(v)), 0o644)
 }
 
 // renderSafely wraps renderOnce with a panic recovery so that one bad frame —
