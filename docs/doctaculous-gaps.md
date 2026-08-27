@@ -74,19 +74,26 @@ Checked against doctaculous `main`; the tree also has in-progress SVG work on
 
 ## 1. CSS custom properties — `var()`
 
-`var(--x)` silently resolves to nothing and the property falls back to its
-default. No `var()` or custom-property handling exists in `pkg/css`, and the
-feature is absent from `FEATURES.md`.
+`var(--x)` silently resolves to nothing and the declaration is dropped. No
+`var()` or custom-property handling exists in `pkg/css`, and the feature is
+absent from `FEATURES.md`.
 
 ```css
 :root { --bg: #0b0d12; --fg: #4f9cff; }
-.a { background: var(--bg); color: var(--fg); }   /* renders white-on-white */
+.a { background: var(--bg); color: var(--fg); }   /* paints nothing at all */
 .b { background: #0b0d12;   color: #4f9cff;   }   /* renders correctly */
 ```
 
+The declaration is **dropped, not defaulted** — measured 2026-08-27: an 80×80
+box with `background: var(--c)` paints **0** non-white pixels, where the same
+box with `background: black` paints 6400. Nothing is drawn where the element
+should be.
+
 Impact here: the dashboard's entire dark theme disappeared — black text on a
 white background — because the palette is defined once in `:root` and
-referenced 16 times. The layout was correct; only color was lost.
+referenced 18 times in `internal/view/assets/style.css` (and 20 more in
+`internal/portal/assets/portal.css`). The layout was correct; only color was
+lost.
 
 Silent failure is the worst part: no warning, and the page still renders, so
 it looks like a styling mistake rather than an unimplemented feature.
