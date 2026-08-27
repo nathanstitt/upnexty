@@ -74,9 +74,14 @@ func main() {
 
 	store := &Store{}
 	store.SetConfig(cfg)
+
+	// Created before the *once branch so both the single-frame path and the
+	// service loop can derive the setup hint from the same client.
+	wc := &wifi.Client{R: wifi.ExecRunner{}}
+
 	if *once {
 		fetchAll(context.Background(), cfg, store)
-		if err := renderOnce(store.Config(), store, *fbDev, fbW, fbH, *htmlOut); err != nil {
+		if err := renderOnce(store.Config(), store, wc, *fbDev, fbW, fbH, *htmlOut); err != nil {
 			log.Fatalf("render: %v", err)
 		}
 		return
@@ -90,7 +95,6 @@ func main() {
 		log.Printf("brightness: %v", err)
 	}
 
-	wc := &wifi.Client{R: wifi.ExecRunner{}}
 	ps := &portal.Server{
 		Store:      store,
 		WiFi:       wc,
@@ -112,7 +116,7 @@ func main() {
 
 	for {
 		time.Sleep(nextTick(time.Now()))
-		if err := renderSafely(store.Config(), store, *fbDev, fbW, fbH, *htmlOut); err != nil {
+		if err := renderSafely(store.Config(), store, wc, *fbDev, fbW, fbH, *htmlOut); err != nil {
 			log.Printf("render: %v", err)
 		}
 	}
@@ -139,9 +143,9 @@ func applyStartupBrightness(path string, v int) error {
 // failing fast at startup (see main): that is a misconfiguration, not a
 // transient bad frame, so refusing to start is the right response for it.
 // This recover is for everything else.
-func renderSafely(cfg *config.Config, store *Store, dev string, fbW, fbH int, htmlOut string) error {
+func renderSafely(cfg *config.Config, store *Store, wc *wifi.Client, dev string, fbW, fbH int, htmlOut string) error {
 	return recoverRender(func() error {
-		return renderOnce(cfg, store, dev, fbW, fbH, htmlOut)
+		return renderOnce(cfg, store, wc, dev, fbW, fbH, htmlOut)
 	})
 }
 
@@ -159,10 +163,26 @@ func recoverRender(fn func() error) (err error) {
 	return fn()
 }
 
+// setupHint returns a panel hint while the board has no network configured,
+// and nil once it does. It computes both strings up front, via the wifi and
+// portal packages, rather than passing wc/cfg through to the template -- the
+// template must not reach into other packages, and this keeps the panel and
+// the portal's own login page unable to disagree about what the password is.
+func setupHint(cfg *config.Config, wc *wifi.Client) *model.SetupHint {
+	if cfg.WiFi.SSID != "" {
+		return nil
+	}
+	mac := wc.MAC()
+	return &model.SetupHint{
+		APName:   wifi.APName(mac),
+		Password: portal.DefaultPassword(mac),
+	}
+}
+
 // renderOnce builds the model, renders HTML, and blits it to the framebuffer.
-func renderOnce(cfg *config.Config, store *Store, dev string, fbW, fbH int, htmlOut string) error {
+func renderOnce(cfg *config.Config, store *Store, wc *wifi.Client, dev string, fbW, fbH int, htmlOut string) error {
 	evs, wx, errs := store.Snapshot()
-	vm := model.Build(time.Now(), cfg, evs, wx, errs)
+	vm := model.Build(time.Now(), cfg, evs, wx, errs, setupHint(cfg, wc))
 
 	html, err := view.Render(vm)
 	if err != nil {

@@ -37,6 +37,15 @@ var (
 	minBlockPx = 4.0 // visibility floor, not a layout min-width
 )
 
+// SetupHint is shown on the panel while the board has no network configured.
+// It carries the setup AP's name and the admin password so first-run needs no
+// documentation -- the screen is otherwise blank at that point. Anyone who can
+// see the panel learns the password; that trade is accepted for a home display.
+type SetupHint struct {
+	APName   string
+	Password string
+}
+
 // ViewModel is everything the template needs. No method on it may consult the
 // clock; every time-dependent value is resolved in Build.
 type ViewModel struct {
@@ -67,11 +76,19 @@ type ViewModel struct {
 	// indicator on Stale, not on whether a particular section is empty.
 	Stale  bool
 	Errors []string
+
+	// Setup is non-nil only while the board has no network configured, and
+	// carries the setup AP name and admin password so first-run needs no
+	// documentation. Callers must compute it themselves (see cmd/dashboard's
+	// setupHint) -- Build must not reach into wifi/portal to derive it, so the
+	// template stays independent of whether those packages are reachable.
+	Setup *SetupHint
 }
 
 // Build assembles the view model. It tolerates nil weather and no events so a
-// boot with no network still renders a clock.
-func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Weather, errs []string) ViewModel {
+// boot with no network still renders a clock. setup is nil once the board is
+// configured; see SetupHint.
+func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Weather, errs []string, setup *SetupHint) ViewModel {
 	loc := c.TimeLocation()
 	local := now.In(loc)
 
@@ -92,6 +109,7 @@ func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Wea
 		// must catch: the agenda shown is stale even though Current is
 		// fresh.
 		Stale: len(errs) > 0,
+		Setup: setup,
 	}
 
 	if w != nil {

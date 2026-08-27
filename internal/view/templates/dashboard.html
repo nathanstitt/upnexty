@@ -18,6 +18,13 @@
     <div id="next-title">{{.Title}}</div>
     <div id="next-when">{{$.VM.UntilNext}}{{if .Location}} &middot; {{.Location}}{{end}}</div>
     {{end}}
+    {{with .VM.Setup}}
+    <div id="setup-hint">
+      <div class="sh-lead">Set me up</div>
+      <div class="sh-step">Join Wi-Fi <span class="sh-mono">{{.APName}}</span></div>
+      <div class="sh-step">Password <span class="sh-mono">{{if .Password}}{{.Password}}{{else}}unavailable{{end}}</span></div>
+    </div>
+    {{end}}
   </aside>
 
   <div id="track">

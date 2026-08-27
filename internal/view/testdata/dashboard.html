@@ -38,6 +38,14 @@ html, body {
 #next-title { font-size: 25px; font-weight: 600; margin-top: 6px; }
 #next-when { font-size: 19px; color: var(--blue); margin-top: 4px; }
 
+/* Setup hint: only visible while the board has no network. Sized to be read
+   from across a room, since that is the distance someone stands at when they
+   notice the panel is not working. */
+#setup-hint { margin-top: 26px; }
+.sh-lead { font-size: 15px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+.sh-step { font-size: 22px; margin-top: 8px; }
+.sh-mono { font-family: "DejaVu Sans Mono", monospace; color: var(--blue); }
+
 /* Right: timeline track */
 #track { position: relative; width: 1540px; height: 480px; }
 .ad-ribbon { position: absolute; top: 0; left: 0; height: 30px;
@@ -110,6 +118,7 @@ html, body {
     <div id="next-label">Next</div>
     <div id="next-title">Standup</div>
     <div id="next-when">10m</div>
+    
     
   </aside>
 
