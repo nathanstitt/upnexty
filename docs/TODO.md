@@ -164,8 +164,13 @@ change both together.
 Re-tested against doctaculous `957c9e1`:
 
 - **Inline `<svg>` now renders.** This was the top-priority gap: every weather
-  icon was invisible. Icons now appear on the panel.
-- **`border-radius` now renders.**
+  icon was invisible. Icons now appear on the panel. Verified by pixel count:
+  an empty svg paints 0, a `<circle r=35>` paints 3924, a full `<rect>` fills
+  6400 — the subtree renders with correct geometry.
+
+`border-radius` is **not** fixed, despite an earlier note here saying so. The
+box paints, which looked like success, but a 40px radius on an 80×80 box gives
+a pixel count identical to the square box — the corners are untouched.
 
 `docs/doctaculous-gaps.md` carries the full re-test table. That file goes stale
 as the engine advances — re-run the probes before trusting any entry in it.
