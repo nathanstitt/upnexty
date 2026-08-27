@@ -1,5 +1,25 @@
 # doctaculous gaps found while building the Luckfox dashboard
 
+> **Re-tested 2026-08-27 against doctaculous `957c9e1`.** Two are now FIXED
+> upstream: **§0 inline `<svg>`** and **§4 `border-radius`** both render. The
+> rest still reproduce. Re-run the probes before trusting any entry below —
+> this file goes stale as the engine advances.
+>
+> | Gap | Status |
+> |---|---|
+> | §0 inline `<svg>` | **fixed** — paints; weather icons appear on the panel |
+> | §4 `border-radius` | **fixed** — paints |
+> | §1 `var()` | still broken — element vanishes entirely |
+> | §2 alpha (`rgba()`, `#RRGGBBAA`) | still broken — element vanishes entirely |
+> | §3 `linear-gradient` | still broken |
+> | §5 `box-shadow` | still broken |
+> | §6 `letter-spacing` | still broken — parses, no effect on glyph positions |
+> | §8 `overflow-wrap` | still broken — parses, no mid-word break |
+>
+> `var()` and alpha do not degrade — a `background` set through either paints
+> **zero** pixels where a literal color paints the full box. The element is not
+> mis-colored; it is absent.
+
 Inline `<svg>` (§0, highest impact), seven CSS features, one API issue (context
 cancellation, §7), and a font-fallback failure mode (§9). §0 and §9 were found
 on real hardware; the rest by rasterizing on the host.
