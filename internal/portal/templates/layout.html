@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UpNext setup</title>
+<link rel="stylesheet" href="/portal.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="status{{if not .Status.Connected}} down{{end}}">
+    <span class="dot"></span>
+    <span class="what">{{if .Status.Connected}}Connected{{else}}Setup mode{{end}}</span>
+    <span class="where">{{if .Status.Connected}}{{.Status.SSID}} · {{.Status.IP}}{{else}}{{.APName}}{{end}}</span>
+  </div>
+  {{template "content" .}}
+</div>
+</body>
+</html>
