@@ -228,6 +228,16 @@ The system stays on UTC — the dashboard converts via its configured timezone.
 Verified from a cold boot: modules auto-load, `wlan0` associates, DHCP lease,
 clock set, dashboard fetches live weather. ~2.0–2.5s per frame with the fetch.
 
+**No network means the board becomes one.** If `S99wlan0` cannot associate — no
+credentials, wrong password, router down — it raises an open AP named
+`upnext-<4 hex of the MAC>` at `192.168.4.1` and serves the portal there.
+`dnsmasq` answers every DNS query with that address, which is what makes a phone
+offer its "sign in to network" sheet; there is no `iptables` on this image, so
+that wildcard is the entire redirect.
+
+The portal is on `:8080` in both modes. The admin password defaults to the last
+6 hex of the WiFi MAC and is shown on the panel while the board is unconfigured.
+
 ## Dashboard
 
 The `dashboard` service renders the UpNext display: it fetches iCal calendars

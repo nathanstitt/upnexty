@@ -30,6 +30,12 @@ start() {
 
 	ip link set wlan0 up
 
+	if grep -q 'ssid="SSID"' /etc/wpa_supplicant.conf 2>/dev/null; then
+		echo "no network configured"
+		start_ap
+		return 0
+	fi
+
 	if ! pidof wpa_supplicant >/dev/null 2>&1; then
 		wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf >/dev/null 2>&1
 	fi
@@ -49,7 +55,8 @@ start() {
 		echo "OK"
 	else
 		echo "FAIL (no lease)"
-		return 1
+		start_ap
+		return 0
 	fi
 
 	# Clock: try each host, stop at the first that answers.
@@ -59,6 +66,50 @@ start() {
 			break
 		fi
 	done
+}
+
+# start_ap raises the setup access point so the portal stays reachable when
+# there is no network to join. Named from the WiFi MAC's last two octets, so a
+# returning user sees the same name every time.
+start_ap() {
+	printf "Starting setup AP: "
+
+	mac=$(cat /sys/class/net/wlan0/address 2>/dev/null | tr -d ':' | tr 'A-Z' 'a-z')
+	if [ -n "$mac" ]; then
+		suffix=$(echo "$mac" | tail -c 5)
+		ssid="upnext-$suffix"
+	else
+		ssid="upnext-setup"
+	fi
+
+	killall wpa_supplicant 2>/dev/null
+
+	cat > /tmp/hostapd.conf <<EOF
+interface=wlan0
+driver=nl80211
+ssid=$ssid
+hw_mode=g
+channel=6
+auth_algs=1
+wmm_enabled=0
+EOF
+
+	# address=/#/ answers every DNS name with the portal's address. There is no
+	# iptables on this image, so that wildcard IS the captive-portal redirect.
+	cat > /tmp/dnsmasq-ap.conf <<EOF
+interface=wlan0
+bind-interfaces
+dhcp-range=192.168.4.10,192.168.4.100,12h
+address=/#/192.168.4.1
+no-resolv
+EOF
+
+	ip addr add 192.168.4.1/24 dev wlan0 2>/dev/null
+	ip link set wlan0 up
+	hostapd -B /tmp/hostapd.conf >/dev/null 2>&1
+	dnsmasq -C /tmp/dnsmasq-ap.conf >/dev/null 2>&1
+
+	echo "$ssid at 192.168.4.1"
 }
 
 stop() {
