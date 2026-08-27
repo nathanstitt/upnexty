@@ -172,6 +172,41 @@ func TestSaveCalendarsPreservesColorsOnDelete(t *testing.T) {
 	}
 }
 
+func TestSaveCalendarsNewFeedDoesNotDuplicateColor(t *testing.T) {
+	s := newTestServer(t)
+	s.Store.SetConfig(&config.Config{
+		Calendars: []config.CalendarSource{
+			{Name: "A", Color: "#4f9cff", URL: "https://example.com/a.ics"},
+			{Name: "B", Color: "#8b97ab", URL: "https://example.com/b.ics"},
+		},
+	})
+
+	// Delete A by clearing its row, and add a new feed D.
+	form := "name=&url=" +
+		"&name=B&url=" + "https://example.com/b.ics" +
+		"&name=D&url=" + "https://example.com/d.ics"
+	req := httptest.NewRequest("POST", "/save/calendars", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("admin", "4c1bfd")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", w.Code)
+	}
+	got := s.Store.Config().Calendars
+	if len(got) != 2 {
+		t.Fatalf("Calendars = %d entries, want 2: %+v", len(got), got)
+	}
+	seen := map[string]bool{}
+	for _, c := range got {
+		if seen[c.Color] {
+			t.Errorf("color %q used by more than one feed: %+v", c.Color, got)
+		}
+		seen[c.Color] = true
+	}
+}
+
 func TestSavePasswordDisablesMACDefault(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("POST", "/save/password", strings.NewReader("password=newpassword"))

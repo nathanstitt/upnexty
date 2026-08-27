@@ -130,6 +130,7 @@ func (s *Server) handleSaveCalendars(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var feeds []config.CalendarSource
+	taken := map[string]bool{}
 	for i := range urls {
 		u := strings.TrimSpace(urls[i])
 		if u == "" {
@@ -149,8 +150,9 @@ func (s *Server) handleSaveCalendars(w http.ResponseWriter, r *http.Request) {
 		}
 		color := prev[u]
 		if color == "" {
-			color = calendarColor(len(feeds))
+			color = nextColor(taken)
 		}
+		taken[color] = true
 		feeds = append(feeds, config.CalendarSource{
 			Name:  name,
 			Color: color,
@@ -224,13 +226,24 @@ func (s *Server) handleSaveWiFi(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// calendarColor assigns feed colours from the dashboard's palette in order, so
-// a user never has to pick a hex value. #ff7a59 (the alarm colour) is
-// deliberately excluded -- that hue is reserved for errors, and handing it to
-// an ordinary calendar feed would make routine events look like an alert.
-func calendarColor(i int) string {
-	palette := []string{"#4f9cff", "#8b97ab", "#e8ecf3"}
-	return palette[i%len(palette)]
+// calendarPalette assigns feed colours from the dashboard's palette, so a user
+// never has to pick a hex value. #ff7a59 (the alarm colour) is deliberately
+// excluded -- that hue is reserved for errors, and handing it to an ordinary
+// calendar feed would make routine events look like an alert.
+var calendarPalette = []string{"#4f9cff", "#8b97ab", "#e8ecf3"}
+
+// nextColor returns a palette colour not already in use. Colours carried
+// forward from the stored config are unknown to a positional index, so
+// assigning by position alone can hand a new feed the same colour as an
+// existing one -- which defeats the point of colouring feeds at all.
+func nextColor(taken map[string]bool) string {
+	for _, c := range calendarPalette {
+		if !taken[c] {
+			return c
+		}
+	}
+	// More feeds than colours: reuse in order rather than leaving one blank.
+	return calendarPalette[len(taken)%len(calendarPalette)]
 }
 
 // applyBrightness writes the panel's sysfs control. A failure is not fatal --
