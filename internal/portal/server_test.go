@@ -4,15 +4,49 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nathanstitt/luckfox-dashboard/internal/config"
 )
 
-type fakeStore struct{ c *config.Config }
+type fakeStore struct {
+	mu         sync.Mutex
+	c          *config.Config
+	configPath string
+}
 
-func (f *fakeStore) Config() *config.Config     { return f.c }
-func (f *fakeStore) SetConfig(c *config.Config) { f.c = c }
+func (f *fakeStore) Config() *config.Config {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.c
+}
+
+func (f *fakeStore) SetConfig(c *config.Config) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.c = c
+}
+
+// Update mirrors cmd/dashboard's Store.Update: hold the lock across
+// copy-mutate-save-install so tests exercising concurrent saves (e.g.
+// TestConcurrentSavesToDifferentSectionsBothSurvive) see the same
+// no-lost-update guarantee production gets.
+func (f *fakeStore) Update(fn func(*config.Config) error) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	next := *f.c
+	if err := fn(&next); err != nil {
+		return err
+	}
+	if f.configPath != "" {
+		if err := next.Save(f.configPath); err != nil {
+			return err
+		}
+	}
+	f.c = &next
+	return nil
+}
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
@@ -21,10 +55,11 @@ func newTestServer(t *testing.T) *Server {
 	b200 := 200
 	c.Display.Brightness = &b200
 	c.Calendars = []config.CalendarSource{{Name: "Work", Color: "#4f9cff", URL: "https://example.com/w.ics"}}
+	configPath := t.TempDir() + "/config.json"
 	return &Server{
-		Store:      &fakeStore{c: c},
+		Store:      &fakeStore{c: c, configPath: configPath},
 		MAC:        "54:01:4a:4c:1b:fd",
-		ConfigPath: t.TempDir() + "/config.json",
+		ConfigPath: configPath,
 	}
 }
 

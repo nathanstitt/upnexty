@@ -43,16 +43,16 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 // save persists a mutated copy and installs it. Never mutates the live config:
 // readers hold that pointer for a whole tick.
+//
+// Delegates the whole copy-mutate-save-install sequence to Store.Update so it
+// runs under a single lock -- two concurrent POSTs to different sections
+// (e.g. /save/wifi and /save/display) must not each read the same starting
+// config and have the second one overwrite the first's change wholesale, in
+// memory and on disk, while both requests see a 303 success.
 func (s *Server) save(mutate func(*config.Config) error) error {
-	cur := s.Store.Config()
-	next := *cur // shallow copy is enough; slices are replaced wholesale below
-	if err := mutate(&next); err != nil {
-		return err
-	}
-	if err := next.Save(s.ConfigPath); err != nil {
+	if err := s.Store.Update(mutate); err != nil {
 		return fmt.Errorf("could not save settings: %w", err)
 	}
-	s.Store.SetConfig(&next)
 	return nil
 }
 

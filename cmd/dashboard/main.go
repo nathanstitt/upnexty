@@ -72,8 +72,7 @@ func main() {
 			fbW, fbH, pageH, pageW, rotate)
 	}
 
-	store := &Store{}
-	store.SetConfig(cfg)
+	store := NewStore(cfg, *cfgPath)
 
 	// Created before the *once branch so both the single-frame path and the
 	// service loop can derive the setup hint from the same client. The

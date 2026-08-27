@@ -12,6 +12,16 @@ import (
 type ConfigStore interface {
 	Config() *config.Config
 	SetConfig(*config.Config)
+
+	// Update performs an atomic read-modify-write-save: fn receives a fresh
+	// copy of the current config, and if it returns nil the copy is
+	// persisted and installed as the new current config, all under one
+	// lock. save (in handlers.go) uses this instead of Config()+SetConfig()
+	// so two concurrent POSTs to different sections cannot each read the
+	// same starting config and have the second save silently discard the
+	// first's change -- see cmd/dashboard/loop.go's Store.Update for the
+	// full reasoning.
+	Update(fn func(*config.Config) error) error
 }
 
 // Server serves the configuration UI.

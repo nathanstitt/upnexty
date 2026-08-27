@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,6 +50,70 @@ func TestStoreConfigSnapshotIsStable(t *testing.T) {
 
 	if held.Location.Timezone != "UTC" {
 		t.Error("a held snapshot changed underneath the reader")
+	}
+}
+
+// TestConcurrentUpdatesToDifferentSectionsBothSurvive is the regression test
+// for the lost-update bug: two concurrent Update calls, each mutating a
+// different section of the config (WiFi SSID and display brightness), must
+// both land -- neither may silently overwrite the other's change, in memory
+// or on disk.
+//
+// This does NOT reduce to a data race: each goroutine mutates its own copy,
+// and every individual Store field access is correctly locked, so
+// `go test -race` is silent on the old, buggy Config()+SetConfig() sequence.
+// The bug is at the transaction level (read snapshot -> mutate -> write back
+// as three unsynchronized steps), which only shows up as a *lost update* --
+// so this test proves correctness by asserting the outcome (both writes
+// present after every iteration), not by asking the race detector.
+//
+// Looped many times with two goroutines released via a barrier (not a sleep)
+// so each iteration is a genuine interleaving race rather than one lucky
+// (or unlucky) ordering -- the finding's own reproduction needed 40 runs to
+// fail every time under the old code, so this test uses the same count.
+func TestConcurrentUpdatesToDifferentSectionsBothSurvive(t *testing.T) {
+	const iterations = 40
+
+	for i := 0; i < iterations; i++ {
+		cfg := &config.Config{}
+		b := 200
+		cfg.Display.Brightness = &b
+		cfg.WiFi.SSID = "OldNetwork"
+
+		store := NewStore(cfg, filepath.Join(t.TempDir(), "config.json"))
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = store.Update(func(c *config.Config) error {
+				c.WiFi.SSID = "NewNetwork"
+				return nil
+			})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			v := 42
+			_ = store.Update(func(c *config.Config) error {
+				c.Display.Brightness = &v
+				return nil
+			})
+		}()
+
+		close(start) // release both goroutines at once to force contention
+		wg.Wait()
+
+		got := store.Config()
+		if got.WiFi.SSID != "NewNetwork" {
+			t.Fatalf("iteration %d: WiFi.SSID = %q, want %q (lost update)", i, got.WiFi.SSID, "NewNetwork")
+		}
+		if got.BrightnessValue() != 42 {
+			t.Fatalf("iteration %d: BrightnessValue() = %d, want 42 (lost update)", i, got.BrightnessValue())
+		}
 	}
 }
 
