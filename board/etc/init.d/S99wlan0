@@ -117,7 +117,13 @@ EOF
 	if ! hostapd -B /tmp/hostapd.conf >/dev/null 2>&1; then
 		echo "FAIL (hostapd did not start) -- restoring STA"
 		ip addr del 192.168.4.1/24 dev wlan0 2>/dev/null
-		wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf >/dev/null 2>&1
+		# Guarded the same way start() launches it -- killall ran just above so
+		# this is normally a no-op check, but a call site that reaches start_ap
+		# without having just killed the supplicant (e.g. a manual invocation)
+		# must not end up with two supplicants fighting over wlan0.
+		if ! pidof wpa_supplicant >/dev/null 2>&1; then
+			wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf >/dev/null 2>&1
+		fi
 		return 1
 	fi
 
@@ -131,6 +137,17 @@ EOF
 stop() {
 	printf "Stopping wlan0: "
 	killall wpa_supplicant 2>/dev/null
+	# Also tear down AP mode, in case start_ap raised one -- otherwise a
+	# restart leaves hostapd/dnsmasq bound to wlan0 while start() tries to
+	# associate against an interface AP mode still owns, which reaches the
+	# same neither-STA-nor-AP state this task exists to prevent. killall
+	# dnsmasq is safe unconditionally: the board's own S80dnsmasq instance
+	# runs against an empty /etc/dnsmasq.conf and exits immediately, so there
+	# is nothing long-running for this to disturb (see internal/wifi/ap.go's
+	# StopAP, which this mirrors).
+	killall hostapd 2>/dev/null
+	killall dnsmasq 2>/dev/null
+	ip addr del 192.168.4.1/24 dev wlan0 2>/dev/null
 	ip link set wlan0 down 2>/dev/null
 	echo "OK"
 }
