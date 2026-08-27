@@ -37,10 +37,11 @@ var (
 	minBlockPx = 4.0 // visibility floor, not a layout min-width
 )
 
-// SetupHint is shown on the panel while the board has no network configured.
-// It carries the setup AP's name and the admin password so first-run needs no
-// documentation -- the screen is otherwise blank at that point. Anyone who can
-// see the panel learns the password; that trade is accepted for a home display.
+// SetupHint is shown on the panel while the board is not associated with a
+// network -- which covers a fresh board, but also wrong credentials, a router
+// that went away, and a move out of range. It carries the setup AP's name and
+// the admin password so first-run needs no documentation. Anyone who can see
+// the panel learns the password; that trade is accepted for a home display.
 type SetupHint struct {
 	APName   string
 	Password string
@@ -77,11 +78,11 @@ type ViewModel struct {
 	Stale  bool
 	Errors []string
 
-	// Setup is non-nil only while the board has no network configured, and
-	// carries the setup AP name and admin password so first-run needs no
+	// Setup is non-nil only while the board is not associated with a network,
+	// and carries the setup AP name and admin password so first-run needs no
 	// documentation. Callers must compute it themselves (see cmd/dashboard's
-	// setupHint) -- Build must not reach into wifi/portal to derive it, so the
-	// template stays independent of whether those packages are reachable.
+	// setupHintTracker) -- Build must not reach into wifi/portal to derive it,
+	// so the template stays independent of whether those packages are reachable.
 	Setup *SetupHint
 }
 
