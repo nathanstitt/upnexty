@@ -23,15 +23,45 @@ func TestApplyStartupBrightnessWritesValue(t *testing.T) {
 	}
 }
 
-func TestApplyStartupBrightnessSkipsNonPositive(t *testing.T) {
-	// BrightnessValue() returns 0 for an explicit 0; nothing to write, and the
-	// path need not even exist for this to succeed.
-	path := filepath.Join(t.TempDir(), "does-not-matter")
+func TestApplyStartupBrightnessWritesExplicitZero(t *testing.T) {
+	// An explicit 0 means "deliberately off" (see config.Config.Display.
+	// Brightness's *int) and must survive a reboot exactly like any other
+	// value -- it must be written, not skipped.
+	path := filepath.Join(t.TempDir(), "brightness")
 	if err := applyStartupBrightness(path, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("expected no file to be written for v=0, stat err = %v", err)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "0" {
+		t.Errorf("brightness file = %q, want 0", b)
+	}
+}
+
+func TestApplyStartupBrightnessClampsOutOfRange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "brightness")
+	if err := applyStartupBrightness(path, 999); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "255" {
+		t.Errorf("brightness file = %q, want clamped 255", b)
+	}
+
+	if err := applyStartupBrightness(path, -5); err != nil {
+		t.Fatal(err)
+	}
+	b, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "0" {
+		t.Errorf("brightness file = %q, want clamped 0", b)
 	}
 }
 

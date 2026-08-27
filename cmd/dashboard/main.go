@@ -91,7 +91,9 @@ func main() {
 	}
 
 	// The panel keeps whatever brightness it had; apply the configured value so
-	// a reboot honours it. Applying it again on later config changes is the
+	// a reboot honours it -- including an explicit 0, which the settings page
+	// documents as "turns the panel off" and which must survive a reboot just
+	// like any other value. Applying it again on later config changes is the
 	// portal's job (see internal/portal/handlers.go's applyBrightness), not
 	// this startup path's.
 	if err := applyStartupBrightness(brightnessPath, cfg.BrightnessValue()); err != nil {
@@ -128,12 +130,21 @@ func main() {
 // applyStartupBrightness writes v to the panel's sysfs backlight control once
 // at process start. path is a parameter (rather than the brightnessPath
 // constant used directly) so a test can point it at a temp file instead of
-// real hardware. A non-positive v is left alone -- BrightnessValue() only
-// returns <=0 for an explicit 0, which the panel already treats as "off" by
-// default, so there is nothing useful to write.
+// real hardware.
+//
+// 0 is a valid, deliberate value -- the settings page documents it as "turns
+// the panel off" (config.Config.Display.Brightness is a *int specifically so
+// nil-vs-0 is distinguishable) -- so it must be written like any other value,
+// not skipped. Only a value outside the sysfs range (0-255) is invalid; those
+// are clamped rather than skipped or rejected, matching config.Config's own
+// normalization of a stored out-of-range value (see internal/config/config.go),
+// so startup and the portal's save path agree on what an out-of-range value
+// means instead of one silently no-op'ing while the other clamps.
 func applyStartupBrightness(path string, v int) error {
-	if v <= 0 {
-		return nil
+	if v < 0 {
+		v = 0
+	} else if v > 255 {
+		v = 255
 	}
 	return os.WriteFile(path, []byte(strconv.Itoa(v)), 0o644)
 }
