@@ -71,6 +71,11 @@ start() {
 # start_ap raises the setup access point so the portal stays reachable when
 # there is no network to join. Named from the WiFi MAC's last two octets, so a
 # returning user sees the same name every time.
+#
+# STA is not torn down until hostapd is confirmed running -- if hostapd never
+# comes up (missing binary, driver refuses AP mode, rejected config), the
+# board must not be left with neither STA nor AP: that is the exact failure
+# that stranded this board once already and needed a physical power cycle.
 start_ap() {
 	printf "Starting setup AP: "
 
@@ -81,8 +86,6 @@ start_ap() {
 	else
 		ssid="upnext-setup"
 	fi
-
-	killall wpa_supplicant 2>/dev/null
 
 	cat > /tmp/hostapd.conf <<EOF
 interface=wlan0
@@ -106,10 +109,23 @@ EOF
 
 	ip addr add 192.168.4.1/24 dev wlan0 2>/dev/null
 	ip link set wlan0 up
-	hostapd -B /tmp/hostapd.conf >/dev/null 2>&1
-	dnsmasq -C /tmp/dnsmasq-ap.conf >/dev/null 2>&1
 
-	echo "$ssid at 192.168.4.1"
+	# Only kill the supplicant once we are about to attempt hostapd -- up to
+	# this point STA is still the fallback if something below goes wrong.
+	killall wpa_supplicant 2>/dev/null
+
+	if ! hostapd -B /tmp/hostapd.conf >/dev/null 2>&1; then
+		echo "FAIL (hostapd did not start) -- restoring STA"
+		ip addr del 192.168.4.1/24 dev wlan0 2>/dev/null
+		wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf >/dev/null 2>&1
+		return 1
+	fi
+
+	if dnsmasq -C /tmp/dnsmasq-ap.conf >/dev/null 2>&1; then
+		echo "$ssid at 192.168.4.1"
+	else
+		echo "$ssid at 192.168.4.1 -- dnsmasq FAILED (no DHCP/DNS redirect)"
+	fi
 }
 
 stop() {
