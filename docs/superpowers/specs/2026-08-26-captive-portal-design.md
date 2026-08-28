@@ -1,6 +1,7 @@
 # Captive portal — Design
 
-**Status:** proposed, not yet implemented
+**Status:** implemented and verified on hardware 2026-08-27 (merged in `8084d73`).
+Remaining follow-ups are tracked in `docs/TODO.md`, not here.
 **Date:** 2026-08-26
 
 Configure the dashboard from a phone. When WiFi is down the board raises its own

@@ -1,6 +1,7 @@
 # UpNext on the Luckfox Lyra Zero W — Design
 
-**Status:** approved design, not yet implemented
+**Status:** implemented; the dashboard runs on the board as the `S99zdashboard`
+service. Known gaps are tracked in `docs/TODO.md`.
 **Date:** 2026-08-25
 
 Port the `pi-dashboard` display to the Luckfox Lyra Zero W: a Go service that

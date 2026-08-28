@@ -287,6 +287,11 @@ Measured on the board: **~1.05–1.18s per frame**, ~167MB RSS at the peak of a
 render, settling to **~46MB between renders**. The loop wakes on the minute
 boundary; verified re-rendering on rollover.
 
+Those figures predate the portal. With it running in the same process, idle RSS
+measured 33–38MB across two observations on 2026-08-27 (354MB free), so the
+portal costs nothing meaningful at rest — but the per-frame and peak numbers
+have not been re-measured since.
+
 **`WithPageSize(1920, 480)` is required.** doctaculous defaults to a 1280px
 layout viewport, and its fit-within sizing preserves aspect ratio — so without
 it the page renders 1280×480 and is pillarboxed with white.
@@ -299,10 +304,17 @@ go run ./tools/fb2png /tmp/fb.raw /tmp/panel.png 480 1920 unrotate
 ```
 
 **Some of the design does not render yet.** doctaculous does not implement
-inline `<svg>`, `var()`, alpha colors, and several other features, so the
-weather icons are invisible and the dark theme renders black-on-white. These
-are being fixed upstream, not worked around here — see
-`docs/doctaculous-gaps.md` for the list, each with an isolated repro.
+`var()`, alpha colors, `border-radius`, `letter-spacing`, or `overflow-wrap`,
+so **the dark theme renders black-on-white** — `var()` drops the declaration
+entirely rather than falling back, and the palette is defined once in `:root`.
+These are being fixed upstream, not worked around here — see
+`docs/doctaculous-gaps.md` for the list, each with a repro and a pixel-count
+measurement. Inline `<svg>` was the worst of these and is now fixed upstream,
+so the weather icons render.
+
+**`docs/TODO.md` is the running list** of what is left before the display is
+finished — engine gaps, unfinished verification, and deferred findings, ranked.
+Start there rather than re-deriving it.
 
 A browser preview cannot find these (browsers implement them all); only
 rasterizing through doctaculous can. And some bugs only appear on the panel —
