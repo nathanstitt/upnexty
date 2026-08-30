@@ -1,264 +1,262 @@
 # doctaculous gaps found while building the Luckfox dashboard
 
-> **Re-tested 2026-08-27 against doctaculous `957c9e1`**, by rasterizing each
-> case and counting painted pixels rather than eyeballing output.
+> **Re-verified 2026-08-29 against doctaculous `15ea0c4`.** Every finding here
+> is a measurement: rasterize the case and sample pixels of a *specific colour*.
+> That method matters — an earlier probe counted "any non-background pixel" and
+> reported success on a case that was painting black.
 >
-> | Gap | Status | Evidence |
-> |---|---|---|
-> | §0 inline `<svg>` | **FIXED** | empty svg paints 0, `<circle r=35>` paints 3924, `<rect>` fills 6400 — subtree renders with correct geometry |
-> | §1 `var()` | broken | `background:var(--c)` paints **0** where `background:black` paints 6400 |
-> | §2 alpha | broken | same: `rgba(…,0.9)` and `#000000e6` each paint 0 |
-> | §3 `linear-gradient` | broken | paints 0 |
-> | §4 `border-radius` | broken | 80×80 box, `border-radius:40px` paints 6400 — identical to the square box, so corners are not rounded (a circle would be ~5024) |
-> | §5 `box-shadow` | broken | paints 0 |
-> | §6 `letter-spacing` | broken in CSS | glyph run paints 321px with and without it — byte-identical |
-> | §8 `overflow-wrap` | broken | identical output with and without; no mid-word break |
->
-> **§0 is the only one fixed since this file was written.** Weather icons now
-> render on the panel.
->
-> Two failure modes are worth distinguishing, because they point at different
-> parts of the pipeline:
->
-> - **Element absent** (§1, §2, §3, §5) — nothing is painted at all. Not a
->   wrong color: zero pixels where a literal paints the full box.
-> - **Declaration ignored** (§4, §6, §8) — the element paints correctly, but
->   the property has no effect on geometry.
->
-> Reproduce with the probe harness described under *Testing method* below.
+> **Corrected 2026-08-29 after re-measuring upstream.** Finding 12 does not
+> reproduce, finding 8's symptom was misdiagnosed (the container was short; no
+> content was lost), and finding 3's "silently substitutes" claim was wrong —
+> the fallback logs. Colour-specific sampling was still not enough: it answers
+> "does the page look right", not "is this box the size CSS says". See
+> "Testing method".
 
-Six CSS features, one API issue (context cancellation, §7), and a font-fallback
-failure mode (§9). §9 was found on real hardware; the rest by rasterizing on the
-host.
+Most of what this document used to list has been **fixed upstream**. One live
+engine issue remains, plus one enhancement that is working as designed; the rest
+is kept as a short history at the bottom so a returning reader knows which
+workarounds were removed and why.
 
-Found while rendering `internal/view/assets/style.css` (a 1920×480 dark-theme
-dashboard) through `doctaculous.OpenHTMLBytes` + `RasterizePage`. Every item
-below was isolated in a minimal page and confirmed against the engine source.
+| # | Finding | Effect | State |
+|---|---|---|---|
+| 14 | `writing-mode` ignored | vertical text lays out horizontally | **open** |
+| 3 | `sysfont` matches a registry, not the disk | installed font never found | open (by design) |
+| 8 | flex container height omits child margins | following content clipped | **fixed** ([#143]) |
+| 12 | absolutely positioned box never shrink-wraps | — | **not reproducible** |
 
-**These are not worked around in this repo.** The dashboard's stylesheet is
-written as correct CSS; it will render properly once these land.
+[#143]: https://github.com/nathanstitt/doctaculous/pull/143
 
-Testing method — a browser preview cannot find these, because browsers
-implement all of them. Only rasterizing through doctaculous shows the gap.
+Runnable cases for each are in `engine-probes/`.
 
-Counting painted pixels beats looking at the image: it distinguishes "element
-absent" from "declaration ignored," and it caught one wrong conclusion in an
-earlier revision of this file (a `border-radius` box *painted*, which looked
-like success until the count showed the corners were still square).
+---
+
+## 8. A flex container's height omits its children's margins — FIXED
+
+**Fixed upstream in [#143]**, which lands the one-line omission behind this: the
+branch of `layoutFlex` that content-sizes a line when the main size is
+*indefinite* summed each item's border box instead of its margin box. Every
+other site — line packing, free-space distribution, cross sizing, stretch —
+already used outer sizes; this one was missed by `fb5d58c`.
+
+Only auto-height containers were affected. A container with an explicit `height`
+takes a different branch and was always correct, which is why the bug survived
+upstream's own showcase (its column demo states `height: 110px`).
+
+The analysis below was correct and is kept for the record.
+
+`fb5d58c "css: honor margins on flex children"` made the
+margin affect *layout* — children are now placed correctly — but the container
+does not count the margin in its own measured height. It reports the unmargined
+total, so whatever follows is laid out overlapping the column's real content and
+is clipped away.
+
+Three 20px boxes in a `flex-direction: column`, the middle carrying
+`margin-top: 40px`, followed by a marker element:
+
+| | Correct | Actual |
+|---|---|---|
+| box 1 | 0–19 | 0–19 ✓ |
+| box 2 (margined) | 60–79 | 60–79 ✓ |
+| box 3 | 80–99 | 80–99 ✓ |
+| column height | 100px | **60px** |
+| marker after the column | 100–119 | **never painted** |
+| document height | 120px | **80px** |
+
+So the children land where they should — the earlier reading of this as "boxes
+disappear" was an artifact of the page being cropped to the under-reported
+height. The visible damage is to anything *after* the container.
+
+A plain block parent is the control and measures 100px correctly, so this was
+specific to flex.
+
+One correction to the note above: cross-axis margins are **not** ignored.
+`margin-left` on a child of a column applies, and the line grows to hold the
+margin box — upstream has had a test pinning this since `fb5d58c`
+(`TestFlexChildMarginsApply`). Only the container's *height* was wrong, and only
+on the main axis, which is why a cross margin looked unaffected: it never
+contributed to the height in the first place.
+
+**Workaround (no longer needed):** `padding` was used for spacing inside a flex
+container, since it is counted in both contexts. Note it changes what a
+background paints over, so reverting it is not a blind substitution on elements
+that have one.
+
+`.nb-lead`, `.nb-free`, `.nb-next*` and `#agenda-row` all use padding for this
+reason and can move back to margins once the engine bump lands. Negative margins
+and `transform` on a flex child work correctly — the agenda's pre-scroll uses
+`transform: translateX()`.
+
+Repro: `engine-probes/08b-margin-flex-child.html`.
+
+---
+
+## 12. An absolutely positioned box never shrink-wraps — NOT REPRODUCIBLE
+
+**This does not reproduce against `15ea0c4`.** Re-measured, every case is
+correct — the badge hugs its text, and `width` is honoured exactly:
+
+| Badge style | Reported | Re-measured |
+|---|---|---|
+| `left: 110px` | 110 → 201 (stretched) | 110 → 168 (**width 59, hugs text**) |
+| `right: 0` | 104 → 201 (stretched) | 137 → 195 (**width 59, right-anchored**) |
+| `left: 110px; width: 76px` | width ignored | 110 → 185 (**width 76, exact**) |
+| `display: inline-block` | 0 → 91 | 0 → 58 (agrees with the positioned cases) |
+
+`ccd6dd2` fixed this — the same commit already credited below for findings 9,
+10, 10b and 11. `absShrinkToFitWidth` (`pkg/layout/css/block.go`) implements
+CSS 10.3.7. This entry was simply not re-checked when the others were.
+
+**The flex-child half does not reproduce either.** A "Company Holiday" pill in a
+flex row measures 94px of painted background, and its glyph coverage is
+byte-identical to the same pill as an `inline-block` — so no glyph is cut. The
+reported 85px content box and the "Company Holida" truncation are not present.
+
+**Consequence for this repo:** the `inline-block` workaround can be reverted.
+It was the more costly of the two, because an `inline-block` badge is not
+positioned and had to be moved into normal flow — it can go back to being
+pinned to the card corner with `position: absolute`.
+
+---
+
+## 14. `writing-mode` is ignored
+
+`writing-mode: vertical-rl` lays out identically to horizontal text — a probe
+measured the same 225x32 box either way. The reference's vertical NOW label is
+built instead from one `<span>` per letter, each a block of fixed height.
+
+---
+
+## 3. `sysfont`'s registry lacks most families
+
+Installing a font on the board does **not** make it available, in any directory.
+
+doctaculous resolves OS fonts through `adrg/sysfont`, which matches against a
+hardcoded registry (`fonts.go`) rather than scanning what is on disk. That
+registry has 32 DejaVu entries and **zero** for Roboto, Barlow Condensed, or IBM
+Plex Mono. An unregistered family is never found, whatever directory it is in.
+
+Confirmed: the fonts were installed to `/usr/share/fonts/upnext/` — the real
+`xdg.FontDirs` path, alongside the DejaVu that does resolve — and still rendered
+as DejaVu. Even `font-family: 'DejaVu Sans Condensed'`, a face the board
+genuinely ships, did not resolve distinctly.
+
+**Correction: it does not "silently substitute".** This entry previously said an
+unregistered family silently resolves to DejaVu. Reading upstream
+(`pkg/layout/font/osfont.go`), `LoadStyled` decodes whatever sysfont returns,
+compares the font's *declared* family against the request, and rejects a
+mismatch — logging `osfont: %q resolved to %q (%s); rejecting mismatch, falling
+back` before falling through to the bundled face. The logger is wired on both
+the HTML and PDF paths, so the fallback is reported, not silent.
+
+That check is there for exactly the reason this entry assumed was unhandled:
+`sysfont.Match` never reports a miss, and returns "a suitable default" for an
+unknown family. Upstream's own comment calls the check load-bearing and records
+the measurements behind it (a request for `"ZZZZ Totally Fake 12345"` returned
+Arial Unicode MS — the same bytes returned for Roboto and IBM Plex Mono).
+
+So the real gap is narrower than stated: not wrong-font substitution, but that
+sysfont cannot *find* an installed font it has no registry entry for. Scanning
+the font directories would make `@font-face` a choice rather than the only
+route. The fallback behaviour itself is correct.
+
+**Workaround:** `@font-face` with `url()`, served through `WithResourceLoader`.
+
+```css
+@font-face { font-family: 'Barlow Condensed'; font-weight: 600;
+  src: url('fonts/BarlowCondensed-SemiBold.ttf') format('truetype'); }
+```
+
+`internal/view.FontLoader` serves these from the embedded asset FS, so the
+typefaces ship inside the binary (~1.1MB for 10 faces) and there is nothing to
+deploy or lose. Verified on the panel: Barlow renders genuinely condensed, Plex
+as true monospace, Roboto Bold correctly.
+
+If you add faces: Google's per-weight TTFs declare their own family names —
+`BarlowCondensed-SemiBold.ttf` declares family "Barlow Condensed SemiBold", not
+"Barlow Condensed" weight 600. Only Regular and Bold declare the base family.
+With `@font-face` this does not matter, because the `font-family` in the rule is
+what the document sees; it only breaks OS-level resolution.
+
+---
+
+## Fixed upstream
+
+These were all live against `fb42ebe` and are fixed as of `15ea0c4`. Each was
+re-verified by re-running its probe, and the workaround has been removed from
+this repo. Listed so the removals are traceable.
+
+| # | Finding | Fixed by |
+|---|---|---|
+| 1 | `font-family` must end in a generic keyword | `c1741b3` font substitution |
+| 2 | CSS does not cascade into inline `<svg>` | `0d0eb3f` |
+| 2b | SVG presentation attributes do not inherit to children | `0465a9c` |
+| 4 | `max-height` / `overflow:clip` do not clip | `117534f` |
+| 5 | `-webkit-line-clamp` unimplemented | `7927202` |
+| 6 | `color-mix()` unimplemented | `3bc10c3` |
+| 7 | `line-height` ignored | `7999a8f` |
+| 9 | `z-index` does not order positioned siblings | `ccd6dd2` |
+| 10 | `top`+`bottom` does not size a box | `ccd6dd2` |
+| 10b | `left` ignored on an absolute child of a flex box | `ccd6dd2` |
+| 11 | a flex-derived height blocks `justify-content` | `ccd6dd2` |
+| 12 | absolutely positioned / flex box never shrink-wraps | `ccd6dd2` (missed in the last pass) |
+| 13 | comma-separated `background` list dropped | `5d311b5` |
+| 8 | auto-height flex column omits child margins | [#143] |
+
+Removing those workarounds took out roughly 200 lines: the whole of
+`internal/view/textfit.go` (which measured glyph advances from the embedded TTFs
+to truncate titles in Go, because CSS could not), the per-line box heights
+throughout `style.css`, the stated card and stack heights in
+`internal/model/agenda.go`, and the spacer-width scheme that stood in for the
+agenda's scroll offset.
+
+## Testing method
+
+The probe for each gap below is checked in under `engine-probes/`, one file per
+entry, named for the gap it demonstrates. Re-run them before trusting this
+document if the engine has moved on — see that directory's README.
+
+A browser preview cannot find any of this — browsers implement it all. Only
+rasterizing through doctaculous shows the gap, and only a colour-specific count
+distinguishes "painted correctly" from "painted black".
+
+**Measure the box you are making a claim about.** Sampling page pixels is
+necessary but not sufficient, and it is what produced the two wrong findings
+corrected in this revision:
+
+- Finding 8 was reported as "the element and everything after it stop painting".
+  Every element painted. The container was the wrong size, and a parent block
+  grew around the overflowing child, so the *page* looked plausible while the
+  flex container itself was 40px short. A red-pixel count over the page cannot
+  see that; asserting on the container's own height can, which is what the
+  upstream regression test now does.
+- Finding 12 reported a stretched badge. Re-measuring the badge's own painted
+  span showed 59px, hugging its text, in every variant.
+
+A page-level probe answers "does this look right", which is a different question
+from "is this box the size CSS says it should be". When the claim is about a
+specific box, assert on that box: query the layout, or measure the span of that
+element's own background colour, rather than counting pixels page-wide.
 
 ```go
 import "github.com/nathanstitt/doctaculous/pkg/doctaculous"
 
-// nonWhite counts pixels that are not the white background.
-func nonWhite(img image.Image) int {
-    b, n := img.Bounds(), 0
-    for y := b.Min.Y; y < b.Max.Y; y++ {
-        for x := b.Min.X; x < b.Max.X; x++ {
-            if r, g, bl, _ := img.At(x, y).RGBA(); r>>8 < 250 || g>>8 < 250 || bl>>8 < 250 {
-                n++
-            }
-        }
-    }
-    return n
-}
-
-func render(html string) (int, error) {
-    doc, err := doctaculous.OpenHTMLBytes([]byte(html), doctaculous.WithPageSize(400, 200))
-    if err != nil {
-        return 0, err
-    }
+// Sample the centre pixel: coverage counts hide a wrong-colour paint.
+func centre(html string) string {
+    doc, _ := doctaculous.OpenHTMLBytes([]byte(html), doctaculous.WithPageSize(400, 200))
     img, err := doc.RasterizePage(context.Background(), 0, doctaculous.RasterOptions{
         MaxWidthPx: 400, MaxHeightPx: 200, Background: color.White})
     if err != nil {
-        return 0, err
+        return "err"
     }
-    return nonWhite(img), nil
+    r, g, b, _ := img.At(100, 50).RGBA()
+    return fmt.Sprintf("rgb(%d,%d,%d)", r>>8, g>>8, b>>8)
 }
 ```
 
-Compare each case against a reference: `<div style="width:80px;height:80px;
-background:black">` paints 6400. Anything that should paint and returns 0 is
-absent; anything that returns exactly 6400 when it should differ is ignored.
+Render against the real `#07080d` background, not white: a faint white-alpha
+gradient is invisible on white and reads as a false "paints 0". That produced a
+wrong `linear-gradient` finding in an earlier revision of this file.
 
-## 0. Inline `<svg>` — FIXED, no action needed
-
-**Resolved upstream as of `957c9e1`.** Recorded here because it was this
-project's highest-impact gap and the note may still be circulating.
-
-Inline `<svg>` now produces a box and paints its subtree with correct geometry.
-Verified: an empty `<svg width=80 height=80>` paints 0 pixels; the same element
-containing `<circle cx=40 cy=40 r=35>` paints 3924 (right for that radius); with
-`<rect width=80 height=80>` it fills 6400. Weather icons render on the panel.
-
-The original diagnosis was that `pkg/svg` already existed and only the HTML
-frontend wiring was missing — that appears to be what landed.
-
-## 1. CSS custom properties — `var()`
-
-`var(--x)` silently resolves to nothing and the declaration is dropped. No
-`var()` or custom-property handling exists in `pkg/css`, and the feature is
-absent from `FEATURES.md`.
-
-```css
-:root { --bg: #0b0d12; --fg: #4f9cff; }
-.a { background: var(--bg); color: var(--fg); }   /* paints nothing at all */
-.b { background: #0b0d12;   color: #4f9cff;   }   /* renders correctly */
-```
-
-The declaration is **dropped, not defaulted** — measured 2026-08-27: an 80×80
-box with `background: var(--c)` paints **0** non-white pixels, where the same
-box with `background: black` paints 6400. Nothing is drawn where the element
-should be.
-
-Impact here: the dashboard's entire dark theme disappeared — black text on a
-white background — because the palette is defined once in `:root` and
-referenced 18 times in `internal/view/assets/style.css` (and 20 more in
-`internal/portal/assets/portal.css`). The layout was correct; only color was
-lost.
-
-Silent failure is the worst part: no warning, and the page still renders, so
-it looks like a styling mistake rather than an unimplemented feature.
-
-## 2. Alpha in color values — `rgba()` and `#RRGGBBAA`
-
-Alpha-bearing color values render as fully transparent (nothing painted).
-Notably this is specifically about *alpha*, not the color functions:
-
-| Value | Result |
-|---|---|
-| `rgb(79,156,255)` | renders solid blue |
-| `rgba(79,156,255,0.35)` | renders nothing |
-| `#4f9cff59` | renders nothing |
-
-**A complete parser already exists in the SVG path.** `pkg/svg/color.go` parses
-the full CSS Color 4 named table, `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa`, and
-`rgb()`/`rgba()`/`hsl()`/`hsla()` — including alpha. The CSS path does not reach
-it. That makes this look like a wiring job rather than new parsing work.
-
-Impact here: all-day event pills and the precipitation bars under the
-temperature curve are tinted with alpha and vanish entirely.
-
-## 3. `linear-gradient()`
-
-Renders nothing — paints 0 pixels.
-
-It is **explicitly rejected, not silently dropped**: `pkg/css/background.go:143`
-treats `linear-gradient(...)` as an unsupported `<image>` and returns `ok=false`.
-So the engine knows it cannot handle this; there is simply no gradient painter
-on the CSS background path. (`pkg/render/raster/shading.go` has an axial shader
-for SVG gradients, which may be reusable.)
-
-## 4. `border-radius`
-
-Ignored — corners render square. Not found anywhere in `pkg/css` or
-`pkg/layout` (0 non-test hits).
-
-Verified by pixel count rather than by eye: an 80×80 black box paints 6400
-pixels with and without `border-radius:40px`. A 40px radius on that box should
-produce a circle of roughly 5024 pixels, so the identical count shows the
-corners are untouched. Cosmetic, but it is what makes event blocks read as
-cards.
-
-## 5. `box-shadow` (including `inset`)
-
-Ignored. Not found in `pkg/css` or `pkg/layout`. The dashboard uses
-`inset 3px 0 0 <color>` as a calendar-color spine on all-day pills; the
-`border-left` fallback works, so this one is lowest priority.
-
-## 6. `letter-spacing` — implemented in SVG, absent in CSS
-
-Ignored on the CSS path: `III` at 30px paints 321 pixels with and without
-`letter-spacing:20px` — byte-identical, so glyph advance is unchanged.
-
-**But it already works in SVG.** `pkg/svg/style.go:156` resolves
-`letterSpacingPt`/`wordSpacingPt`, and a comment there notes that after that
-change "letter-spacing works in SVG and silently does nothing" elsewhere. So
-the property is understood by the engine; the CSS/layout text path just does
-not consult it.
-
-Used on small uppercase labels (`NEXT`, `NOW`, weekday headers, and the panel's
-`SET ME UP`), where tracking matters for legibility at a distance.
-
-## 7. Context cancellation is a no-op on the HTML path (API, not CSS)
-
-A hung or slow HTML render cannot be cancelled. Both halves of the pipeline
-drop the context:
-
-```go
-// pkg/doctaculous/html_backend.go:248 — no ctx parameter at all
-func OpenHTMLBytes(data []byte, opts ...HTMLOption) (*Document, error)
-
-// pkg/doctaculous/reflow_backend.go:155 — ctx accepted then discarded
-func (r *reflowRenderer) renderPage(_ context.Context, index int, opts RasterOptions) (image.Image, error)
-```
-
-`Document.RasterizePage` does thread its `ctx` down to `renderPage`, so the
-call *looks* cancellable, but the underscore parameter means it is never
-consulted. Parse and layout run under `context.Background()` regardless.
-
-Impact here: the dashboard renders on a timer, forever, on a board with three
-slow cores. A pathological document that sends layout into a very long loop
-would wedge the render goroutine with no way to time it out — the caller can
-only abandon it, not stop it. The work keeps consuming a core.
-
-`OpenReader(ctx, ...)` accepts a context for the open phase, so that half has
-a path forward; `renderPage` honouring its ctx (checking it between pages, or
-between layout passes) would close the rest.
-
-## 8. `overflow-wrap` / `word-break` — no mid-word breaking
-
-Neither property exists in `pkg/css` or `pkg/layout`. Line breaking is
-whitespace-only (`pkg/layout/inline/break.go`): a token with no break
-opportunity keeps filling past its box rather than breaking mid-word.
-
-`max-width` IS honoured (verified — `resolveContentWidth` and `clampMaxMin`
-in `pkg/layout/css/block.go:1148,1219` apply it, including to
-absolutely-positioned boxes), so the box is constrained; the
-text simply overflows it.
-
-Impact here: the error line renders a fetch failure like
-`ical(Personal): GET https://…very-long-url…: 401 Unauthorized`. That is one
-unbroken token, so on a long URL it runs past its 460px box and off the right
-edge of the panel. `overflow: visible` is the default and is honoured, so
-nothing clips it. Cosmetic — the surrounding layout is unaffected because the
-box is out-of-flow — but the diagnostic becomes unreadable exactly when it
-matters.
-
-## 9. Missing glyphs render as nothing, with no fallback or warning
-
-Not strictly an engine defect — the board genuinely has no emoji font (DejaVu
-and Liberation only) — but the *failure mode* is worth fixing. A character with
-no glyph in any available font renders as empty space: no tofu box, no
-`.notdef`, no warning.
-
-Measured on the board with the 9 weather emoji the previous Pi dashboard used:
-3 rendered (☀ ☁ ❄, as monochrome DejaVu glyphs) and 6 rendered as nothing.
-
-Because some rendered and some didn't, the result reads as a layout gap rather
-than a font problem — the hardest kind of bug to spot. Drawing `.notdef` (or
-logging once per missing glyph) would turn a silent hole into an obvious one.
-
-## Confirmed working
-
-No action needed on these; recording them so the gaps above are unambiguous.
-
-`display:flex` with `justify-content` · `display:grid` with
-`grid-template-columns` · `position:absolute` inside `position:relative` ·
-`border-left` and solid borders · `background`/`color` with literal hex and
-`rgb()` · `text-transform:uppercase` · `opacity` on an element ·
-`font-weight` · `white-space:nowrap` with `overflow:hidden` ·
-`max-width` including on absolutely-positioned boxes ·
-`@font-face`-free system font selection · **inline `<svg>`** (§0 — fixed
-upstream; the dashboard embeds `<svg>` directly and it rasterizes correctly).
-
-## Suggested priority
-
-1. **`var()`** (§1) — blocks any stylesheet using a palette, which is most modern CSS. On this project it is the difference between the intended dark theme and black-on-white.
-2. **alpha colors** (§2) — silently drops UI elements; the failure looks like a bug in the page. `pkg/svg/color.go` already parses alpha, so this may be wiring rather than new work.
-3. **missing-glyph fallback** (§9) — a `.notdef` box would make font gaps visible instead of silent.
-4. **context cancellation** (§7) — correctness/robustness rather than appearance; matters for any long-running renderer.
-5. **`linear-gradient`** (§3) — explicitly rejected today, and `pkg/render/raster/shading.go` has an axial shader that may be reusable.
-6. **`border-radius`**, **`letter-spacing`**, **`overflow-wrap`** — visual polish. `letter-spacing` already works in SVG (§6), so the CSS path is the gap; `overflow-wrap` matters most when rendering diagnostics (§8).
-7. **`box-shadow`** — lowest; `border-left` covers the common inset-spine case.
-
-§0 (inline `<svg>`) was previously first on this list and is now resolved.
+Some defects only appear on the panel. The forecast row's clipped bottom line was
+invisible in both the golden HTML and the host-side raster, because nothing clips
+at the document level.
