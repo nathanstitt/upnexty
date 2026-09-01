@@ -244,3 +244,39 @@ func TestHourlyMatchesGolden(t *testing.T) {
 		t.Errorf("SVG differs from golden.\n got: %.200q\nwant: %.200q", got, string(want))
 	}
 }
+
+// The chart's "now" must land under the NOW bar.
+//
+// The bar spans the agenda and the weather strip, so it asserts one instant for
+// the whole panel. When the chart was anchored at a fixed ChartPastHours behind
+// now, and the bar began sweeping the current entry instead of sitting at a
+// fixed fraction, the two disagreed by 246px on a real frame -- the bar crossed
+// the curve about 2.9 hours from the present, pointing at a temperature that
+// was not the current one.
+func TestChartNowLandsUnderTheNowBar(t *testing.T) {
+	now := time.Date(2026, 8, 25, 14, 49, 0, 0, time.UTC)
+	agenda := model.Window{WidthPx: model.TrackWidth}
+
+	// Across the bar's whole travel, including the edges.
+	for _, barX := range []float64{0, 18, 267, 513, 900, 1400, model.TrackWidth} {
+		win := SpanWindow(agenda, now, barX)
+
+		if got := win.End.Sub(win.Start); got != ChartSpan {
+			t.Errorf("barX=%v: span = %v, want %v", barX, got, ChartSpan)
+		}
+		// X(now) is where the chart puts the present moment.
+		if got := win.X(now); got < barX-1 || got > barX+1 {
+			t.Errorf("barX=%v: the chart puts now at x=%.1f, %.1f px from the bar",
+				barX, got, got-barX)
+		}
+	}
+}
+
+// A zero-width agenda must not divide by zero.
+func TestSpanWindowHandlesZeroWidth(t *testing.T) {
+	now := time.Date(2026, 8, 25, 14, 0, 0, 0, time.UTC)
+	win := SpanWindow(model.Window{WidthPx: 0}, now, 400)
+	if win.End.Sub(win.Start) != ChartSpan {
+		t.Errorf("span = %v, want %v", win.End.Sub(win.Start), ChartSpan)
+	}
+}

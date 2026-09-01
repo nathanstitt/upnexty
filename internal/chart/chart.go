@@ -30,16 +30,39 @@ const (
 	ChartSpan      = ChartPastHours + ChartFwdHours
 )
 
-// SpanWindow returns the chart's window: ChartPastHours behind now to
-// ChartFwdHours ahead, mapped onto the agenda's pixel width.
+// SpanWindow returns the chart's window: ChartSpan wide, positioned so that
+// "now" falls under the NOW bar at nowBarXPx.
 //
-// The two rows no longer share an origin, only a width. That is deliberate --
-// the agenda is a card list and the chart is a time axis, and forcing them onto
-// one scale is what put the chart in the wrong part of the day.
-func SpanWindow(agenda model.Window, now time.Time) model.Window {
+// The agenda and the chart do not share a scale -- the agenda is a card list
+// and the chart is a time axis, and forcing them onto one scale is what put the
+// chart in the wrong part of the day. They do share the NOW bar, which spans
+// both bands and so asserts one instant for the whole panel. The window is
+// therefore anchored to the bar rather than to a fixed fraction.
+//
+// Anchoring it at a fixed ChartPastHours behind now was wrong once the bar
+// began to sweep: the bar sat wherever the current entry put it while the chart
+// kept "now" at 6/18 of its width, so the bar crossed the curve at the wrong
+// time -- measured at 246px, about 2.9 hours stale, and the error changed as
+// the bar moved. The bar pointing at a temperature that is not the current one
+// is worse than either row being slightly off on its own.
+//
+// The span stays fixed at ChartSpan, so the amount of history shown varies with
+// the bar: near the left edge the curve is nearly all forecast, which is the
+// correct trade -- the bar's position is the thing that must not lie.
+func SpanWindow(agenda model.Window, now time.Time, nowBarXPx float64) model.Window {
+	frac := 0.0
+	if agenda.WidthPx > 0 {
+		frac = nowBarXPx / agenda.WidthPx
+	}
+	if frac < 0 {
+		frac = 0
+	} else if frac > 1 {
+		frac = 1
+	}
+	start := now.Add(-time.Duration(frac * float64(ChartSpan)))
 	return model.Window{
-		Start:   now.Add(-ChartPastHours),
-		End:     now.Add(ChartFwdHours),
+		Start:   start,
+		End:     start.Add(ChartSpan),
 		WidthPx: agenda.WidthPx,
 	}
 }
@@ -193,7 +216,7 @@ func Hourly(w *weather.Weather, win model.Window, heightPx float64) string {
 		if (i+stride/2)%stride != 0 {
 			continue
 		}
-		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" fill="%s" font-family="IBM Plex Mono, monospace" font-size="%d" font-weight="600">%.0f&#176;</text>`,
+		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" fill="%s" font-family="Roboto, sans-serif" font-size="%d" font-weight="600">%.0f&#176;</text>`,
 			p.x, tempY(p.temp)-labelOffsetPx, labelColor, labelSize, p.temp)
 	}
 

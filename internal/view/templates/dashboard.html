@@ -67,11 +67,17 @@
       <div class="nb-now">
         {{if .Lead}}<div class="nb-lead">{{.Lead}}</div>{{end}}
         {{if .BigIsDuration}}
-        <div class="nb-free">{{.Big}}</div>
+        <div class="nb-free{{if .BigUrgent}} urgent{{end}}">{{.Big}}</div>
         {{else}}
         <div class="nb-title" style="border-left:3px solid {{if .Accent}}{{.Accent}}{{else}}#4a90d9{{end}}">{{.Big}}</div>
         {{end}}
-        {{if .Sub}}<div class="nb-countdown{{if .SubUrgent}} urgent{{end}}">{{.Sub}}</div>{{end}}
+        {{if .Sub}}
+          {{if .BigUrgent}}
+          <div class="nb-sub-title" style="border-left:3px solid {{if .Accent}}{{.Accent}}{{else}}#4a90d9{{end}}">{{.Sub}}</div>
+          {{else}}
+          <div class="nb-countdown{{if .SubUrgent}} urgent{{end}}">{{.Sub}}</div>
+          {{end}}
+        {{end}}
       </div>
       {{- if .NextTitle -}}
       <div class="nb-next-gap"></div>

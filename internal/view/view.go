@@ -27,7 +27,7 @@ var assetFS embed.FS
 // The fonts must arrive this way rather than by installing them on the board:
 // omnidoc's OS font lookup goes through adrg/sysfont, whose matcher only
 // recognizes families in its own hardcoded registry. That registry has 32
-// DejaVu entries and zero for Roboto, Barlow Condensed, or IBM Plex Mono, so an
+// DejaVu entries and zero for Roboto, so an
 // installed-but-unregistered family silently resolves to DejaVu no matter which
 // directory it sits in. Verified on hardware: fonts in /usr/share/fonts (the
 // real xdg search path) still rendered as DejaVu; the same files loaded via
@@ -152,8 +152,10 @@ func Render(vm model.ViewModel) (string, error) {
 	w := &weather.Weather{Hourly: vm.Hourly}
 
 	// The weather strip and its hour axis share one window so the labels line
-	// up with the curve.
-	wxWin := chart.SpanWindow(vm.Window, vm.Now)
+	// up with the curve. It is anchored to the NOW bar's x so the bar crosses
+	// the curve at the current temperature -- the bar spans both bands and
+	// claims one instant for the whole panel, so the chart follows it.
+	wxWin := chart.SpanWindow(vm.Window, vm.Now, vm.Agenda.NowBarXPx)
 	ticks := make([]hourTick, 0, 16)
 	for _, t := range chart.HourTicks(wxWin) {
 		ticks = append(ticks, hourTick{XPx: t.XPx, Label: t.Label})

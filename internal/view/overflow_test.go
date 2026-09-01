@@ -79,12 +79,26 @@ func TestAgendaScrollDoesNotPaintOverLeftZone(t *testing.T) {
 	// The agenda band's own vertical extent: the ribbon is 40px and the row is
 	// 240px. Sample inside it, left of the zone boundary, skipping the columns
 	// nearest the edge so a 1px seam is not read as a wash.
+	// A wash covers the band; antialiased glyph edges are a handful of pixels.
+	// Count rather than fail on the first hit: Roboto's edges are dim and
+	// blue-cast enough to trip the per-pixel test, and a strict any-hit check
+	// reported a wash that a rendered capture showed was not there. The row is
+	// 340px wide, so a real wash lights hundreds per row.
 	const bandTop, bandBottom = 60, 260
+	const washPerRow = 60
 	for y := bandTop; y < bandBottom; y += 20 {
-		for x := 20; x < leftZoneWidthPx-20; x += 40 {
+		n, first := 0, [3]uint8{}
+		for x := 20; x < leftZoneWidthPx-20; x++ {
 			if got, ok := paintedOver(img, x, y); ok {
-				t.Fatalf("agenda painted over the left zone at (%d,%d): %v", x, y, got)
+				if n == 0 {
+					first = got
+				}
+				n++
 			}
+		}
+		if n >= washPerRow {
+			t.Fatalf("agenda painted over the left zone at y=%d: %d washed pixels "+
+				"across the row, first %v", y, n, first)
 		}
 	}
 }

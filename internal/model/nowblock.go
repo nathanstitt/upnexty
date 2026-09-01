@@ -31,8 +31,13 @@ type NowBlock struct {
 	// Big is the headline: a duration for ModeFree/ModeImminent, otherwise the
 	// current or next event's title.
 	Big string
-	// BigIsDuration drives the green (free) vs amber (busy) treatment.
+	// BigIsDuration renders Big as the large duration numeral rather than an
+	// event title.
 	BigIsDuration bool
+	// BigUrgent colours that numeral amber instead of green: time until
+	// something starts, not time free. Both are durations, so the colour is
+	// what separates "you have 22 minutes" from "it starts in 4".
+	BigUrgent bool
 
 	// Sub is the supporting line under the headline, e.g. "ends in 25 min".
 	Sub string
@@ -90,14 +95,22 @@ func BuildNowBlock(events []calendar.Event, now time.Time, clock24 bool) NowBloc
 			}
 			return nb
 		}
-		// Imminent: lead with the event, count down in amber beneath it.
+		// Imminent: lead with the countdown, name the event beneath it.
+		//
+		// The countdown is the headline rather than the title because the
+		// panel is answering "can I start something right now" -- "in 4 min"
+		// is the answer, and the meeting's name is the detail. It is also the
+		// same shape as ModeFree directly above ("FREE FOR" / "22 min"), so
+		// the two states the user is most often in read as one pattern rather
+		// than swapping which line is large.
 		nb := NowBlock{
-			Mode:      ModeImminent,
-			Lead:      "NEXT",
-			Big:       next.Title,
-			Accent:    next.Color,
-			Sub:       "in " + longDuration(until),
-			SubUrgent: true,
+			Mode:          ModeImminent,
+			Lead:          "STARTS IN",
+			Big:           longDuration(until),
+			BigIsDuration: true,
+			BigUrgent:     true,
+			Accent:        next.Color,
+			Sub:           next.Title,
 		}
 		if afterNext != nil {
 			nb.NextLead = "THEN"

@@ -18,18 +18,6 @@
  *     Installing them on the board does not work -- see view.FontLoader.
  */
 
-@font-face { font-family: 'Barlow Condensed'; font-weight: 300;
-  src: url('fonts/BarlowCondensed-Light.ttf') format('truetype'); }
-@font-face { font-family: 'Barlow Condensed'; font-weight: 400;
-  src: url('fonts/BarlowCondensed.ttf') format('truetype'); }
-@font-face { font-family: 'Barlow Condensed'; font-weight: 600;
-  src: url('fonts/BarlowCondensed-SemiBold.ttf') format('truetype'); }
-@font-face { font-family: 'Barlow Condensed'; font-weight: 700;
-  src: url('fonts/BarlowCondensed-Bold.ttf') format('truetype'); }
-@font-face { font-family: 'IBM Plex Mono'; font-weight: 400;
-  src: url('fonts/IBMPlexMono.ttf') format('truetype'); }
-@font-face { font-family: 'IBM Plex Mono'; font-weight: 600;
-  src: url('fonts/IBMPlexMono-SemiBold.ttf') format('truetype'); }
 @font-face { font-family: 'Roboto'; font-weight: 400;
   src: url('fonts/Roboto.ttf') format('truetype'); }
 @font-face { font-family: 'Roboto'; font-weight: 500;
@@ -104,11 +92,11 @@ html, body {
   line-height: 1;
 }
 #clock-time {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 46px; font-weight: 600; line-height: 1;
 }
 #clock-date {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; font-weight: 600; color: var(--text-mid);
   letter-spacing: 0.04em;
 }
@@ -150,24 +138,24 @@ html, body {
 #wx-icon { width: 50px; height: 50px; flex-shrink: 0; }
 #wx-temp-block { flex: 1; }
 #wx-temp {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 44px; font-weight: 300; line-height: 1;
 }
 /* No bottom spacing here: the gap above the rule belongs to #wx-widget's
    padding. Adding margin-bottom or padding-bottom to this element does almost
    nothing, because the row centres its children -- see the note there. */
 #wx-desc {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; color: var(--text-mid);
   letter-spacing: 0.04em; text-transform: uppercase;
 }
 #wx-precip-col { text-align: right; }
 #wx-precip-pct {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 22px; font-weight: 600; color: var(--blue); line-height: 1;
 }
 #wx-precip-label {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; color: var(--text-dim);
   letter-spacing: 0.08em; text-transform: uppercase;
 }
@@ -218,7 +206,7 @@ html, body {
    height is honoured, so the inset is expressed as one. */
 .nb-pad { flex: 0 0 20px; height: 20px; }
 .nb-lead {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; line-height: 1.2; color: var(--text-dim);
   letter-spacing: 0.14em; text-transform: uppercase;
   margin-bottom: 4px;
@@ -232,15 +220,33 @@ html, body {
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
 }
-/* A duration headline ("34 min"): monospace, not condensed -- the reference
-   uses Plex Mono here so the digits line up as the countdown ticks. */
+/* The duration headline: "22 min" free, or "in 4 min" until something starts.
+   Both are the same shape deliberately -- these are the two states the panel is
+   in most of the time, and swapping which line is large between them makes the
+   left column feel like it is rearranging itself every few minutes.
+   The colour is what separates them. */
 .nb-free {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 52px; font-weight: 600; line-height: 1;
   letter-spacing: -0.02em; color: var(--green); margin-bottom: 4px;
 }
+/* Amber, not green: time until something starts is not time you have. */
+.nb-free.urgent { color: var(--amber); }
+
+/* The event name under an imminent countdown. Sized between .nb-title and
+   .nb-countdown: it is the detail under the headline, not the headline, but it
+   is still an event name and carries the calendar colour like one. */
+.nb-sub-title {
+  font-family: 'Roboto', sans-serif;
+  font-size: 22px; font-weight: 700; line-height: 1.15;
+  color: var(--text); padding-left: 12px; margin-top: 2px;
+  /* One line with an ellipsis, not a 2-line clamp: the clamp box reserves both
+     lines whatever the title's length, and the accent bar is drawn on this
+     element's border, so a one-line title got a bar twice its height. */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .nb-countdown {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; line-height: 1.2; color: var(--text-mid);
   padding-left: 12px;
 }
@@ -285,7 +291,7 @@ html, body {
    faint for a label on this display, and here it was additionally multiplied
    by the block's opacity. */
 .nb-next-lead {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; line-height: 1.2; color: var(--nb-next-fg);
   letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 2px;
 }
@@ -295,22 +301,22 @@ html, body {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .nb-next-at {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; line-height: 1.2; color: var(--nb-next-fg);
   margin-top: 2px;
 }
 
 /* Setup hint replaces the headline when the board is not associated. */
 .sh-lead {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 22px; color: var(--amber);
   letter-spacing: 0.14em; text-transform: uppercase;
 }
 .sh-step { font-size: 22px; margin-top: 8px; }
-.sh-mono { font-family: 'IBM Plex Mono', monospace; color: var(--blue); }
+.sh-mono { color: var(--blue); }
 /* The "this takes a minute" line recedes: it is reassurance, not instruction. */
 .sh-wait {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; color: var(--text-dim);
 }
 
@@ -383,7 +389,7 @@ html, body {
 #now-bar-label {
   position: absolute; top: 14px; left: 7px;
   width: 20px; text-align: center;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 20px; font-weight: 700; line-height: 1.05;
   color: var(--amber);
 }
@@ -408,7 +414,7 @@ html, body {
    divider rule needed; dim greys that work on a monitor disappear here. */
 .ad-lead {
   display: inline-block; margin-right: 10px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 16px; font-weight: 600;
   letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-mid);
 }
@@ -416,7 +422,7 @@ html, body {
    titles are cut with an ellipsis. */
 .ad-pill {
   display: inline-block; margin-right: 8px;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 19px; font-weight: 600;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   max-width: 330px; padding: 3px 12px 4px; border-radius: 4px;
@@ -466,12 +472,12 @@ html, body {
   overflow: hidden;
 }
 .evt-time {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 21px; font-weight: 600; line-height: 1.4;
   color: rgba(221,227,239,0.8);
 }
 .evt-meta {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 16px; font-weight: 500; line-height: 1.4;
   letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-mid);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -513,7 +519,7 @@ html, body {
    breaking out of the card's 18px right padding. */
 .evt-badge {
   position: absolute; right: -18px; bottom: 14px;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 14px; font-weight: 700; white-space: nowrap;
   letter-spacing: 0.04em; text-transform: uppercase;
   padding: 3px 10px 4px; border-radius: 999px 0 0 999px;
@@ -555,7 +561,7 @@ html, body {
   border-left: 1px dashed rgba(255,255,255,0.12);
 }
 .day-sep span {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 20px; font-weight: 700; color: var(--text-mid);
   letter-spacing: 0.16em; text-transform: uppercase;
 }
@@ -572,17 +578,17 @@ html, body {
   border: 1px dashed rgba(106,210,138,0.28);
 }
 .gap-dur {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 22px; font-weight: 600;
 }
 .gap-label {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 14px; font-weight: 700; margin-top: 4px;
   letter-spacing: 0.18em; text-transform: uppercase; opacity: 0.7;
 }
 
 .agenda-empty {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 26px; color: var(--text-dim);
   letter-spacing: 0.1em; text-transform: uppercase;
   padding: 90px 0 0 40px;
@@ -601,7 +607,7 @@ html, body {
 .wx-chart { display: block; }
 #wx-hours {
   height: 24px; position: relative;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; color: var(--text-dim); letter-spacing: 0.05em;
 }
 .wx-hour { position: absolute; top: 0; padding-left: 3px; white-space: nowrap; }
@@ -622,7 +628,7 @@ html, body {
   min-width: 0;
 }
 .fc-dow {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; font-weight: 600; color: var(--text-mid);
   text-transform: uppercase; letter-spacing: 0.04em;
   /* 58, not 42: "TODAY" is the longest label and measures 54px at this size
@@ -633,15 +639,15 @@ html, body {
 /* Hi over lo, not side by side. */
 .fc-temps { display: flex; flex-direction: column; }
 .fc-hi {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; font-weight: 600; color: var(--text);
 }
 .fc-lo {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; color: var(--text-mid);
 }
 .fc-pp {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 18px; font-weight: 600; color: var(--blue);
 }
 .fc-pp.none { color: var(--text-dim); }
@@ -710,7 +716,7 @@ html, body {
 #dlg-heading { flex: 1; min-width: 0; }
 
 #dlg-eyebrow {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 17px; font-weight: 600; line-height: 1;
   letter-spacing: 0.22em; text-transform: uppercase;
   color: var(--accent);
@@ -721,7 +727,7 @@ html, body {
    and a condensed face buys room for a long meeting name before clamping.
    Two lines, then clip -- the sheet must not reflow its actions off-screen. */
 #dlg-title {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 46px; font-weight: 700; line-height: 1.18;
   letter-spacing: 0.004em;
   color: var(--text);
@@ -741,7 +747,7 @@ html, body {
      flex container entirely -- the button paints and its label vanishes. See
      docs/omnidoc-gaps.md. line-height matches height for a single line. */
   line-height: 60px; text-align: center;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 25px; font-weight: 600;
   letter-spacing: 0.05em; text-transform: uppercase;
   color: var(--text-mid);
@@ -775,7 +781,7 @@ html, body {
 
 .dlg-row-label {
   width: 132px; flex-shrink: 0;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 16px; font-weight: 600; line-height: 1.3;
   letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--text-dim);
@@ -789,7 +795,7 @@ html, body {
 }
 /* Times and durations in the data face, so digits align down the column. */
 .dlg-row-value.mono {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'Roboto', sans-serif;
   font-size: 21px; font-weight: 600;
   letter-spacing: 0.01em;
 }
@@ -824,7 +830,7 @@ html, body {
   padding: 0;
   /* line-height centring -- see .dlg-close. */
   line-height: 64px; text-align: center;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Roboto', sans-serif;
   font-size: 26px; font-weight: 600;
   letter-spacing: 0.05em; text-transform: uppercase;
   color: var(--text);
@@ -917,9 +923,9 @@ html, body {
     </div>
 
     <div id="wx-zone">
-      <div id="wx-strip"><svg viewBox="0 0 1540 104" width="1540" height="104" class="wx-chart"><rect x="598.9" y="101.4" width="115.5" height="2.6" fill="rgba(74,144,217,0.55)"/><rect x="684.4" y="98.8" width="115.5" height="5.2" fill="rgba(74,144,217,0.55)"/><rect x="770.0" y="96.2" width="115.5" height="7.8" fill="rgba(74,144,217,0.55)"/><rect x="855.6" y="93.6" width="115.5" height="10.4" fill="rgba(74,144,217,0.55)"/><rect x="941.1" y="91.0" width="115.5" height="13.0" fill="rgba(74,144,217,0.55)"/><rect x="1026.7" y="88.4" width="115.5" height="15.6" fill="rgba(74,144,217,0.55)"/><rect x="1112.2" y="85.8" width="115.5" height="18.2" fill="rgba(74,144,217,0.55)"/><path fill="none" stroke="#7ec8f0" stroke-width="4.0" stroke-linecap="round" stroke-linejoin="round" d="M513.3 98.0 L598.9 89.7 L684.4 81.4 L770.0 73.1 L855.6 64.9 L941.1 56.6 L1026.7 48.3 L1112.2 40.0 "/><text x="598.9" y="79.7" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">71&#176;</text><text x="770.0" y="63.1" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">73&#176;</text><text x="941.1" y="46.6" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">75&#176;</text><text x="1112.2" y="30.0" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">77&#176;</text></svg></div>
+      <div id="wx-strip"><svg viewBox="0 0 1540 104" width="1540" height="104" class="wx-chart"><rect x="103.6" y="101.4" width="115.5" height="2.6" fill="rgba(74,144,217,0.55)"/><rect x="189.1" y="98.8" width="115.5" height="5.2" fill="rgba(74,144,217,0.55)"/><rect x="274.7" y="96.2" width="115.5" height="7.8" fill="rgba(74,144,217,0.55)"/><rect x="360.2" y="93.6" width="115.5" height="10.4" fill="rgba(74,144,217,0.55)"/><rect x="445.8" y="91.0" width="115.5" height="13.0" fill="rgba(74,144,217,0.55)"/><rect x="531.3" y="88.4" width="115.5" height="15.6" fill="rgba(74,144,217,0.55)"/><rect x="616.9" y="85.8" width="115.5" height="18.2" fill="rgba(74,144,217,0.55)"/><path fill="none" stroke="#7ec8f0" stroke-width="4.0" stroke-linecap="round" stroke-linejoin="round" d="M18.0 98.0 L103.6 89.7 L189.1 81.4 L274.7 73.1 L360.2 64.9 L445.8 56.6 L531.3 48.3 L616.9 40.0 "/><text x="103.6" y="79.7" fill="#dde3ef" font-family="Roboto, sans-serif" font-size="26" font-weight="600">71&#176;</text><text x="274.7" y="63.1" fill="#dde3ef" font-family="Roboto, sans-serif" font-size="26" font-weight="600">73&#176;</text><text x="445.8" y="46.6" fill="#dde3ef" font-family="Roboto, sans-serif" font-size="26" font-weight="600">75&#176;</text><text x="616.9" y="30.0" fill="#dde3ef" font-family="Roboto, sans-serif" font-size="26" font-weight="600">77&#176;</text></svg></div>
       <div id="wx-hours">
-        <span class="wx-hour" style="left:111.2px">6 AM</span><span class="wx-hour" style="left:367.9px">9 AM</span><span class="wx-hour" style="left:624.6px">12 PM</span><span class="wx-hour" style="left:881.2px">3 PM</span><span class="wx-hour" style="left:1137.9px">6 PM</span><span class="wx-hour" style="left:1394.6px">9 PM</span>
+        <span class="wx-hour" style="left:129.2px">12 PM</span><span class="wx-hour" style="left:385.9px">3 PM</span><span class="wx-hour" style="left:642.6px">6 PM</span><span class="wx-hour" style="left:899.2px">9 PM</span><span class="wx-hour" style="left:1155.9px">12 AM</span><span class="wx-hour" style="left:1412.6px">3 AM</span>
       </div>
     </div>
 
