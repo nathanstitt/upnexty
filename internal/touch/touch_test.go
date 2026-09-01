@@ -16,30 +16,63 @@ func testReader() *Reader {
 
 // A wrong rotation sign still hit-tests plausibly near the centre of the
 // screen, so the centre proves nothing -- the corners are what distinguish a
-// correct mapping from a mirrored one. Each case names the physical corner a
-// finger is touching and the landscape pixel it must land on.
+// correct mapping from a mirrored one.
+//
+// The expectations are derived from fb.Pack rather than restated by hand. That
+// matters: the previous version of this test asserted the same inverted
+// arithmetic the implementation used, so the two agreed with each other and
+// disagreed with the panel. Every tap landed diagonally opposite the finger
+// and the suite stayed green. Deriving the expectation from the code that
+// actually paints the framebuffer is what makes the two impossible to drift.
+//
+// Pack(rotate=270) reads page pixel (pageW-1-fy, fx) into framebuffer pixel
+// (fx, fy). The digitizer reports in framebuffer coordinates, so a touch at
+// (dx, dy) is the page pixel Pack put there.
 func TestRotate270MapsCorners(t *testing.T) {
 	r := testReader()
-	tests := []struct {
-		name         string
-		dx, dy       float64
-		wantX, wantY float64
-	}{
-		// Device origin (0,0) is the portrait top-left. Rotated 270 for a
-		// landscape UI, that corner becomes the landscape BOTTOM-left.
-		{"device top-left", 0, 0, 0, 479},
-		{"device top-right", 479, 0, 0, 0},
-		{"device bottom-left", 0, 1919, 1919, 479},
-		{"device bottom-right", 479, 1919, 1919, 0},
+
+	// want is where Pack says the page pixel under (dx,dy) came from.
+	want := func(dx, dy float64) (float64, float64) {
+		const pageW = 1920.0
+		return pageW - 1 - dy, dx
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			x, y := r.Rotate270(tc.dx, tc.dy)
-			if x != tc.wantX || y != tc.wantY {
-				t.Errorf("Rotate270(%v,%v) = (%v,%v), want (%v,%v)",
-					tc.dx, tc.dy, x, y, tc.wantX, tc.wantY)
+
+	for _, c := range []struct {
+		name   string
+		dx, dy float64
+	}{
+		{"device top-left", 0, 0},
+		{"device top-right", 479, 0},
+		{"device bottom-left", 0, 1919},
+		{"device bottom-right", 479, 1919},
+		// The corner that actually reported the bug, measured on hardware:
+		// a finger on the panel's top-left reads about here.
+		{"hardware top-left tap", 90, 1860},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			wantX, wantY := want(c.dx, c.dy)
+			x, y := r.Rotate270(c.dx, c.dy)
+			if x != wantX || y != wantY {
+				t.Errorf("Rotate270(%v,%v) = (%v,%v), want (%v,%v) per fb.Pack",
+					c.dx, c.dy, x, y, wantX, wantY)
 			}
 		})
+	}
+}
+
+// The panel's top-left corner must map into the corner-tap region.
+//
+// Stated separately from the corner table because it is the user-visible
+// contract: tapping the clock raises the device sheet. The measured device
+// reading is from hardware, so this fails if the rotation regresses even if
+// someone "fixes" the table to match a broken implementation.
+func TestTopLeftTapLandsInTheCornerRegion(t *testing.T) {
+	r := testReader()
+	// A finger on the panel's top-left corner, measured on the board.
+	x, y := r.Rotate270(90, 1860)
+	if x >= 100 || y >= 100 {
+		t.Errorf("a top-left tap maps to (%v,%v), outside the 100px corner region "+
+			"-- the device sheet cannot be raised", x, y)
 	}
 }
 
@@ -100,8 +133,8 @@ func TestTapsDecodesAPressAndRelease(t *testing.T) {
 		if !ok {
 			t.Fatal("channel closed before a tap was decoded")
 		}
-		// device (100,800) -> landscape (800, 479-100=379)
-		if tap.X != 800 || tap.Y != 379 {
+		// device (100,800) -> landscape (1919-800, 100), per fb.Pack's inverse.
+		if tap.X != 1119 || tap.Y != 100 {
 			t.Errorf("tap at (%v,%v), want (800,379)", tap.X, tap.Y)
 		}
 	case <-ctx.Done():

@@ -73,23 +73,30 @@ func NewReader(path string, rotate int, panelW, panelH, deviceW, deviceH float64
 
 // Rotate270 maps a portrait digitizer coordinate to landscape panel space.
 //
-// The panel is physically portrait (480 wide x 1920 tall) and the UI is drawn
-// rotated 270 degrees, so landscape x runs along the device's y axis and
-// landscape y runs backwards along the device's x axis:
+// The mapping is the exact inverse of fb.Pack's, which is where it must come
+// from: Pack decides which page pixel lands on which framebuffer pixel, and a
+// tap has to run that backwards. For rotate 270 Pack reads page pixel
+// (pageW-1-fy, fx) into framebuffer pixel (fx, fy), and the digitizer reports
+// in framebuffer coordinates, so:
 //
-//	panelX = deviceY
-//	panelY = (deviceW - 1) - deviceX
+//	panelX = (deviceH - 1) - deviceY
+//	panelY = deviceX
 //
-// Derived rather than guessed, and asserted at the corners by
-// TestRotate270MapsCorners: getting the sign wrong produces a mirrored panel
-// that still hit-tests plausibly near the centre, which is the failure mode
-// that survives casual testing.
+// This was wrong for both axes until 2026-09-01 -- it was the 90-degree
+// mapping, a 180-degree error, so every tap landed at the point diagonally
+// opposite the finger. Tapping the top-left corner reported panel (1860, 389),
+// the bottom-right. The corner test that was meant to catch this asserted the
+// same inverted arithmetic the implementation used, so both agreed and the
+// panel was wrong; the fixture now states the corners in terms of Pack.
+//
+// Verified against the hardware: a top-left tap reads device (90, 1860), which
+// this maps to (59, 90).
 func (r *Reader) Rotate270(dx, dy float64) (x, y float64) {
 	switch r.rotate {
 	case 270:
-		return dy, (r.deviceW - 1) - dx
-	case 90:
 		return (r.deviceH - 1) - dy, dx
+	case 90:
+		return dy, (r.deviceW - 1) - dx
 	case 180:
 		return (r.deviceW - 1) - dx, (r.deviceH - 1) - dy
 	default:
