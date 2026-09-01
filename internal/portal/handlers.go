@@ -229,6 +229,10 @@ func (s *Server) handleSaveWiFi(w http.ResponseWriter, r *http.Request) {
 		// Server.connecting's doc comment). The config is still saved above
 		// either way; only the reconnect attempt is skipped.
 		if s.connecting.CompareAndSwap(false, true) {
+			// Publish before the goroutine starts so the very next render can
+			// show it -- a frame takes ~10s on this hardware, so a late write
+			// would miss the first one.
+			s.pendingSSID.Store(ssid)
 			go func() {
 				defer s.connecting.Store(false)
 				if err := s.WiFi.Connect(ssid, pw); err != nil {
@@ -248,7 +252,61 @@ func (s *Server) handleSaveWiFi(w http.ResponseWriter, r *http.Request) {
 			}()
 		}
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	// The pending page rather than a redirect to "/". A redirect lands back on
+	// the settings form, which looks like the submit did nothing -- and the
+	// association is about to tear down the very AP this browser is talking to,
+	// so any later navigation will fail. Saying that up front is the difference
+	// between "it broke" and "it is working, and here is what happens next".
+	s.pendingPage(w, ssid)
+}
+
+// loginPage renders the password prompt. next is the path to return to once
+// the password is accepted, so a user who aimed at a specific section (or whose
+// session expired mid-edit) is not dumped back at the top.
+func (s *Server) loginPage(w http.ResponseWriter, errMsg, next string) {
+	if !strings.HasPrefix(next, "/") {
+		next = "/"
+	}
+	data := pageData{
+		Config:          s.Store.Config(),
+		APName:          "upnext-setup",
+		DefaultPassword: DefaultPassword(s.MAC),
+		Error:           errMsg,
+		Next:            next,
+	}
+	if s.WiFi != nil {
+		if st, err := s.WiFi.Status(); err == nil {
+			data.Status = st
+		}
+	}
+	if s.MAC != "" {
+		data.APName = wifi.APName(s.MAC)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// 200, not 401: a captive-portal sheet renders a 401 body as an error page
+	// rather than a document, which is what made the Basic-auth challenge show
+	// up blank. The page IS the response to "you need to log in".
+	w.WriteHeader(http.StatusOK)
+	if err := tmpl.ExecuteTemplate(w, "login", data); err != nil {
+		log.Printf("portal: render login: %v", err)
+	}
+}
+
+// pendingPage renders the "update pending" screen shown after a WiFi save.
+func (s *Server) pendingPage(w http.ResponseWriter, ssid string) {
+	data := pageData{
+		Config:      s.Store.Config(),
+		APName:      "upnext-setup",
+		PendingSSID: ssid,
+	}
+	if s.MAC != "" {
+		data.APName = wifi.APName(s.MAC)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := tmpl.ExecuteTemplate(w, "pending", data); err != nil {
+		log.Printf("portal: render pending: %v", err)
+	}
 }
 
 // calendarPalette assigns feed colours from the dashboard's palette, so a user
@@ -276,4 +334,35 @@ func nextColor(taken map[string]bool) string {
 func applyBrightness(v int) {
 	_ = os.WriteFile("/sys/class/backlight/waveshare_bl/brightness",
 		[]byte(strconv.Itoa(v)), 0o644)
+}
+
+// handleUnmute restores an event hidden by a tap on the panel.
+//
+// Unmuting is the only thing this page can do to the muted list -- there is no
+// way to mute from here. Muting is a decision made while looking at the event
+// on the panel, and offering it in a settings form would mean picking an event
+// out of a list of every occurrence in the next week, which is a worse version
+// of the same action.
+func (s *Server) handleUnmute(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.page(w, "That form could not be read. Try again.", http.StatusBadRequest)
+		return
+	}
+	key := r.FormValue("key")
+	if key == "" {
+		s.page(w, "That event could not be identified. Reload and try again.", http.StatusBadRequest)
+		return
+	}
+	if err := s.save(func(c *config.Config) error {
+		// Replace the slice rather than mutating it: Store.Update copies the
+		// config shallowly, so the backing array is shared with the snapshot
+		// readers are already holding.
+		c.Muted = append([]config.MutedEvent(nil), c.Muted...)
+		c.Unmute(key)
+		return nil
+	}); err != nil {
+		s.page(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

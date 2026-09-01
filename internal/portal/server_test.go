@@ -65,22 +65,36 @@ func newTestServer(t *testing.T) *Server {
 	}
 }
 
-func TestUnauthenticatedIsChallenged(t *testing.T) {
+// An unauthenticated request gets the login form, not a 401 challenge. 200 is
+// deliberate: a captive-portal sheet renders a 401 body as an error page rather
+// than a document, which is what made Basic auth show up blank there.
+func TestUnauthenticatedGetsLoginPage(t *testing.T) {
 	s := newTestServer(t)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 with the login page", w.Code)
 	}
-	if !strings.Contains(w.Header().Get("WWW-Authenticate"), "Basic") {
-		t.Errorf("missing Basic challenge: %q", w.Header().Get("WWW-Authenticate"))
+	if h := w.Header().Get("WWW-Authenticate"); h != "" {
+		t.Errorf("WWW-Authenticate = %q, want none -- Basic auth is gone", h)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `action="/login"`) {
+		t.Error("no login form rendered")
+	}
+	if !strings.Contains(body, "device_password") {
+		t.Error("login form has no password field")
+	}
+	// The settings must not leak to an unauthenticated caller.
+	if strings.Contains(body, "save/calendars") {
+		t.Error("settings form served without a session")
 	}
 }
 
 func TestMACPasswordAuthenticates(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("GET", "/", nil)
-	req.SetBasicAuth("admin", "4c1bfd") // last 6 hex of the MAC
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd")) // last 6 hex of the MAC
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -88,21 +102,25 @@ func TestMACPasswordAuthenticates(t *testing.T) {
 	}
 }
 
-func TestWrongPasswordRejected(t *testing.T) {
+// A forged or stale cookie is not a session.
+func TestBogusSessionCookieRejected(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("GET", "/", nil)
-	req.SetBasicAuth("admin", "nope")
+	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: "bogus"})
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", w.Code)
+	if !strings.Contains(w.Body.String(), `action="/login"`) {
+		t.Error("a bogus cookie was not sent to the login page")
+	}
+	if strings.Contains(w.Body.String(), "save/calendars") {
+		t.Error("settings served to a forged cookie")
 	}
 }
 
 func TestSettingsPageShowsCurrentValues(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("GET", "/", nil)
-	req.SetBasicAuth("admin", "4c1bfd")
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
@@ -120,7 +138,7 @@ func TestSettingsPageEscapesCalendarNames(t *testing.T) {
 		Calendars: []config.CalendarSource{{Name: `<script>alert(1)</script>`}},
 	})
 	req := httptest.NewRequest("GET", "/", nil)
-	req.SetBasicAuth("admin", "4c1bfd")
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
@@ -134,7 +152,7 @@ func TestSaveDisplayUpdatesConfigAndPersists(t *testing.T) {
 	req := httptest.NewRequest("POST", "/save/display",
 		strings.NewReader("brightness=90&clock_24h=on"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth("admin", "4c1bfd")
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
@@ -163,7 +181,7 @@ func TestSaveRejectsInvalidBrightness(t *testing.T) {
 	req := httptest.NewRequest("POST", "/save/display",
 		strings.NewReader("brightness=abc"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth("admin", "4c1bfd")
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
@@ -190,7 +208,7 @@ func TestSaveCalendarsPreservesColorsOnDelete(t *testing.T) {
 		"&name=C&url=" + "https://example.com/c.ics"
 	req := httptest.NewRequest("POST", "/save/calendars", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth("admin", "4c1bfd")
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
@@ -224,7 +242,7 @@ func TestSaveCalendarsNewFeedDoesNotDuplicateColor(t *testing.T) {
 		"&name=D&url=" + "https://example.com/d.ics"
 	req := httptest.NewRequest("POST", "/save/calendars", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth("admin", "4c1bfd")
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
@@ -248,7 +266,7 @@ func TestSavePasswordDisablesMACDefault(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("POST", "/save/password", strings.NewReader("password=newpassword"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth("admin", "4c1bfd")
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusSeeOther {
@@ -257,16 +275,22 @@ func TestSavePasswordDisablesMACDefault(t *testing.T) {
 
 	// The MAC-derived default must no longer authenticate.
 	req2 := httptest.NewRequest("GET", "/", nil)
-	req2.SetBasicAuth("admin", "4c1bfd")
+	req2.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 	w2 := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w2, req2)
-	if w2.Code != http.StatusUnauthorized {
-		t.Errorf("status with MAC default after password set = %d, want 401", w2.Code)
+	// The old session is bound to the previous (empty) password hash, so
+	// changing the password invalidates it -- this is what NewSessionToken's
+	// HMAC-over-the-hash construction buys.
+	if strings.Contains(w2.Body.String(), "save/calendars") {
+		t.Error("a session minted under the old password still reaches settings")
+	}
+	if !strings.Contains(w2.Body.String(), `action="/login"`) {
+		t.Error("stale session was not sent to the login page")
 	}
 
 	// The new password must authenticate.
 	req3 := httptest.NewRequest("GET", "/", nil)
-	req3.SetBasicAuth("admin", "newpassword")
+	req3.AddCookie(testSession(t, HashPassword("newpassword"), "54:01:4a:4c:1b:fd"))
 	w3 := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w3, req3)
 	if w3.Code != http.StatusOK {
@@ -279,7 +303,7 @@ func TestSavePlaceRejectsInvalidTimezone(t *testing.T) {
 	req := httptest.NewRequest("POST", "/save/place",
 		strings.NewReader("latitude=10&longitude=20&timezone=Not/AZone"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth("admin", "4c1bfd")
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
@@ -313,7 +337,7 @@ func TestConcurrentSavesToDifferentSectionsBothSurvive(t *testing.T) {
 			<-start
 			req := httptest.NewRequest("POST", "/save/wifi", strings.NewReader("ssid=NewNetwork&password=hunter2"))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			req.SetBasicAuth("admin", "4c1bfd")
+			req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 			s.Handler().ServeHTTP(httptest.NewRecorder(), req)
 		}()
 		go func() {
@@ -321,7 +345,7 @@ func TestConcurrentSavesToDifferentSectionsBothSurvive(t *testing.T) {
 			<-start
 			req := httptest.NewRequest("POST", "/save/display", strings.NewReader("brightness=42"))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			req.SetBasicAuth("admin", "4c1bfd")
+			req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 			s.Handler().ServeHTTP(httptest.NewRecorder(), req)
 		}()
 
@@ -375,12 +399,15 @@ func TestSaveWiFiLogsAndSurfacesConnectFailure(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/save/wifi", strings.NewReader("ssid=BadNetwork&password=wrongpass"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth("admin", "4c1bfd")
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want 303 -- Connect must not block the response", w.Code)
+	// 200 with the pending page (was a 303 to "/"): the response must still
+	// come back before Connect finishes, which is what this asserts -- only the
+	// page it returns changed.
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 -- Connect must not block the response", w.Code)
 	}
 
 	// Wait for the background goroutine's restart call rather than sleeping:
@@ -413,7 +440,7 @@ func TestSaveWiFiLogsAndSurfacesConnectFailure(t *testing.T) {
 	// It must also reach the settings page so a human looking at the portal
 	// (not just logs) can see the connect failed.
 	req2 := httptest.NewRequest("GET", "/", nil)
-	req2.SetBasicAuth("admin", "4c1bfd")
+	req2.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 	w2 := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w2, req2)
 	if !strings.Contains(w2.Body.String(), "BadNetwork") {
@@ -437,15 +464,15 @@ func TestSaveWiFiSingleFlightsConcurrentConnects(t *testing.T) {
 	post := func(ssid string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("POST", "/save/wifi", strings.NewReader("ssid="+ssid+"&password=pw"))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.SetBasicAuth("admin", "4c1bfd")
+		req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, req)
 		return w
 	}
 
 	w1 := post("First")
-	if w1.Code != http.StatusSeeOther {
-		t.Fatalf("first save status = %d, want 303", w1.Code)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first save status = %d, want 200 (the pending page)", w1.Code)
 	}
 	// Wait for the first Connect to actually be the in-flight one before
 	// firing the second, so this deterministically exercises the guard
@@ -457,8 +484,8 @@ func TestSaveWiFiSingleFlightsConcurrentConnects(t *testing.T) {
 	}
 
 	w2 := post("Second")
-	if w2.Code != http.StatusSeeOther {
-		t.Fatalf("second save status = %d, want 303 (config save must still succeed)", w2.Code)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second save status = %d, want 200 (config save must still succeed)", w2.Code)
 	}
 
 	// The second submit's config save must have gone through even though its
@@ -505,4 +532,11 @@ func TestCSSIsServed(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "#0b0d12") {
 		t.Error("stylesheet does not contain the ground colour")
 	}
+}
+
+// testSession mints a cookie for a server with the given password hash, so
+// tests exercise the same session path a logged-in browser uses.
+func testSession(t *testing.T, hash, mac string) *http.Cookie {
+	t.Helper()
+	return &http.Cookie{Name: SessionCookie, Value: NewSessionToken(hash, mac)}
 }

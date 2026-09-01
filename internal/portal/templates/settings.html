@@ -90,6 +90,21 @@
   <button type="submit">Save display</button>
 </form>
 
+{{if .Config.Muted}}
+<h1>Hidden events</h1>
+<p class="hint">Tapped &ldquo;Hide from panel&rdquo; on the display. They stay in
+  your calendar &mdash; this only controls what the panel shows.</p>
+{{range .Config.Muted}}
+<form method="post" action="/unmute" class="row">
+  <label>{{.Title}}</label><span class="rule"></span>
+  <div class="field">
+    <input type="hidden" name="key" value="{{.Key}}">
+    <button type="submit">Show again</button>
+  </div>
+</form>
+{{end}}
+{{end}}
+
 <h1>Admin password</h1>
 <form method="post" action="/save/password">
   <div class="row">

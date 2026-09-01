@@ -25,4 +25,12 @@ type pageData struct {
 	// write failure is not silently invisible -- the connect attempt runs
 	// after the request that triggered it has already redirected.
 	WiFiError string
+
+	// PendingSSID is the network a just-submitted save is trying to join. Only
+	// the pending page reads it.
+	PendingSSID string
+
+	// Next is the path to return to after a successful login. Only the login
+	// page reads it.
+	Next string
 }

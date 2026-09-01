@@ -114,3 +114,13 @@ button {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ---- Pending page: shown after a WiFi save, while the board associates ---- */
+/* Amber rather than the green "connected" or red "down": an attempt in flight
+   is neither, and reusing either dot would misreport it. */
+.status.pending .dot { background: #f5a623; }
+.pending-lead { font-size: 17px; line-height: 1.5; margin: 0 0 16px; }
+.pending-note {
+  font-size: 15px; line-height: 1.55; color: var(--dim);
+  margin: 0 0 12px;
+}

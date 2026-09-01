@@ -2,8 +2,10 @@ package portal
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/nathanstitt/luckfox-dashboard/internal/config"
 	"github.com/nathanstitt/luckfox-dashboard/internal/wifi"
@@ -32,6 +34,10 @@ type Server struct {
 	WiFi  *wifi.Client
 	MAC   string
 
+	// Now overrides the clock for the generated sample feed. Nil means
+	// time.Now; tests set it so the fixture's timestamps are predictable.
+	Now func() time.Time
+
 	// connecting single-flights the background Connect goroutine started by
 	// handleSaveWiFi: association tears down the AP the request arrived on
 	// (see that handler), so Connect intentionally outlives the request and
@@ -44,6 +50,12 @@ type Server struct {
 	// attempt to actually associate happens at the following reboot/restart,
 	// or the user can resubmit once the in-flight attempt has finished.
 	connecting atomic.Bool
+
+	// pendingSSID is the network the in-flight Connect is joining, published so
+	// the panel can show the attempt while it happens. Written next to the
+	// connecting swap and read by Connecting; atomic.Value rather than a plain
+	// string because the render loop reads it from another goroutine.
+	pendingSSID atomic.Value // string
 
 	// wifiErrMu guards wifiErr, the most recent background Connect failure.
 	// Set by handleSaveWiFi's goroutine, read by page() so the settings UI
@@ -90,24 +102,160 @@ func (s *Server) Handler() http.Handler {
 		w.Write(b)
 	})
 
+	// Also unauthenticated: the dashboard's own calendar fetcher requests this
+	// over loopback and sends no credentials. It serves only a fixture it just
+	// generated -- no configuration, no user data.
+	mux.HandleFunc("GET /sample.ical", s.handleSampleICal)
+
+	// Captive-portal probe endpoints. iOS/macOS request
+	// /hotspot-detect.html, Android /generate_204 and /gen_204, Windows
+	// /connecttest.txt and /ncsi.txt. Each expects a specific success response
+	// (Apple: a page containing exactly "Success"; Android: a bare 204). Any
+	// other answer means "this network intercepts traffic", which is what makes
+	// the OS raise its sign-in sheet.
+	//
+	// Answering them with the settings page is therefore the entire mechanism;
+	// see handleCaptiveProbe for why it is served in place rather than
+	// redirected.
+	for _, p := range []string{
+		"/hotspot-detect.html", "/library/test/success.html",
+		"/generate_204", "/gen_204",
+		"/connecttest.txt", "/ncsi.txt",
+		"/canonical.html", "/success.txt",
+	} {
+		mux.HandleFunc("GET "+p, s.handleCaptiveProbe)
+	}
+
 	mux.Handle("GET /", s.auth(http.HandlerFunc(s.handleSettings)))
 	mux.Handle("POST /save/wifi", s.auth(http.HandlerFunc(s.handleSaveWiFi)))
 	mux.Handle("POST /save/calendars", s.auth(http.HandlerFunc(s.handleSaveCalendars)))
 	mux.Handle("POST /save/place", s.auth(http.HandlerFunc(s.handleSavePlace)))
 	mux.Handle("POST /save/display", s.auth(http.HandlerFunc(s.handleSaveDisplay)))
 	mux.Handle("POST /save/password", s.auth(http.HandlerFunc(s.handleSavePassword)))
+	mux.Handle("POST /unmute", s.auth(http.HandlerFunc(s.handleUnmute)))
+
+	// Login and logout are outside auth by definition.
+	mux.HandleFunc("POST /login", s.handleLogin)
+	mux.HandleFunc("POST /logout", s.handleLogout)
 	return mux
 }
 
-// auth gates a handler behind the admin password.
+// Connecting reports the network an in-flight association attempt is joining,
+// or "" when none is running. The dashboard polls this each render so the panel
+// can show the attempt: the browser that submitted the form loses its
+// connection when the AP comes down, which makes the panel the only surface
+// still able to report what is happening.
+func (s *Server) Connecting() string {
+	if !s.connecting.Load() {
+		return ""
+	}
+	ssid, _ := s.pendingSSID.Load().(string)
+	return ssid
+}
+
+// PortalURL is the portal's address, printed on the panel for the case where
+// the sign-in sheet does not appear on its own. No port suffix: the portal
+// serves :80, which is also where a connectivity probe looks.
+const PortalURL = "http://" + wifi.APAddr
+
+// handleCaptiveProbe answers an OS connectivity check with the portal itself,
+// which is what raises the "sign in to network" sheet.
+//
+// Serving a page rather than redirecting is deliberate. The portal is on :80,
+// the same port the probe hits, so there is nowhere to redirect to -- and an
+// earlier version that did redirect (to :8080) made the sheet render the
+// destination's response as a bare error instead of following it usefully.
+// Answering in place keeps the sheet on one origin with real HTML in it.
+//
+// It runs through auth like any other page, so an unauthenticated probe gets
+// the login form -- which is exactly the right thing for the sheet to show.
+// The DNS wildcard alone does none of this: dnsmasq points every name at the
+// board, but something still has to answer the request.
+func (s *Server) handleCaptiveProbe(w http.ResponseWriter, r *http.Request) {
+	s.auth(http.HandlerFunc(s.handleSettings)).ServeHTTP(w, r)
+}
+
+// auth gates a handler behind a session cookie, showing the login page when
+// there is not a valid one.
+//
+// Cookie rather than Basic auth because the portal's primary client is a
+// captive-portal sheet, and a sheet does not render a WWW-Authenticate
+// challenge: the 401 body is displayed instead, which reads as a blank or
+// broken page with no way to enter anything. An ordinary HTML form works in the
+// sheet, in a desktop browser, and in curl (--data + --cookie-jar) alike, so
+// there is one mechanism rather than two.
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, pw, ok := r.BasicAuth()
-		if !ok || !CheckPassword(pw, s.Store.Config().Portal.PasswordHash, s.MAC) {
-			w.Header().Set("WWW-Authenticate", `Basic realm="UpNext setup"`)
-			http.Error(w, "Enter the device password to continue.", http.StatusUnauthorized)
+		hash := s.Store.Config().Portal.PasswordHash
+
+		if c, err := r.Cookie(SessionCookie); err == nil && ValidSession(c.Value, hash, s.MAC) {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+
+		// No session. A POST carrying the right password is a login combined
+		// with the action: set the cookie and let the request through, so
+		// submitting the settings form from a fresh sheet works in one step
+		// rather than bouncing through a separate login screen.
+		if r.Method == http.MethodPost {
+			if err := r.ParseForm(); err == nil {
+				if CheckPassword(r.PostFormValue("device_password"), hash, s.MAC) {
+					s.setSession(w, hash)
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			s.loginPage(w, "That device password is not correct.", r.URL.Path)
+			return
+		}
+		s.loginPage(w, "", r.URL.Path)
 	})
+}
+
+// setSession installs the session cookie.
+func (s *Server) setSession(w http.ResponseWriter, hash string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:  SessionCookie,
+		Value: NewSessionToken(hash, s.MAC),
+		Path:  "/",
+		// No Secure: the portal is plain HTTP (it has no certificate and, in AP
+		// mode, no resolvable name to get one for). Setting Secure would make
+		// the cookie be dropped entirely.
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int((12 * time.Hour).Seconds()),
+	})
+}
+
+// clearSession expires the session cookie.
+func clearSession(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name: SessionCookie, Value: "", Path: "/",
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1,
+	})
+}
+
+// handleLogin authenticates and returns to the page the user was aiming at.
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	hash := s.Store.Config().Portal.PasswordHash
+	if err := r.ParseForm(); err != nil {
+		s.loginPage(w, "That form could not be read. Try again.", "/")
+		return
+	}
+	next := r.PostFormValue("next")
+	if !strings.HasPrefix(next, "/") {
+		next = "/" // never redirect off-site on a value from the request
+	}
+	if !CheckPassword(r.PostFormValue("device_password"), hash, s.MAC) {
+		s.loginPage(w, "That device password is not correct.", next)
+		return
+	}
+	s.setSession(w, hash)
+	http.Redirect(w, r, next, http.StatusSeeOther)
+}
+
+// handleLogout drops the session.
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	clearSession(w)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

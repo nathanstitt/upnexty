@@ -1,0 +1,44 @@
+{{define "pending"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UpNext setup</title>
+<link rel="stylesheet" href="/portal.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="status pending">
+    <span class="dot"></span>
+    <span class="what">Joining</span>
+    <span class="where">{{.PendingSSID}}</span>
+  </div>
+
+  <h1>Update pending</h1>
+
+  <p class="pending-lead">
+    The board is switching over to <strong>{{.PendingSSID}}</strong>. This takes
+    about a minute.
+  </p>
+
+  <p class="pending-note">
+    <strong>This page will stop responding part-way through.</strong> That is
+    expected, not a failure: the setup network you are on right now is hosted by
+    the board itself, and it has to shut that down to join yours. Your phone
+    will drop back to its usual network on its own.
+  </p>
+
+  <p class="pending-note">
+    Watch the panel. It shows the progress, and once the board is on your
+    network it shows the address to reach it at from now on.
+  </p>
+
+  <p class="pending-note">
+    If the panel returns to <strong>SET ME UP</strong>, the network refused the
+    credentials. Rejoin <span class="mono">{{.APName}}</span> and try again —
+    the panel and this page will both say what went wrong.
+  </p>
+</div>
+</body>
+</html>
+{{end}}

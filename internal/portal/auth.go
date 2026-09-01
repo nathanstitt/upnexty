@@ -2,6 +2,8 @@
 package portal
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -61,4 +63,50 @@ func CheckPassword(pw, hash, mac string) bool {
 		return subtle.ConstantTimeCompare([]byte(pw), []byte(def)) == 1
 	}
 	return subtle.ConstantTimeCompare([]byte(HashPassword(pw)), []byte(hash)) == 1
+}
+
+// SessionCookie is the name of the cookie holding a portal session.
+const SessionCookie = "upnext_session"
+
+// sessionSecret is minted once per process. Sessions therefore do not survive a
+// restart, which is the right default for a wall display: the board reboots
+// rarely, and a session that outlived a reboot would have to be persisted to
+// NAND and invalidated on password change. Re-entering the password after a
+// restart is a small cost for not storing credentials at rest.
+//
+// crypto/rand, not math/rand: this value is the whole strength of the session
+// token. A failure to read the OS entropy source is fatal rather than silently
+// falling back -- a predictable secret is worse than no portal.
+var sessionSecret = mustRandom(32)
+
+func mustRandom(n int) []byte {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic("portal: cannot read random bytes for session secret: " + err.Error())
+	}
+	return b
+}
+
+// NewSessionToken mints a session value bound to the current password hash.
+//
+// The token is HMAC(secret, hash) rather than an opaque random string kept in a
+// server-side set, so there is no session table to grow or lock. Binding it to
+// the password hash means changing the password invalidates every existing
+// session for free: the recomputed HMAC no longer matches what old cookies
+// carry. mac is folded in so a board that has not set a password yet (empty
+// hash) still produces a per-device token rather than a constant.
+func NewSessionToken(hash, mac string) string {
+	m := hmac.New(sha256.New, sessionSecret)
+	m.Write([]byte(hash))
+	m.Write([]byte{0}) // domain separator: hash and mac cannot run together
+	m.Write([]byte(mac))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+// ValidSession reports whether a cookie value is a live session.
+func ValidSession(token, hash, mac string) bool {
+	if token == "" {
+		return false
+	}
+	return hmac.Equal([]byte(token), []byte(NewSessionToken(hash, mac)))
 }

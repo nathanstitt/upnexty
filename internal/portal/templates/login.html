@@ -1,0 +1,40 @@
+{{define "login"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UpNext setup</title>
+<link rel="stylesheet" href="/portal.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="status{{if not .Status.Connected}} down{{end}}">
+    <span class="dot"></span>
+    <span class="what">{{if .Status.Connected}}Connected{{else}}Setup mode{{end}}</span>
+    <span class="where">{{if .Status.Connected}}{{.Status.SSID}} · {{.Status.IP}}{{else}}{{.APName}}{{end}}</span>
+  </div>
+
+  <h1>UpNext</h1>
+
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+
+  <form method="post" action="/login">
+    <input type="hidden" name="next" value="{{.Next}}">
+    <div class="row">
+      <label for="device_password">Device password</label><span class="rule"></span>
+      <div class="field">
+        <input id="device_password" name="device_password" type="password"
+               autocapitalize="off" autocorrect="off" autofocus
+               {{if not .Config.Portal.PasswordHash}}placeholder="{{.DefaultPassword}}"{{end}}>
+      </div>
+    </div>
+    <button type="submit">Continue</button>
+  </form>
+
+  {{if not .Config.Portal.PasswordHash}}
+  <p class="hint">The password is shown on the panel.</p>
+  {{end}}
+</div>
+</body>
+</html>
+{{end}}
