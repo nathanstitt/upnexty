@@ -2,9 +2,10 @@ module github.com/nathanstitt/luckfox-dashboard
 
 go 1.26.0
 
-require github.com/nathanstitt/doctaculous v0.0.0
+require github.com/nathanstitt/omnidoc v0.0.0
 
 require (
+	github.com/HugoSmits86/nativewebp v1.3.0 // indirect
 	github.com/adrg/strutil v0.2.2 // indirect
 	github.com/adrg/sysfont v0.1.2 // indirect
 	github.com/adrg/xdg v0.3.0 // indirect
@@ -19,4 +20,4 @@ require (
 	golang.org/x/text v0.38.0 // indirect
 )
 
-replace github.com/nathanstitt/doctaculous => ../../doctaculous
+replace github.com/nathanstitt/omnidoc => ../../omnidoc
