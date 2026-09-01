@@ -82,7 +82,21 @@ func TestRenderIncludesEventTitlesAndClock(t *testing.T) {
 
 func TestRenderEscapesTitles(t *testing.T) {
 	vm := fixtureVM(t)
-	vm.Agenda.Cards[0].Event.Title = `Tom & Jerry <script>`
+	// Find an event card by kind rather than assuming index 0: the row opens
+	// with a gap chip whenever there is free time before the first event, and
+	// a title set on a chip is never rendered, so the test would pass while
+	// proving nothing.
+	idx := -1
+	for i, c := range vm.Agenda.Cards {
+		if c.Kind == model.CardEvent {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("fixture has no event card to escape")
+	}
+	vm.Agenda.Cards[idx].Event.Title = `Tom & Jerry <script>`
 	got, err := Render(vm)
 	if err != nil {
 		t.Fatal(err)

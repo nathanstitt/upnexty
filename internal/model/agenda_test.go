@@ -312,3 +312,75 @@ func TestNowBarStaysOnPanelDuringALongMeeting(t *testing.T) {
 		}
 	}
 }
+
+// An overnight span gets a free-time chip and a day separator, like any gap.
+//
+// The parser drops events that ended over an hour ago, so late in the day
+// tomorrow morning's first meeting becomes index 0 of the row. Gating the chip
+// and the separator on i > 0 meant that card landed flush against the NOW bar
+// with nothing between them -- at 16:25 the panel showed "Exercise class
+// 08:30" as if it were starting imminently. Found on hardware with a real
+// calendar.
+func TestOvernightGapIsAnEntry(t *testing.T) {
+	now := time.Date(2026, 9, 1, 16, 25, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		{Title: "Exercise class", Start: now.Add(16 * time.Hour), End: now.Add(17 * time.Hour)},
+		{Title: "Research", Start: now.Add(17 * time.Hour), End: now.Add(17*time.Hour + 30*time.Minute)},
+	}
+	row := BuildAgenda(evs, now, false)
+
+	if len(row.Cards) < 3 {
+		t.Fatalf("row has %d cards, want a gap and a separator before the events", len(row.Cards))
+	}
+	if row.Cards[0].Kind != CardGap {
+		t.Errorf("first card is %v, want a free-time chip covering the overnight span",
+			row.Cards[0].Kind)
+	}
+	if got := row.Cards[0].GapText; got != "16h" {
+		t.Errorf("gap chip reads %q, want the 16h until the next event", got)
+	}
+	var sawSep bool
+	for _, c := range row.Cards {
+		if c.Kind == CardDaySep {
+			sawSep = true
+			if c.SepText != "Tomorrow" {
+				t.Errorf("day separator reads %q, want %q", c.SepText, "Tomorrow")
+			}
+		}
+	}
+	if !sawSep {
+		t.Error("no day separator: the row crosses into tomorrow without saying so")
+	}
+}
+
+// The NOW bar sits inside the overnight chip, not against the first event.
+func TestOvernightNowBarIsInTheGap(t *testing.T) {
+	now := time.Date(2026, 9, 1, 16, 25, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		{Title: "Exercise class", Start: now.Add(16 * time.Hour), End: now.Add(17 * time.Hour)},
+	}
+	row := BuildAgenda(evs, now, false)
+
+	gap := row.Cards[0]
+	if gap.Kind != CardGap {
+		t.Fatalf("first card is %v, want the gap", gap.Kind)
+	}
+	left := gap.XPx + row.OffsetPx + CardPadPx
+	if row.NowBarXPx < left || row.NowBarXPx > left+gap.WidthPx {
+		t.Errorf("NOW bar at %.1f is outside the gap chip spanning %.1f..%.1f",
+			row.NowBarXPx, left, left+gap.WidthPx)
+	}
+}
+
+// A gap only appears when there is one: back-to-back events still abut.
+func TestNoSpuriousGapWhenAnEventIsImminent(t *testing.T) {
+	now := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		{Title: "Soon", Start: now.Add(2 * time.Minute), End: now.Add(30 * time.Minute)},
+	}
+	row := BuildAgenda(evs, now, false)
+	if len(row.Cards) > 0 && row.Cards[0].Kind == CardGap {
+		t.Errorf("a %s chip was inserted before an event starting in 2 minutes",
+			row.Cards[0].GapText)
+	}
+}

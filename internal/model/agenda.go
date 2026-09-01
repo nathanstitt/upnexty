@@ -172,13 +172,25 @@ func BuildAgenda(events []calendar.Event, now time.Time, clock24 bool) CardRow {
 	current := currentEvents(events, now)
 	stackPlaced := false
 
-	var prevEnd time.Time
-	var lastDay string
-	for i, e := range events {
+	// Seed the walk from the present rather than from the first event, so the
+	// span between now and whatever is next is an entry like any other.
+	//
+	// Gating on i > 0 meant the row opened flush against the first card
+	// whenever today's events had all passed: the parser drops events that
+	// ended over an hour ago, so tomorrow morning's 08:30 became index 0 and
+	// the sixteen hours in front of it produced neither a gap chip nor a day
+	// separator. At 16:25 the panel showed "Exercise class 08:30" hard against
+	// the NOW bar, which reads as starting imminently.
+	//
+	// lastDay is seeded the same way, so the crossing into tomorrow is marked
+	// even when nothing today survived.
+	prevEnd := now
+	lastDay := now.Format("2006-01-02")
+	for _, e := range events {
 		isCurrent := !e.Start.After(now) && e.End.After(now)
 
-		// Free-time chip between events separated by more than GapMinutes.
-		if i > 0 && !isCurrent {
+		// Free-time chip between entries separated by more than GapMinutes.
+		if !isCurrent {
 			gap := e.Start.Sub(prevEnd)
 			if gap >= GapMinutes*time.Minute {
 				chip := Card{Kind: CardGap, XPx: x, WidthPx: GapChipWidthPx, GapText: shortDuration(gap)}
@@ -195,7 +207,7 @@ func BuildAgenda(events []calendar.Event, now time.Time, clock24 bool) CardRow {
 
 		// Day separator when this event crosses into a new day.
 		day := e.Start.Format("2006-01-02")
-		if lastDay != "" && day != lastDay {
+		if day != lastDay {
 			row.Cards = append(row.Cards, Card{
 				Kind: CardDaySep, XPx: x, WidthPx: DaySepWidthPx,
 				SepText: dayHeading(e.Start, now),

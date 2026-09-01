@@ -161,12 +161,19 @@ func main() {
 	// fetch-first shape, which is what lets a failed boot retry in retryDelay
 	// rather than a full interval.
 	cfg0 := store.Config()
-	go delayThen(calendarInterval(cfg0), func() {
+	go func() {
+		// The startup offset is itself interruptible. A plain sleep here left
+		// a window -- ten minutes by default -- in which a portal save cleared
+		// the pending flag and sent a wake that nothing was listening for, so
+		// the buffered signal was dropped and the panel sat on "Fetching..."
+		// until this delay expired. Waiting on the same channel the loop uses
+		// means a save during startup is honoured rather than lost.
+		store.WaitCalendarWake(calendarInterval(cfg0))
 		// The calendar loop is the wakeable one: saving a feed in the portal
 		// should show it now, not at the next interval.
 		fetchLoopWake(store, calendarInterval, fetchCalendars,
 			func(s *Store, d time.Duration) { s.WaitCalendarWake(d) })
-	})
+	}()
 	go delayThen(weatherInterval(cfg0), func() {
 		fetchLoop(store, weatherInterval, fetchWeather)
 	})
