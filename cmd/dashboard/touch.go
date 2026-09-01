@@ -22,6 +22,15 @@ type dialogState struct {
 	muted config.MutedEvent
 	// openedAt drives the idle timeout.
 	openedAt time.Time
+	// timeout is how long this particular dialog may sit open. The device
+	// sheet closes sooner than the rest because it puts a password on a wall.
+	timeout time.Duration
+
+	// deviceInfo gathers what the device sheet reports. It is a function
+	// rather than a value because it shells out to wpa_cli: doing that on
+	// every tap, for a sheet raised a few times a year, would put a subprocess
+	// in the path of every card tap.
+	deviceInfo func() model.DeviceInfo
 }
 
 // dialogTimeout closes a dialog nobody is interacting with.
@@ -32,6 +41,12 @@ type dialogState struct {
 // still the documented way out -- this is the backstop for the times it is not
 // used, which on an unattended display is most of them.
 const dialogTimeout = 45 * time.Second
+
+// deviceDialogTimeout is shorter: this sheet shows the admin password, and a
+// wall panel left sitting on it is the credential on display to the room. Long
+// enough to read an IP and a six-character password out loud, not long enough
+// to forget about.
+const deviceDialogTimeout = 20 * time.Second
 
 // actionRects returns where the dialog's controls land on the panel.
 //
@@ -100,6 +115,22 @@ func handleTap(st *dialogState, vm model.ViewModel, cfg *config.Config, store *S
 		return false
 	}
 
+	// The top-left corner raises the device sheet. Tested before the card hit
+	// test because it sits over the clock, which is not tappable -- but the
+	// order matters if the agenda ever extends left, and this reads as the
+	// intent either way.
+	if x < model.CornerTapPx && y < model.CornerTapPx {
+		if st.deviceInfo == nil {
+			return false // no gatherer wired up (tests that do not need it)
+		}
+		d := model.DeviceDialog(st.deviceInfo())
+		st.dlg = &d
+		st.key = ""
+		st.openedAt = time.Now()
+		st.timeout = deviceDialogTimeout
+		return true
+	}
+
 	e, ok := vm.Agenda.EventAt(x, y)
 	if !ok {
 		return false
@@ -112,6 +143,7 @@ func handleTap(st *dialogState, vm model.ViewModel, cfg *config.Config, store *S
 		Key: key, Title: e.Title, Start: e.Start, End: e.End, Muted: time.Now(),
 	}
 	st.openedAt = time.Now()
+	st.timeout = dialogTimeout
 	return true
 }
 
@@ -183,10 +215,21 @@ func watchTaps(ctx context.Context, dev string, st *dialogState, store *Store,
 				render()
 			}
 		case <-tick.C:
-			if st.dlg != nil && time.Since(st.openedAt) > dialogTimeout {
+			if st.dlg != nil && time.Since(st.openedAt) > st.dialogTimeout() {
 				st.dlg = nil
 				render()
 			}
 		}
 	}
+}
+
+// dialogTimeout returns how long the open dialog may sit idle.
+//
+// Falls back to the standard timeout when unset, so a dialog opened by a path
+// that forgets to set it still closes rather than sticking forever.
+func (st *dialogState) dialogTimeout() time.Duration {
+	if st.timeout > 0 {
+		return st.timeout
+	}
+	return dialogTimeout
 }

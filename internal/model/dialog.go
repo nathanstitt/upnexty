@@ -184,3 +184,73 @@ func rsvpLabel(status string) string {
 	}
 	return ""
 }
+
+// DeviceInfo is what the device sheet reports. The caller gathers it: the
+// model layer has no business running wpa_cli or reading sysfs.
+type DeviceInfo struct {
+	IP       string
+	SSID     string
+	Hostname string
+	// Password is the admin password for the settings page. Empty when the
+	// board cannot derive one (an unreadable MAC).
+	Password string
+	// PasswordIsCustom reports that someone changed the password on the
+	// settings page, so Password is the no-longer-valid default.
+	PasswordIsCustom bool
+}
+
+// DeviceDialog is the sheet raised by tapping the panel's top-left corner: how
+// to reach this board, for someone standing in front of it.
+//
+// It exists because both facts are otherwise unavailable from where the user
+// is. The IP comes from DHCP and changes; the board runs no mDNS, so there is
+// no name to fall back on. The password is only ever shown on the panel while
+// the board is unassociated (see the setup hint), which is exactly when it is
+// least useful -- once the board is on the network the hint disappears and the
+// credential goes with it.
+func DeviceDialog(info DeviceInfo) Dialog {
+	d := Dialog{
+		Eyebrow: "Device",
+		Title:   "Connect to this panel",
+		DismissAction: DialogAction{
+			ID: ActionClose, Label: "Close", Style: "close",
+		},
+	}
+
+	// Address first: it is the one thing that changes, and the reason to raise
+	// this sheet at all.
+	ip := info.IP
+	if ip == "" {
+		ip = "Not connected"
+	}
+	d.Rows = append(d.Rows, DialogRow{Label: "Address", Value: ip, Mono: true})
+
+	if info.SSID != "" {
+		d.Rows = append(d.Rows, DialogRow{Label: "Network", Value: info.SSID})
+	}
+	if info.Hostname != "" {
+		d.Rows = append(d.Rows, DialogRow{Label: "Hostname", Value: info.Hostname, Mono: true})
+	}
+
+	switch {
+	case info.Password == "":
+		// A MAC that would not parse; DefaultPassword returns "" rather than
+		// mint a guessable credential from garbage.
+		d.Rows = append(d.Rows, DialogRow{Label: "Password", Value: "Unavailable"})
+	case info.PasswordIsCustom:
+		// The stored password is a hash, so the real one cannot be shown. Say
+		// so rather than print a default that no longer works: someone would
+		// type it, fail, and conclude the panel is broken.
+		d.Rows = append(d.Rows, DialogRow{
+			Label: "Password", Value: "Changed in settings",
+		})
+	default:
+		d.Rows = append(d.Rows, DialogRow{
+			Label: "Password", Value: info.Password, Mono: true,
+		})
+	}
+
+	// No actions. There is nothing to do here but read and dismiss, and an
+	// action bar would only add a control that does nothing.
+	return d
+}

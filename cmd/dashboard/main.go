@@ -170,7 +170,22 @@ func main() {
 
 	// Taps open the event sheet. A missing or unreadable input device is
 	// logged and the dashboard runs on as a display -- see watchTaps.
-	st := &dialogState{}
+	st := &dialogState{deviceInfo: func() model.DeviceInfo {
+		// Gathered at tap time, not cached: the address is a DHCP lease and
+		// the whole point of the sheet is reporting the current one.
+		cfg := store.Config()
+		info := model.DeviceInfo{
+			Hostname:         hostname(),
+			Password:         portal.DefaultPassword(wc.MAC()),
+			PasswordIsCustom: cfg.Portal.PasswordHash != "",
+		}
+		if status, err := wc.Status(); err == nil {
+			info.IP, info.SSID = status.IP, status.SSID
+		} else {
+			log.Printf("device sheet: wifi status: %v", err)
+		}
+		return info
+	}}
 	go watchTaps(context.Background(), *touchDev, st, store,
 		func() model.ViewModel {
 			// Only the agenda geometry is needed for hit-testing, so the
@@ -575,4 +590,14 @@ func resetQuoteFetch() {
 	quoteMu.Lock()
 	quoteFetching = false
 	quoteMu.Unlock()
+}
+
+// hostname returns the board's name for the device sheet, or "" if it cannot
+// be read. Not fatal: the sheet simply omits the row.
+func hostname() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	return h
 }

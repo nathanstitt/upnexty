@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -244,4 +245,102 @@ func TestSetOpenDialogThenRenderDoesNotDeadlock(t *testing.T) {
 		t.Error("dialog was not published for the next render")
 	}
 	setOpenDialog(nil)
+}
+
+// devInfo is a stub gatherer: the real one shells out to wpa_cli.
+func devInfo() model.DeviceInfo {
+	return model.DeviceInfo{
+		IP: "192.168.1.81", SSID: "Argosity", Hostname: "luckfox", Password: "4c1bfd",
+	}
+}
+
+// Tapping the top-left corner raises the device sheet.
+//
+// The corner is the only way to see the board's address from in front of it:
+// the IP is a DHCP lease that changes, and the board runs no mDNS, so there is
+// no name to fall back on.
+func TestCornerTapOpensTheDeviceDialog(t *testing.T) {
+	store, vm, cfg := tapFixture(t)
+	st := &dialogState{deviceInfo: devInfo}
+
+	if !handleTap(st, vm, cfg, store, 10, 10) {
+		t.Fatal("corner tap did not request a redraw")
+	}
+	if st.dlg == nil {
+		t.Fatal("corner tap opened no dialog")
+	}
+	if st.dlg.Eyebrow != "Device" {
+		t.Errorf("Eyebrow = %q, want the device sheet", st.dlg.Eyebrow)
+	}
+
+	var got []string
+	for _, r := range st.dlg.Rows {
+		got = append(got, r.Label+"="+r.Value)
+	}
+	joined := strings.Join(got, " ")
+	for _, want := range []string{"Address=192.168.1.81", "Password=4c1bfd"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("rows %v are missing %q", got, want)
+		}
+	}
+}
+
+// The corner region is bounded: taps outside it must not raise the sheet.
+//
+// It sits over the clock, which has no other behaviour, so an oversized region
+// would swallow taps meant for the agenda -- and the sheet shows a password.
+func TestCornerTapRegionIsBounded(t *testing.T) {
+	inside := [][2]float64{{0, 0}, {50, 50}, {99, 99}}
+	outside := [][2]float64{{101, 50}, {50, 101}, {150, 150}, {200, 20}}
+
+	for _, p := range inside {
+		store, vm, cfg := tapFixture(t)
+		st := &dialogState{deviceInfo: devInfo}
+		if !handleTap(st, vm, cfg, store, p[0], p[1]) || st.dlg == nil {
+			t.Errorf("(%v,%v) is inside the %vpx corner but opened nothing",
+				p[0], p[1], model.CornerTapPx)
+		}
+	}
+	for _, p := range outside {
+		store, vm, cfg := tapFixture(t)
+		st := &dialogState{deviceInfo: devInfo}
+		handleTap(st, vm, cfg, store, p[0], p[1])
+		if st.dlg != nil && st.dlg.Eyebrow == "Device" {
+			t.Errorf("(%v,%v) is outside the %vpx corner but raised the device sheet",
+				p[0], p[1], model.CornerTapPx)
+		}
+	}
+}
+
+// The device sheet closes sooner than the rest: it puts the admin password on
+// a wall, and a panel left sitting on it is that credential on display.
+func TestDeviceDialogClosesSoonerThanTheEventSheet(t *testing.T) {
+	store, vm, cfg := tapFixture(t)
+
+	st := &dialogState{deviceInfo: devInfo}
+	handleTap(st, vm, cfg, store, 10, 10)
+	device := st.dialogTimeout()
+
+	st2 := &dialogState{deviceInfo: devInfo}
+	x, y := centreOfFirstCard(t, vm)
+	handleTap(st2, vm, cfg, store, x, y)
+	event := st2.dialogTimeout()
+
+	if device >= event {
+		t.Errorf("device sheet times out after %v, no sooner than the event sheet's %v",
+			device, event)
+	}
+}
+
+// A state with no gatherer must not panic: the corner is still tappable.
+func TestCornerTapWithoutAGathererIsInert(t *testing.T) {
+	store, vm, cfg := tapFixture(t)
+	st := &dialogState{} // no deviceInfo
+
+	if handleTap(st, vm, cfg, store, 10, 10) {
+		t.Error("corner tap asked for a redraw with no info to show")
+	}
+	if st.dlg != nil {
+		t.Error("corner tap opened a dialog with no info to show")
+	}
 }

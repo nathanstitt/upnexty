@@ -54,6 +54,18 @@ const (
 	// client-side scrolling -- see CardRow.OffsetPx.
 	AgendaViewportPx = PanelWidth - NowBlockW // 1540
 
+	// CornerTapPx is the side of the square in the panel's top-left corner that
+	// raises the device sheet. It sits over the clock, which has no other tap
+	// behaviour, so nothing is displaced.
+	//
+	// 100px is a deliberate compromise: large enough to hit reliably with a
+	// fingertip on glass (the digitizer reports ~5px of jitter), small enough
+	// that it does not reach the weather widget below or the agenda to its
+	// right. It is also not signposted -- this is a maintenance affordance, not
+	// a feature, and a visible control would invite taps that raise a sheet
+	// showing a password on a wall.
+	CornerTapPx = 100.0
+
 	// NowBarMarginPx keeps the sweeping bar off the right edge. The current
 	// slot is duration-scaled at AgendaPxPerMin, so a long meeting is wider
 	// than the viewport (4h is 1440px) and the bar would otherwise sweep off
