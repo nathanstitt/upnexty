@@ -115,8 +115,9 @@ html, body {
 
 /* Weather: icon, temp + condition, rain% */
 #wx-widget {
-  /* The asymmetric padding (6 top, 10 bottom) is what lifts the condition text
-     off the rule below -- it was sitting directly on it.
+  /* The asymmetric padding (2 top, 14 bottom) is what lifts the condition text
+     off the rule below -- it was sitting directly on it, and then at 6/10 it
+     cleared by only 3px, which still read as tight.
 
      It has to be done here, not on #wx-desc. This row is align-items: center,
      so #wx-temp-block is vertically centred: any height added inside it pushes
@@ -124,9 +125,15 @@ html, body {
      Both margin-bottom and padding-bottom on #wx-desc were tried and each left
      a 2px gap, measured. Shifting this row's own padding moves the centred
      block as a unit, which is the thing that actually works.
+
+     The split trades directly: every 2px moved from top to bottom adds 2px to
+     the gap (3px at 6/10, 5 at 4/12, 7 at 2/14, 9 at 0/16, measured). 2/14 is
+     as far as it goes while keeping any top inset at all. There is room above
+     -- #clock-row ends at y=62 and the temperature's ink starts at 83 -- so
+     the constraint is taste, not collision.
      TestConditionTextClearsTheHairline measures the rendered gap.
      The total stays 16px so the row still fits its fixed 84px. */
-  padding: 6px 18px 10px;
+  padding: 2px 18px 14px;
   display: flex; align-items: center; gap: 12px;
   /* --border (white at 0.055) composites to rgb(14,15,20) over this panel --
      7/255 above the background, which measured as invisible on the panel even
@@ -134,7 +141,7 @@ html, body {
      the display actually resolves. */
   border-bottom: 1px solid var(--rule);
   /* See #clock-row: an explicit height is what pins a flex row here. The temp
-     block governs: 44px temp + 4 + 18px desc = 66, plus 6/10 padding and the
+     block governs: 44px temp + 4 + 18px desc = 66, plus 2/14 padding and the
      1px rule. The 50px icon is not the tall child. */
   flex: 0 0 auto;
   height: 84px;
@@ -910,7 +917,7 @@ html, body {
     </div>
 
     <div id="wx-zone">
-      <div id="wx-strip"><svg viewBox="0 0 1540 104" width="1540" height="104" class="wx-chart"><rect x="598.9" y="101.4" width="115.5" height="2.6" fill="rgba(74,144,217,0.55)"/><rect x="684.4" y="98.8" width="115.5" height="5.2" fill="rgba(74,144,217,0.55)"/><rect x="770.0" y="96.2" width="115.5" height="7.8" fill="rgba(74,144,217,0.55)"/><rect x="855.6" y="93.6" width="115.5" height="10.4" fill="rgba(74,144,217,0.55)"/><rect x="941.1" y="91.0" width="115.5" height="13.0" fill="rgba(74,144,217,0.55)"/><rect x="1026.7" y="88.4" width="115.5" height="15.6" fill="rgba(74,144,217,0.55)"/><rect x="1112.2" y="85.8" width="115.5" height="18.2" fill="rgba(74,144,217,0.55)"/><path fill="none" stroke="#7ec8f0" stroke-width="4.0" stroke-linecap="round" stroke-linejoin="round" d="M513.3 98.0 L598.9 88.6 L684.4 79.1 L770.0 69.7 L855.6 60.3 L941.1 50.9 L1026.7 41.4 L1112.2 32.0 "/><text x="598.9" y="78.6" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">71&#176;</text><text x="770.0" y="59.7" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">73&#176;</text><text x="941.1" y="40.9" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">75&#176;</text><text x="1112.2" y="22.0" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">77&#176;</text></svg></div>
+      <div id="wx-strip"><svg viewBox="0 0 1540 104" width="1540" height="104" class="wx-chart"><rect x="598.9" y="101.4" width="115.5" height="2.6" fill="rgba(74,144,217,0.55)"/><rect x="684.4" y="98.8" width="115.5" height="5.2" fill="rgba(74,144,217,0.55)"/><rect x="770.0" y="96.2" width="115.5" height="7.8" fill="rgba(74,144,217,0.55)"/><rect x="855.6" y="93.6" width="115.5" height="10.4" fill="rgba(74,144,217,0.55)"/><rect x="941.1" y="91.0" width="115.5" height="13.0" fill="rgba(74,144,217,0.55)"/><rect x="1026.7" y="88.4" width="115.5" height="15.6" fill="rgba(74,144,217,0.55)"/><rect x="1112.2" y="85.8" width="115.5" height="18.2" fill="rgba(74,144,217,0.55)"/><path fill="none" stroke="#7ec8f0" stroke-width="4.0" stroke-linecap="round" stroke-linejoin="round" d="M513.3 98.0 L598.9 89.7 L684.4 81.4 L770.0 73.1 L855.6 64.9 L941.1 56.6 L1026.7 48.3 L1112.2 40.0 "/><text x="598.9" y="79.7" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">71&#176;</text><text x="770.0" y="63.1" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">73&#176;</text><text x="941.1" y="46.6" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">75&#176;</text><text x="1112.2" y="30.0" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">77&#176;</text></svg></div>
       <div id="wx-hours">
         <span class="wx-hour" style="left:111.2px">6 AM</span><span class="wx-hour" style="left:367.9px">9 AM</span><span class="wx-hour" style="left:624.6px">12 PM</span><span class="wx-hour" style="left:881.2px">3 PM</span><span class="wx-hour" style="left:1137.9px">6 PM</span><span class="wx-hour" style="left:1394.6px">9 PM</span>
       </div>

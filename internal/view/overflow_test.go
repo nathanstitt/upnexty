@@ -269,10 +269,14 @@ func TestConditionTextClearsTheHairline(t *testing.T) {
 		t.Fatalf("could not locate the rule (%d) or the text above it (%d)", rule, inkBottom)
 	}
 
-	// 3px is the floor for "not touching" at this size; the rule asks for 6.
-	if gap := rule - inkBottom - 1; gap < 3 {
-		t.Errorf("condition text ends at y=%d and the hairline is at y=%d: a %dpx gap. "+
-			"margin-bottom is swallowed on a flex child here -- use padding-bottom",
+	// 6px floor. 3px is merely "not touching" and still read as tight on the
+	// panel; the rule asks for 7, so this catches a regression toward either
+	// the 2px original or the 3px first attempt without pinning the exact
+	// value.
+	if gap := rule - inkBottom - 1; gap < 6 {
+		t.Errorf("condition text ends at y=%d and the hairline is at y=%d: a %dpx gap, "+
+			"too tight. The spacing lives in #wx-widget's own padding -- the row "+
+			"centres its children, so margin/padding on #wx-desc barely moves it",
 			inkBottom, rule, gap)
 	}
 }
@@ -459,5 +463,80 @@ func TestNowLabelLettersAreCentred(t *testing.T) {
 	if spread := mx - mn; spread > 1.0 {
 		t.Errorf("NOW letters centre at %v -- a %.1fpx spread, so the stack reads ragged",
 			centres, spread)
+	}
+}
+
+// The temperature labels must not run into the card row above them.
+//
+// #wx-zone is an ordinary in-flow sibling of #agenda-row -- nothing clips at
+// that boundary and there is no z-index between them -- so a label whose ink
+// rises past the top of the chart band lands on the cards. The hottest point
+// in the window is the worst case: it sits at exactly topPadPx, so its label
+// is the one that escapes.
+//
+// This has been wrong twice, at topPadPx 26 (ascender outside the viewBox
+// entirely) and at 32 (inside the viewBox but 5px into the band, which reads
+// as touching). Both looked plausible in the source. chart.go carries a
+// compile-time guard on the arithmetic; this checks the pixels.
+func TestTemperatureLabelsClearTheCardRow(t *testing.T) {
+	// fixtureVM cannot exercise this: its temperature range never reaches the
+	// top of the chart, so its highest label sits 14px inside the band and
+	// passes at any topPadPx. The worst case is a labelled point at the very
+	// top of the range, which is what this builds -- a rising series whose peak
+	// lands on a label position (every other point is labelled at 8 points).
+	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+	w := &weather.Weather{
+		Current: weather.Conditions{TempF: 72, Code: 2, Time: now},
+		Daily:   []weather.DayPoint{{Date: now, HiF: 88, LoF: 64, Code: 2}},
+	}
+	for i := range 8 {
+		w.Hourly = append(w.Hourly, weather.HourPoint{
+			Time: now.Add(time.Duration(i) * time.Hour), TempF: 70 + float64(i),
+		})
+	}
+	vm := model.Build(now, c, nil, w, nil, nil)
+
+	html, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := fb.RenderHTML(context.Background(), []byte(html), 1920, 480,
+		omnidoc.WithResourceLoader(FontLoader()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The band starts below the 40px ribbon and the 240px card row.
+	const bandTop = model.RibbonHeightPx + model.AgendaHeightPx
+
+	// Labels are --text #dde3ef, much lighter than the curve or the bars, so a
+	// high threshold isolates them from everything else in the band.
+	top := -1
+	for y := bandTop - 30; y < bandTop+80; y++ {
+		for x := leftZoneWidthPx; x < 1920; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if r>>8 > 190 && g>>8 > 195 && b>>8 > 210 {
+				top = y
+				break
+			}
+		}
+		if top >= 0 {
+			break
+		}
+	}
+	if top < 0 {
+		t.Fatal("found no temperature labels in the weather band")
+	}
+	// Clearance, not just containment. At topPadPx 32 the ink stayed inside the
+	// viewBox but landed 5px below the band's top edge, hard against the cards
+	// -- "not overlapping" is not the same as "not touching". 10px is the floor
+	// for visible separation at this size; the current inset yields 13.
+	const minClearance = 10
+	if gap := top - bandTop; gap < minClearance {
+		t.Errorf("the topmost temperature label starts at y=%d, only %dpx below "+
+			"the card row's bottom edge at y=%d -- the digits read as touching "+
+			"the cards. Raise chart.topPadPx", top, gap, bandTop)
 	}
 }

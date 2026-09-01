@@ -110,8 +110,9 @@ html, body {
 
 /* Weather: icon, temp + condition, rain% */
 #wx-widget {
-  /* The asymmetric padding (6 top, 10 bottom) is what lifts the condition text
-     off the rule below -- it was sitting directly on it.
+  /* The asymmetric padding (2 top, 14 bottom) is what lifts the condition text
+     off the rule below -- it was sitting directly on it, and then at 6/10 it
+     cleared by only 3px, which still read as tight.
 
      It has to be done here, not on #wx-desc. This row is align-items: center,
      so #wx-temp-block is vertically centred: any height added inside it pushes
@@ -119,9 +120,15 @@ html, body {
      Both margin-bottom and padding-bottom on #wx-desc were tried and each left
      a 2px gap, measured. Shifting this row's own padding moves the centred
      block as a unit, which is the thing that actually works.
+
+     The split trades directly: every 2px moved from top to bottom adds 2px to
+     the gap (3px at 6/10, 5 at 4/12, 7 at 2/14, 9 at 0/16, measured). 2/14 is
+     as far as it goes while keeping any top inset at all. There is room above
+     -- #clock-row ends at y=62 and the temperature's ink starts at 83 -- so
+     the constraint is taste, not collision.
      TestConditionTextClearsTheHairline measures the rendered gap.
      The total stays 16px so the row still fits its fixed 84px. */
-  padding: 6px 18px 10px;
+  padding: 2px 18px 14px;
   display: flex; align-items: center; gap: 12px;
   /* --border (white at 0.055) composites to rgb(14,15,20) over this panel --
      7/255 above the background, which measured as invisible on the panel even
@@ -129,7 +136,7 @@ html, body {
      the display actually resolves. */
   border-bottom: 1px solid var(--rule);
   /* See #clock-row: an explicit height is what pins a flex row here. The temp
-     block governs: 44px temp + 4 + 18px desc = 66, plus 6/10 padding and the
+     block governs: 44px temp + 4 + 18px desc = 66, plus 2/14 padding and the
      1px rule. The 50px icon is not the tall child. */
   flex: 0 0 auto;
   height: 84px;

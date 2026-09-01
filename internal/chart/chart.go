@@ -59,25 +59,44 @@ const (
 	labelColor = "#dde3ef" // --text
 	labelSize  = 26
 
-	// Vertical insets on the curve, from the reference. topPadPx is what makes
-	// room for the label drawn above each point, and it is not free to pick:
-	// the label's baseline sits labelOffsetPx above the point, and SVG text
-	// grows upward from its baseline, so the inset must cover
-	// labelOffsetPx + the font's ascent (~0.8em for IBM Plex Mono, so ~21px at
-	// 26). At the reference's 26 it did not: labelSize was later raised from 17
-	// without raising this, which put the hottest point's label at baseline
-	// y=16 with its ascender clipped above the viewBox and overlapping the card
-	// row above. Raise this whenever labelSize or labelOffsetPx goes up.
-	topPadPx    = 32.0
+	// Vertical insets on the curve. topPadPx is what makes room for the label
+	// drawn above each point, and it is not free to pick.
+	//
+	// SVG text grows upward from its baseline, and the baseline sits
+	// labelOffsetPx above the point, so the inset has to cover
+	// labelOffsetPx + labelInkAscentPx + clearance. The chart band butts
+	// directly against the card row above it (#wx-zone is an ordinary in-flow
+	// sibling of #agenda-row), so anything short of that puts the digits into
+	// the cards.
+	//
+	// This has been wrong twice. At 26 the ascender clipped outside the viewBox
+	// entirely; at 32 it stopped clipping but the ink still landed 5px into the
+	// band, which reads as touching. 40 = 10 + 17 + 13 of clearance.
+	//
+	// Raise it whenever labelSize or labelOffsetPx goes up.
+	topPadPx    = 40.0
 	bottomPadPx = 6.0
 
 	// How far above its point each temperature label's baseline sits.
 	labelOffsetPx = 10.0
 
+	// How far the digits' ink actually rises above their baseline at
+	// labelSize. Measured by rasterizing "97" at a known baseline and reading
+	// the topmost lit row -- 17px at 26, not the ~21 that 0.8em would suggest.
+	// The font's declared ascent is not the ink's, and the difference is the
+	// whole margin here.
+	labelInkAscentPx = 17.0
+
 	// The curve is the chart's subject: thicker and brighter than the 2.5 it
 	// was, which read as a hairline beside 26px labels.
 	curveWidth = 4.0
 )
+
+// The top inset must clear the label's ink with room to spare, or the digits
+// render into the card row above. A compile error here means labelSize or
+// labelOffsetPx moved without topPadPx following -- which is how this shipped
+// broken twice. Re-measure labelInkAscentPx if labelSize changed.
+const _ = uint(topPadPx - (labelOffsetPx + labelInkAscentPx + 8))
 
 // Hourly renders the temperature curve and precipitation bars across the same
 // time window the agenda uses, so the two rows align on one axis.
