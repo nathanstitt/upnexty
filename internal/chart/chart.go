@@ -144,6 +144,11 @@ func Hourly(w *weather.Weather, win model.Window, heightPx float64) string {
 	type pt struct {
 		x, temp float64
 		prob    int
+		// edge marks a point interpolated onto the band's boundary rather than
+		// a real reading. It is a curve vertex only: it carries no
+		// precipitation, takes no label, and does not count toward the bar
+		// width, all of which would otherwise claim an hour never measured.
+		edge bool
 	}
 	var pts []pt
 	for _, h := range w.Hourly {
@@ -154,6 +159,50 @@ func Hourly(w *weather.Weather, win model.Window, heightPx float64) string {
 	}
 	if len(pts) == 0 {
 		return b.String() + "</svg>"
+	}
+
+	// Carry the curve out to both edges of the band.
+	//
+	// The data lands on hour boundaries but the window starts wherever the NOW
+	// bar puts it, so the first in-window point is up to an hour in -- measured
+	// at 64px of empty band before the curve began, which read as the chart
+	// being inset from the card row above it rather than as missing data.
+	//
+	// The bracketing readings exist in the feed and were simply filtered out,
+	// so the edge value is interpolated from the real neighbour rather than
+	// invented: at worst it is the same linear segment the curve would have
+	// drawn anyway, just clipped to the band. Only the curve is extended --
+	// precipitation bars and labels stay on real readings, since a bar at a
+	// synthetic point would claim an hour that was never measured.
+	//
+	// prob is deliberately zero on an edge point: it is a curve vertex only.
+	edgeAt := func(at time.Time) (pt, bool) {
+		var before, after *weather.HourPoint
+		for i := range w.Hourly {
+			h := &w.Hourly[i]
+			if !h.Time.After(at) && (before == nil || h.Time.After(before.Time)) {
+				before = h
+			}
+			if h.Time.After(at) && (after == nil || h.Time.Before(after.Time)) {
+				after = h
+			}
+		}
+		if before == nil || after == nil {
+			return pt{}, false // no reading on both sides: nothing to interpolate
+		}
+		span := after.Time.Sub(before.Time).Seconds()
+		if span <= 0 {
+			return pt{}, false
+		}
+		f := at.Sub(before.Time).Seconds() / span
+		return pt{x: win.X(at), temp: before.TempF + f*(after.TempF-before.TempF), edge: true}, true
+	}
+	if edge, ok := edgeAt(win.Start); ok && edge.x < pts[0].x {
+		pts = append([]pt{edge}, pts...)
+	}
+	// win.End maps to exactly WidthPx, the band's right edge.
+	if edge, ok := edgeAt(win.End); ok && edge.x > pts[len(pts)-1].x {
+		pts = append(pts, edge)
 	}
 	// min/max must come from the plotted points only. Seeding from
 	// w.Hourly[0] before filtering let an out-of-window outlier (e.g. an
@@ -179,10 +228,19 @@ func Hourly(w *weather.Weather, win model.Window, heightPx float64) string {
 		return topPadPx + (1-(t-minT)/(maxT-minT))*(chartH-topPadPx-bottomPadPx)
 	}
 
-	// Precipitation bars first so the curve draws over them. len(pts) >= 1 is
-	// already guaranteed by the early return above, so no div-by-zero guard
-	// is needed here.
-	barW := win.WidthPx / float64(len(pts))
+	// Precipitation bars first so the curve draws over them. The divisor counts
+	// real readings only: the interpolated edge vertices are not hours, and
+	// including them would narrow every bar.
+	real := 0
+	for _, p := range pts {
+		if !p.edge {
+			real++
+		}
+	}
+	if real == 0 {
+		real = 1
+	}
+	barW := win.WidthPx / float64(real)
 	for _, p := range pts {
 		if p.prob <= 0 {
 			continue
@@ -209,11 +267,21 @@ func Hourly(w *weather.Weather, win model.Window, heightPx float64) string {
 	// derived from the point total rather than a fixed stride -- the window can
 	// change and this should stay at four.
 	const wantLabels = 4
-	stride := max(1, len(pts)/wantLabels)
+	// Stride over real readings only, and index them separately from pts: an
+	// edge vertex is interpolated, so labelling one would print a temperature
+	// that was never measured at a time that is not on the hour.
+	realPts := make([]int, 0, len(pts))
 	for i, p := range pts {
+		if !p.edge {
+			realPts = append(realPts, i)
+		}
+	}
+	stride := max(1, len(realPts)/wantLabels)
+	for n, i := range realPts {
+		p := pts[i]
 		// Offset by half a stride so the first label is not at x=0, where it
 		// would be clipped by the viewBox.
-		if (i+stride/2)%stride != 0 {
+		if (n+stride/2)%stride != 0 {
 			continue
 		}
 		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" fill="%s" font-family="Roboto, sans-serif" font-size="%d" font-weight="600">%.0f&#176;</text>`,

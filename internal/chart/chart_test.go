@@ -3,6 +3,7 @@ package chart
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -278,5 +279,92 @@ func TestSpanWindowHandlesZeroWidth(t *testing.T) {
 	win := SpanWindow(model.Window{WidthPx: 0}, now, 400)
 	if win.End.Sub(win.Start) != ChartSpan {
 		t.Errorf("span = %v, want %v", win.End.Sub(win.Start), ChartSpan)
+	}
+}
+
+// The curve must reach both edges of the band.
+//
+// Readings land on hour boundaries but the window starts wherever the NOW bar
+// puts it, so the first in-window reading can be most of an hour in. That left
+// 64px of empty band before the curve began, which read as the chart being
+// inset from the card row above rather than as missing data.
+func TestCurveReachesBothEdges(t *testing.T) {
+	now := time.Date(2026, 9, 1, 15, 21, 0, 0, time.UTC)
+	w := &weather.Weather{Current: weather.Conditions{TempF: 98, Time: now}}
+	base := now.Truncate(time.Hour).Add(-10 * time.Hour)
+	for i := range 34 {
+		w.Hourly = append(w.Hourly, weather.HourPoint{
+			Time: base.Add(time.Duration(i) * time.Hour), TempF: 80 + float64(i%12)})
+	}
+
+	// Several bar positions: the window start moves with it, so the offset
+	// between the window edge and the first hourly reading varies.
+	//
+	// Only positions whose window is fully inside the feed are checked. A
+	// window that opens before the earliest reading has nothing to interpolate
+	// from, and drawing to the edge there would be inventing data rather than
+	// extending a real segment -- a gap is the honest rendering.
+	for _, barX := range []float64{100, 268, 513} {
+		win := SpanWindow(model.Window{WidthPx: model.TrackWidth}, now, barX)
+		if win.Start.Before(w.Hourly[0].Time) || win.End.After(w.Hourly[len(w.Hourly)-1].Time) {
+			t.Fatalf("barX=%v: fixture does not bracket the window; widen the feed", barX)
+		}
+		svg := Hourly(w, win, 104)
+
+		m := regexp.MustCompile(`d="M([0-9.]+) `).FindStringSubmatch(svg)
+		if m == nil {
+			t.Fatalf("barX=%v: no curve path", barX)
+		}
+		var startX float64
+		fmt.Sscanf(m[1], "%f", &startX)
+		if startX > 1 {
+			t.Errorf("barX=%v: curve starts at x=%.1f, leaving a gap against the "+
+				"left edge of the band", barX, startX)
+		}
+
+		// And the far end: the last vertex should reach the right edge.
+		all := regexp.MustCompile(`[ML]([0-9.]+) [0-9.]+`).FindAllStringSubmatch(m[0][:0]+svg, -1)
+		var lastX float64
+		for _, g := range all {
+			var x float64
+			fmt.Sscanf(g[1], "%f", &x)
+			if x > lastX {
+				lastX = x
+			}
+		}
+		if lastX < model.TrackWidth-1 {
+			t.Errorf("barX=%v: curve ends at x=%.1f, short of the band's %d",
+				barX, lastX, model.TrackWidth)
+		}
+	}
+}
+
+// Interpolated edge vertices are curve geometry only.
+//
+// A precipitation bar or a temperature label on one would claim a measurement
+// at a time that is not on the hour and was never reported.
+func TestEdgePointsCarryNoDataMarks(t *testing.T) {
+	now := time.Date(2026, 9, 1, 15, 21, 0, 0, time.UTC)
+	w := &weather.Weather{Current: weather.Conditions{TempF: 98, Time: now}}
+	base := now.Truncate(time.Hour).Add(-10 * time.Hour)
+	for i := range 34 {
+		w.Hourly = append(w.Hourly, weather.HourPoint{
+			Time:       base.Add(time.Duration(i) * time.Hour),
+			TempF:      80 + float64(i%12),
+			PrecipProb: 50, // every real reading would draw a bar
+		})
+	}
+	win := SpanWindow(model.Window{WidthPx: model.TrackWidth}, now, 268)
+	svg := Hourly(w, win, 104)
+
+	// No bar and no label may sit at the very edges, where the interpolated
+	// vertices are.
+	for _, re := range []struct{ name, pat string }{
+		{"precip bar", `<rect x="(0\.0|1539\.\d|1540\.0)"`},
+		{"label", `<text x="(0\.0|1539\.\d|1540\.0)"`},
+	} {
+		if regexp.MustCompile(re.pat).MatchString(svg) {
+			t.Errorf("a %s was drawn on an interpolated edge vertex", re.name)
+		}
 	}
 }
