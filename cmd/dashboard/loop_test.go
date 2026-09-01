@@ -174,6 +174,29 @@ func TestStoreKeepsLastGoodOnFailure(t *testing.T) {
 	}
 }
 
+// A fresh store has not fetched, so an empty agenda means "not known yet" and
+// the panel must say so rather than claiming the day is clear.
+func TestStoreCalendarPendingUntilFirstFetch(t *testing.T) {
+	s := &Store{}
+	if !s.CalendarPending() {
+		t.Error("CalendarPending = false on a fresh store, want true")
+	}
+	s.SetEvents([]calendar.Event{{Title: "e"}}, nil)
+	if s.CalendarPending() {
+		t.Error("CalendarPending = true after a successful fetch, want false")
+	}
+}
+
+// A failed fetch still counts as having asked. Gating on success would strand a
+// board with an unreachable feed on "Fetching..." forever.
+func TestStoreCalendarPendingClearsOnFailedFetch(t *testing.T) {
+	s := &Store{}
+	s.SetEvents(nil, []string{"ical: timeout"})
+	if s.CalendarPending() {
+		t.Error("CalendarPending = true after a failed fetch, want false")
+	}
+}
+
 func TestStoreReplacesOnSuccess(t *testing.T) {
 	s := &Store{}
 	s.SetEvents([]calendar.Event{{Title: "old"}}, nil)

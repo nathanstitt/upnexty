@@ -23,6 +23,11 @@ type Store struct {
 	evErrs  []string
 	wxErrs  []string
 
+	// evFetched records that a calendar fetch has completed, successfully or
+	// not. It distinguishes "no events yet" from "no events", which are
+	// identical in the events slice but must not read the same on the panel.
+	evFetched bool
+
 	// configPath is where Update persists a saved config. Set once at
 	// construction (see main); Update fails clearly if it is ever empty
 	// instead of silently skipping the disk write.
@@ -98,10 +103,15 @@ func (s *Store) Update(fn func(*config.Config) error) error {
 // SetEvents records the result of a calendar fetch attempt. On failure (errs
 // non-nil) the previous events are kept; evs is expected to be nil in that
 // case, but the last-good set is preserved either way.
+//
+// A failed attempt still clears evFetched: the panel has now tried, and an
+// empty agenda is the honest answer. Gating on success instead would leave a
+// board with an unreachable feed showing "Fetching..." forever.
 func (s *Store) SetEvents(evs []calendar.Event, errs []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.evErrs = errs
+	s.evFetched = true
 	if len(errs) == 0 {
 		s.events = evs
 	}
@@ -129,6 +139,14 @@ func (s *Store) Snapshot() ([]calendar.Event, *weather.Weather, []string) {
 	evs := append([]calendar.Event(nil), s.events...)
 	errs := append(append([]string(nil), s.evErrs...), s.wxErrs...)
 	return evs, s.weather, errs
+}
+
+// CalendarPending reports that no calendar fetch has finished yet, so an empty
+// agenda should read as "still loading" rather than "nothing scheduled".
+func (s *Store) CalendarPending() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return !s.evFetched
 }
 
 // nextTick returns the delay until the next minute boundary, so the clock
