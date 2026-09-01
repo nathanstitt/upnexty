@@ -43,6 +43,9 @@
   --text:       #dde3ef;
   --text-dim:   #3d4a62;
   --text-mid:   #6b7a96;
+  /* The next-up block's lines: 6.45:1 on --bg, vs 4.62 for --text-mid.
+     See .nb-next -- 18px text needs 4.5:1 and --text-mid clears it by 0.12. */
+  --nb-next-fg: #8593ad;
   --amber:      #f59e0b;
   --blue:       #4a90d9;
   --green:      #6ad28a;
@@ -107,10 +110,18 @@ html, body {
 
 /* Weather: icon, temp + condition, rain% */
 #wx-widget {
-  /* 2px bottom, not 8: the six that moved to #wx-desc's margin-bottom are what
-     lift the condition text off the rule below. The row height is fixed, so
-     that spacing has to come out of this padding rather than add to it. */
-  padding: 10px 18px 2px;
+  /* The asymmetric padding (6 top, 10 bottom) is what lifts the condition text
+     off the rule below -- it was sitting directly on it.
+
+     It has to be done here, not on #wx-desc. This row is align-items: center,
+     so #wx-temp-block is vertically centred: any height added inside it pushes
+     the block down by half of what it adds beneath, and the gap barely moves.
+     Both margin-bottom and padding-bottom on #wx-desc were tried and each left
+     a 2px gap, measured. Shifting this row's own padding moves the centred
+     block as a unit, which is the thing that actually works.
+     TestConditionTextClearsTheHairline measures the rendered gap.
+     The total stays 16px so the row still fits its fixed 84px. */
+  padding: 6px 18px 10px;
   display: flex; align-items: center; gap: 12px;
   /* --border (white at 0.055) composites to rgb(14,15,20) over this panel --
      7/255 above the background, which measured as invisible on the panel even
@@ -118,8 +129,8 @@ html, body {
      the display actually resolves. */
   border-bottom: 1px solid var(--rule);
   /* See #clock-row: an explicit height is what pins a flex row here. The temp
-     block governs: 44px temp + 4 + 18px desc + 6 margin = 72, plus 10/2
-     padding and the 1px rule. The 50px icon is not the tall child. */
+     block governs: 44px temp + 4 + 18px desc = 66, plus 6/10 padding and the
+     1px rule. The 50px icon is not the tall child. */
   flex: 0 0 auto;
   height: 84px;
   line-height: 1;
@@ -130,20 +141,13 @@ html, body {
   font-family: 'Barlow Condensed', sans-serif;
   font-size: 44px; font-weight: 300; line-height: 1;
 }
-/* margin-bottom keeps the condition text off #wx-widget's border-bottom, which
-   it was sitting directly on.
-
-   The row's height is fixed and its content already filled it, so this space
-   is taken from margin-top rather than added: 4+0 became 0+6, a net gain of
-   2px absorbed by the padding-bottom this rule's block gave up. Adding height
-   here instead overflows #wx-widget, which pushes #now-content down and clips
-   the last line of .nb-next off the bottom of the panel -- the exact failure
-   #now-content and .nb-pad are commented against. */
+/* No bottom spacing here: the gap above the rule belongs to #wx-widget's
+   padding. Adding margin-bottom or padding-bottom to this element does almost
+   nothing, because the row centres its children -- see the note there. */
 #wx-desc {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 18px; color: var(--text-mid);
   letter-spacing: 0.04em; text-transform: uppercase;
-  margin-bottom: 6px;
 }
 #wx-precip-col { text-align: right; }
 #wx-precip-pct {
@@ -241,12 +245,27 @@ html, body {
    block had already claimed and the last line ("at 10:00 AM") was clipped off
    the bottom by #now-content's overflow. A zero-flex box with a height is
    honoured; a margin is not. */
+/* Contrast, measured off the panel rather than computed. 18px is below the
+   24px large-text threshold, so WCAG AA here is 4.5:1 against --bg #07080d:
+
+     --text-dim  (the original)   1.65:1   fails badly -- unreadable
+     --text-mid                   4.62:1   passes, by 0.12
+     #8593ad     (now)            6.45:1   passes with headroom
+
+   The opacity that used to be on this block is gone, but not for the reason
+   first assumed: the engine was not applying it to the text colour at all, so
+   the lead rendered at --text-mid's full 4.62 rather than the 3.61 that
+   compositing 0.85 would predict. It is removed because a declaration that
+   does nothing is worse than no declaration -- it invites exactly that kind of
+   wrong arithmetic.
+
+   6.45:1 against the body text's 15.54:1 keeps a clear hierarchy while leaving
+   margin over the 4.5 floor. --nb-next-fg exists so these lines can move
+   without touching --text-mid, which is used elsewhere where 4.62 is fine.
+   TestNextUpBlockMeetsContrastAA checks each line separately -- the title is
+   lighter, so a whole-block maximum reports a pass while the other two fail. */
 .nb-next {
-  /* 0.85, not 0.7: this block still recedes, but two dimmers multiplied --
-     this opacity times --text-dim on the lead -- put "THEN" at roughly
-     rgb(46,56,76) over #07080d, which is not readable on the panel. The
-     per-element colours below carry the recession now. */
-  opacity: 0.85; padding-left: 12px;
+  padding-left: 12px;
   flex: 0 0 auto;
 }
 .nb-next-gap { flex: 0 0 18px; height: 18px; }
@@ -255,7 +274,7 @@ html, body {
    by the block's opacity. */
 .nb-next-lead {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 18px; line-height: 1.2; color: var(--text-mid);
+  font-size: 18px; line-height: 1.2; color: var(--nb-next-fg);
   letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 2px;
 }
 .nb-next-title {
@@ -265,7 +284,7 @@ html, body {
 }
 .nb-next-at {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 18px; line-height: 1.2; color: var(--text-mid);
+  font-size: 18px; line-height: 1.2; color: var(--nb-next-fg);
   margin-top: 2px;
 }
 
@@ -333,12 +352,28 @@ html, body {
    made the three-letter stack read as ragged. text-align centres each glyph on
    the inline axis, which is the horizontal one in this writing-mode. left is
    7px rather than 9 so the wider box stays centred on the same axis. */
+/* One block per letter, NOT writing-mode.
+
+   text-align does not apply to glyphs in this engine's vertical writing-mode:
+   they are placed on the block axis by advance width, so N and O (8px of ink)
+   sat 2px left of W (12px) and the stack read as ragged. Probed four ways --
+   with and without a stated width, and with per-letter spans each carrying
+   their own text-align -- and all four measured the same 2.5px spread, which
+   is what rules out a CSS fix.
+
+   Stacked blocks put each letter in its own horizontal line box, where
+   text-align works normally: measured spread 0.0px. The tradeoff is that the
+   markup carries the layout, so the template spells out the letters.
+
+   line-height 1.05 rather than 1: at 1 the three boxes total 60px against the
+   56px the glyphs need, and the small leading keeps the stack from reading as
+   cramped beside the 3px bar. */
 #now-bar-label {
   position: absolute; top: 14px; left: 7px;
-  writing-mode: vertical-rl; text-orientation: upright;
+  width: 20px; text-align: center;
   font-family: 'Barlow Condensed', sans-serif;
-  font-size: 20px; font-weight: 700; color: var(--amber);
-  letter-spacing: 0.04em; width: 20px; text-align: center;
+  font-size: 20px; font-weight: 700; line-height: 1.05;
+  color: var(--amber);
 }
 
 /* All-day pills ride above the card row, starting at the left edge. The NOW

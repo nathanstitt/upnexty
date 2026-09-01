@@ -4,14 +4,18 @@
 > renamed from doctaculous. Every finding here is a measurement: rasterize the
 > case and assert on the size of the box you are making a claim about.
 
-Six findings are live — two found on 2026-08-31 building the tap dialog, and
-two more (17, 18) building the left panel's vertical layout, both of which cost
-several wrong diagnoses before a control case settled them. Everything else this document used to carry has been fixed upstream and
+Eight findings are live — two found on 2026-08-31 building the tap dialog, two
+more (17, 18) building the left panel's vertical layout, and two (20, 21) on
+2026-09-01 fixing spacing and alignment that had been reported as done. All of
+them cost several wrong diagnoses before a control case settled them.
+Everything else this document used to carry has been fixed upstream and
 its workaround removed from this repo; the table at the bottom lists what, so
 the removals stay traceable.
 
 | # | Finding | Effect | State |
 |---|---|---|---|
+| 20 | `text-align` does not reach glyphs in a vertical `writing-mode` | letters of differing width read as ragged | **open** |
+| 21 | a centred flex row swallows a child's own bottom spacing | text sits on the rule below it | **open** |
 | 15 | a flex container drops a bare text child | button paints, label vanishes | **open** |
 | 17 | child-combinator selector (`a > b`) never applies | rule parses, declarations silently ignored | **open** |
 | 18 | column flex container ignores bottom spacing when sizing children | last child overruns the container edge | **open** |
@@ -137,6 +141,76 @@ letting the grid align columns.
 **Workaround:** one flex row per line with a fixed-width label. The column edge
 lines up the same way; what is lost is the grid's ability to size the label
 column to its widest member, so that width is stated (`132px`) instead.
+
+---
+
+## 20. `text-align` does not reach glyphs in a vertical `writing-mode`
+
+Sibling of 14b — same element, `#now-bar-label`, and again the axes not being
+swapped. 14b is the box's *size*; this is the *placement of glyphs inside it*.
+
+With `writing-mode: vertical-rl; text-orientation: upright`, each letter is
+placed on the block axis by its own advance width and `text-align` has no
+effect. In Barlow Condensed 700 at 20px, N and O carry 8px of ink against W's
+12px, so the three letters centre 2px apart and the stack reads ragged.
+
+Probed four ways against a control, all measuring the spread between per-letter
+centres:
+
+| markup | spread |
+|---|---|
+| `width: 20px; text-align: center` | 2.5px |
+| `width: 20px`, no `text-align` | 2.5px |
+| no stated width | 2.5px |
+| per-letter `<span>`s, each `text-align: center` | 2.5px |
+| **stacked blocks, no `writing-mode`** | **0.0px** |
+
+Identical in all four vertical cases, including per-letter spans with their own
+alignment — which is what rules out a CSS fix rather than a mistake in ours.
+
+**Workaround:** drop `writing-mode` and stack one block per letter, so each
+letter is an ordinary horizontal line box where `text-align` applies normally.
+The template spells out `<div>N</div><div>O</div><div>W</div>` for this reason.
+
+A flex column (`align-items: center`, or `justify-content: center` per letter)
+measures the same 0.0px and is equally correct. Both were tried; `text-align`
+was kept because it needs no flex container and so cannot meet 15. Note that
+the per-letter flex variant *does* meet 15 if the letter is a bare text child:
+`<div style="display:flex">N</div>` rendered **no ink at all**. Wrap the letter
+in an element if you use flex here.
+
+`TestNowLabelLettersAreCentred` measures the rendered spread; it fails at 2.0px
+against the `writing-mode` markup.
+
+---
+
+## 21. A centred flex row swallows a child's own bottom spacing
+
+`#wx-widget` is `display: flex; align-items: center` with a fixed height. Its
+child `#wx-temp-block` holds the temperature over the condition text, and the
+condition text was sitting directly on the row's `border-bottom`.
+
+Neither `margin-bottom` nor `padding-bottom` on that text moves it. Because the
+row centres its children, height added inside the child pushes the whole block
+*down* by half of what it adds beneath — so the gap below barely changes:
+
+| rule | rendered gap |
+|---|---|
+| `#wx-desc { margin-bottom: 6px }` | 2px |
+| `#wx-desc { padding-bottom: 6px }` | 2px |
+| **`#wx-widget { padding: 6px 18px 10px }`** | **3px+** |
+
+This is arguably correct centring rather than a bug, but it is worth recording
+because the failure is invisible in the stylesheet: the declaration is present,
+plausible, and does nothing. It shipped twice as "fixed" for that reason.
+
+Related to 18 and 19, which are also about flex containers and spacing being
+dropped, but distinct: those concern a *column* container ignoring its own
+bottom spacing, this one a *centred row* absorbing a child's.
+
+**Workaround:** move the spacing to the flex row's own padding, which shifts the
+centred block as a unit. `TestConditionTextClearsTheHairline` measures the
+rendered gap between the glyph ink and the rule.
 
 ---
 

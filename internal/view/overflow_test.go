@@ -3,6 +3,7 @@ package view
 import (
 	"context"
 	"image"
+	"math"
 	"testing"
 	"time"
 
@@ -215,5 +216,248 @@ func TestNextUpLastLineIsNotClipped(t *testing.T) {
 		t.Errorf("%d lit pixels in rows %d-%d, which .nb-pad reserves as empty: "+
 			"the next-up block has overflowed and its last line is clipped",
 			ink, bandTop, bandBottom)
+	}
+}
+
+// The condition text must not sit on the hairline below it.
+//
+// The gap comes from #wx-widget's asymmetric padding, not from anything on
+// #wx-desc. That row is align-items: center, so its children are centred as a
+// unit: height added inside #wx-desc pushes the block down by half of what it
+// adds beneath it, and the gap barely changes. Both margin-bottom and
+// padding-bottom were tried there and each measured 2px.
+//
+// So this asserts on rendered pixels rather than on the declaration. A rule
+// that looks right in the stylesheet is exactly how this shipped touching in
+// the first place.
+func TestConditionTextClearsTheHairline(t *testing.T) {
+	vm := fixtureVM(t)
+	html, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := fb.RenderHTML(context.Background(), []byte(html), 1920, 480,
+		omnidoc.WithResourceLoader(FontLoader()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The hairline spans the left panel; glyphs never do. Scan down from the
+	// temperature for the first row that is wide enough to be the rule, and
+	// remember the last row of ink above it.
+	rule, inkBottom := -1, -1
+	for y := 100; y < 200; y++ {
+		wide, ink := 0, 0
+		for x := 5; x < leftZoneWidthPx-5; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if r>>8 > 30 || g>>8 > 34 || b>>8 > 44 {
+				wide++
+			}
+			if x >= 20 && x < leftZoneWidthPx-20 && r>>8+g>>8+b>>8 > 110 {
+				ink++
+			}
+		}
+		if wide > 300 {
+			rule = y
+			break
+		}
+		if ink > 0 {
+			inkBottom = y
+		}
+	}
+	if rule < 0 || inkBottom < 0 {
+		t.Fatalf("could not locate the rule (%d) or the text above it (%d)", rule, inkBottom)
+	}
+
+	// 3px is the floor for "not touching" at this size; the rule asks for 6.
+	if gap := rule - inkBottom - 1; gap < 3 {
+		t.Errorf("condition text ends at y=%d and the hairline is at y=%d: a %dpx gap. "+
+			"margin-bottom is swallowed on a flex child here -- use padding-bottom",
+			inkBottom, rule, gap)
+	}
+}
+
+// relLuminance and contrastRatio implement WCAG 2.1 SC 1.4.3.
+func relLuminance(r, g, b uint8) float64 {
+	f := func(v uint8) float64 {
+		c := float64(v) / 255
+		if c <= 0.04045 {
+			return c / 12.92
+		}
+		return math.Pow((c+0.055)/1.055, 2.4)
+	}
+	return 0.2126*f(r) + 0.7152*f(g) + 0.0722*f(b)
+}
+
+func contrastRatio(fg, bg [3]uint8) float64 {
+	a, b := relLuminance(fg[0], fg[1], fg[2]), relLuminance(bg[0], bg[1], bg[2])
+	if a < b {
+		a, b = b, a
+	}
+	return (a + 0.05) / (b + 0.05)
+}
+
+// The next-up block must stay readable, measured rather than declared.
+//
+// It has failed this twice. Originally --text-dim at opacity 0.70 rendered as
+// rgb(45,54,72) -- 1.65:1, unreadable on the panel. Lifting the colour to
+// --text-mid but leaving opacity 0.85 gave 3.61:1, which still fails AA and
+// still looked "fixed" in the stylesheet. Opacity is the trap: it multiplies
+// whatever colour is declared, so the rule and the rendering disagree.
+//
+// 18px is below the 24px large-text threshold, so the bar is 4.5:1.
+func TestNextUpBlockMeetsContrastAA(t *testing.T) {
+	now := time.Date(2026, 8, 25, 8, 0, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+	evs := []calendar.Event{
+		{Title: "Morning Standup", Color: "#4f9cff",
+			Start: now.Add(2 * time.Hour), End: now.Add(2*time.Hour + 30*time.Minute)},
+	}
+	vm := model.Build(now, c, evs, nil, nil, nil)
+	html, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := fb.RenderHTML(context.Background(), []byte(html), 1920, 480,
+		omnidoc.WithResourceLoader(FontLoader()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Each line has to be checked on its own. The block's three lines are
+	// different colours -- the title is lighter than the lead and the time --
+	// so the brightest pixel across the whole band is the title, and taking it
+	// alone reports a pass while the other two fail. That is exactly the bug
+	// this test exists to catch, so it must not average or maximise over them.
+	//
+	// Anti-aliased edges are dimmer than the fill, so within a single text line
+	// the brightest pixel is the colour actually being asked for.
+	bg := [3]uint8{7, 8, 13} // --bg
+	type line struct {
+		top, bottom int
+		peak        [3]uint8
+		lum         float64
+	}
+	var lines []line
+	cur := line{top: -1}
+	for y := 380; y < 476; y++ {
+		var peak [3]uint8
+		var lum float64
+		for x := 20; x < leftZoneWidthPx-20; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			c := [3]uint8{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)}
+			if l := relLuminance(c[0], c[1], c[2]); l > lum {
+				lum, peak = l, c
+			}
+		}
+		// The background itself sits at ~0.003; anything above it is glyph.
+		if lum > relLuminance(bg[0], bg[1], bg[2])*2 {
+			if cur.top < 0 {
+				cur = line{top: y, peak: peak, lum: lum}
+			} else if lum > cur.lum {
+				cur.peak, cur.lum = peak, lum
+			}
+			cur.bottom = y
+		} else if cur.top >= 0 {
+			lines = append(lines, cur)
+			cur = line{top: -1}
+		}
+	}
+	if cur.top >= 0 {
+		lines = append(lines, cur)
+	}
+
+	if len(lines) < 3 {
+		t.Fatalf("expected the lead, title and time lines, found %d", len(lines))
+	}
+	for _, l := range lines {
+		if got := contrastRatio(l.peak, bg); got < 4.5 {
+			t.Errorf("next-up line at y=%d-%d renders rgb%v on rgb%v = %.2f:1, below "+
+				"the 4.5:1 WCAG AA floor for 18px text (an opacity on the block "+
+				"multiplies whatever colour the rule declares)",
+				l.top, l.bottom, l.peak, bg, got)
+		}
+	}
+}
+
+// The NOW label's letters must share a horizontal centre.
+//
+// text-align does not reach glyphs in this engine's vertical writing-mode, so
+// the label is stacked blocks instead -- see the stylesheet. N and O carry 8px
+// of ink against W's 12px, so a left-aligned stack is visibly ragged at the
+// 2px level this measures.
+func TestNowLabelLettersAreCentred(t *testing.T) {
+	vm := fixtureVM(t)
+	html, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := fb.RenderHTML(context.Background(), []byte(html), 1920, 480,
+		omnidoc.WithResourceLoader(FontLoader()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Amber glyphs near the bar, excluding the bar's own dense column.
+	barX := int(vm.Agenda.NowBarXPx) + leftZoneWidthPx
+	type row struct{ lo, hi int }
+	var rows []row
+	for y := 45; y < 140; y++ {
+		lo, hi := 1<<30, -1
+		for x := barX + 5; x < barX+34 && x < 1920; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if r>>8 > 150 && g>>8 > 90 && b>>8 < 90 {
+				if x < lo {
+					lo = x
+				}
+				if x > hi {
+					hi = x
+				}
+			}
+		}
+		if hi >= 0 {
+			rows = append(rows, row{lo, hi})
+		} else {
+			rows = append(rows, row{-1, -1})
+		}
+	}
+
+	var centres []float64
+	inLetter := false
+	lo, hi := 1<<30, -1
+	for _, r := range rows {
+		if r.hi >= 0 {
+			inLetter = true
+			if r.lo < lo {
+				lo = r.lo
+			}
+			if r.hi > hi {
+				hi = r.hi
+			}
+		} else if inLetter {
+			centres = append(centres, float64(lo+hi)/2)
+			inLetter, lo, hi = false, 1<<30, -1
+		}
+	}
+	if inLetter {
+		centres = append(centres, float64(lo+hi)/2)
+	}
+
+	if len(centres) != 3 {
+		t.Fatalf("expected 3 letters in the NOW label, found %d (centres %v)", len(centres), centres)
+	}
+	mn, mx := centres[0], centres[0]
+	for _, c := range centres {
+		if c < mn {
+			mn = c
+		}
+		if c > mx {
+			mx = c
+		}
+	}
+	if spread := mx - mn; spread > 1.0 {
+		t.Errorf("NOW letters centre at %v -- a %.1fpx spread, so the stack reads ragged",
+			centres, spread)
 	}
 }
