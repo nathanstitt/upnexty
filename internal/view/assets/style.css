@@ -489,7 +489,35 @@ html, body {
     #0a0d16;
   height: 240px; flex-shrink: 0;
   display: flex; align-items: stretch; gap: 14px;
-  padding: 10px 18px 12px;
+  padding: 0 18px;
+}
+
+/* The row's inset lives on its children, NOT as padding on the row.
+   
+   A flex row here offsets a stretched child by padding-top and then sizes it to
+   the container's full height, so the child overshoots the bottom by
+   padding-top + padding-bottom: measured 10..249 inside a 240px row declared
+   with padding 10/12, against the 10..227 it should occupy. The card's 1px
+   bottom border was drawn 22px below the band and clipped away, so the cards
+   read as open-bottomed boxes.
+   
+   Same family as gap 18, which documents the column case and is worked around
+   with .nb-pad -- but not the same fix: a spacer element cannot inset a row's
+   children on the block axis. Stating the row's height as content-box (218)
+   also renders correctly but shrinks its flow height to 218, which breaks the
+   480 budget below it. Margins keep the row at 240 and the child at 10..227,
+   verified both ways.
+   
+   Written as plain class selectors, not `#agenda-row > *`: a child combinator
+   parses and is then silently ignored on this engine (gap 17), so the rule
+   would apply to nothing and the cards would sit flush against the band edge
+   with no error anywhere.
+   
+   The horizontal inset stays on the row -- only the block axis is affected --
+   so CardPadPx keeps its meaning and the agenda's x arithmetic is unchanged.
+   The values stay pinned to the model by TestStylesheetMatchesModelGeometry. */
+.evt, .gap, .day-sep, .evt-stack, .agenda-empty {
+  margin-top: 10px; margin-bottom: 12px;
 }
 
 /* ---- Event card ---- */

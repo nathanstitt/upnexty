@@ -626,3 +626,67 @@ func TestLongQuoteDoesNotCollapseTheLeftPanel(t *testing.T) {
 			"overlapping (check the -webkit-line-clamp on .nb-quote)", inked)
 	}
 }
+
+// A card's bottom border must be drawn inside the agenda band.
+//
+// A flex row here offsets a stretched child by padding-top and then sizes it to
+// the container's full height, so a card in a row declared with padding 10/12
+// overshot the bottom by 22px: measured 10..249 inside a 240px row. The 1px
+// bottom border landed below the band and was clipped, leaving cards that read
+// as open-bottomed boxes. The inset is therefore margins on the cards, not
+// padding on the row -- see the note in style.css.
+//
+// This also keeps the render honest against model.CardRects, which computes
+// tap targets from RibbonHeightPx + AgendaRowPadTop and the same height. Those
+// were always right; it was the rendering that disagreed, so a tap near a
+// card's bottom edge hit nothing.
+func TestCardBordersAreInsideTheBand(t *testing.T) {
+	vm := fixtureVM(t)
+	html, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := fb.RenderHTML(context.Background(), []byte(html), 1920, 480,
+		omnidoc.WithResourceLoader(FontLoader()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Where the model says the cards are.
+	wantTop := float64(model.RibbonHeightPx + model.AgendaRowPadTop)
+	wantBot := wantTop + float64(model.AgendaHeightPx-model.AgendaRowPadTop-model.AgendaRowPadBot) - 1
+
+	// Sample a column inside the first event card rather than in the 14px gap
+	// between two, which is band background and has no border to find.
+	var rect model.Rect
+	for _, cr := range vm.Agenda.CardRects() {
+		rect = cr.Rect
+		break
+	}
+	if rect.W == 0 {
+		t.Fatal("fixture has no card rects")
+	}
+	x := int(rect.X + rect.W/2)
+
+	top, bot := -1, -1
+	for y := 30; y < 300; y++ {
+		r, g, b, _ := img.At(x, y).RGBA()
+		// The card's border is markedly bluer and brighter than the band.
+		if int(b>>8) > int(r>>8)+25 && int(r>>8)+int(g>>8)+int(b>>8) > 150 {
+			if top < 0 {
+				top = y
+			}
+			bot = y
+		}
+	}
+	if top < 0 {
+		t.Fatalf("no card border found at x=%d", x)
+	}
+	if float64(top) < wantTop-2 || float64(top) > wantTop+2 {
+		t.Errorf("card top border at y=%d, want ~%.0f", top, wantTop)
+	}
+	if float64(bot) < wantBot-2 || float64(bot) > wantBot+2 {
+		t.Errorf("card bottom border at y=%d, want ~%.0f -- it is being drawn "+
+			"outside the band and clipped", bot, wantBot)
+	}
+}

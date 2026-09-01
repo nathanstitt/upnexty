@@ -4,10 +4,10 @@
 > renamed from doctaculous. Every finding here is a measurement: rasterize the
 > case and assert on the size of the box you are making a claim about.
 
-Eight findings are live — two found on 2026-08-31 building the tap dialog, two
-more (17, 18) building the left panel's vertical layout, and two (20, 21) on
-2026-09-01 fixing spacing and alignment that had been reported as done. All of
-them cost several wrong diagnoses before a control case settled them.
+Nine findings are live — two found on 2026-08-31 building the tap dialog, two
+more (17, 18) building the left panel's vertical layout, and three (18b, 20,
+21) on 2026-09-01 fixing spacing and alignment that had been reported as done.
+All of them cost several wrong diagnoses before a control case settled them.
 Everything else this document used to carry has been fixed upstream and
 its workaround removed from this repo; the table at the bottom lists what, so
 the removals stay traceable.
@@ -15,6 +15,7 @@ the removals stay traceable.
 | # | Finding | Effect | State |
 |---|---|---|---|
 | 20 | `text-align` does not reach glyphs in a vertical `writing-mode` | letters of differing width read as ragged | **open** |
+| 18b | a flex ROW sizes a stretched child to the full container height | child overshoots by padding-top + padding-bottom | **open** |
 | 21 | a centred flex row swallows a child's own bottom spacing | text sits on the rule below it | **open** |
 | 15 | a flex container drops a bare text child | button paints, label vanishes | **open** |
 | 17 | child-combinator selector (`a > b`) never applies | rule parses, declarations silently ignored | **open** |
@@ -78,6 +79,40 @@ was simply absent, which reads as a rendering glitch rather than a layout bug.
 
 The fix is a spacer element (`.nb-pad`), since an explicit height on a
 zero-flex box IS honoured. Do not "simplify" it back into padding or a margin.
+
+## 18b. A flex row sizes a stretched child to the full container height
+
+The row variant of 18, and worse: `padding-top` is honoured as an *offset* but
+not subtracted from the child's height, so an `align-items: stretch` child
+overshoots the bottom by padding-top + padding-bottom.
+
+Measured with a 240px row declared `padding: 10px 18px 12px` holding one
+stretched child. The child spans **10..249** -- correctly offset by the 10, then
+240 tall from there -- against the 10..227 it should occupy.
+`box-sizing: border-box` on either box makes no difference.
+
+Cost here: every event card's 1px bottom border was drawn 22px below the agenda
+band and clipped away, so the cards read as open-bottomed boxes. It also put
+the render 22px out of step with `model.CardRects`, which computes tap targets
+from the same constants and was correct all along -- so a tap near a card's
+bottom edge hit nothing.
+
+18's fix does not transfer: a zero-flex spacer element can inset a *column*'s
+children, but nothing equivalent works across a row's block axis.
+
+Two things do work, both verified:
+
+| approach | child | row's flow height |
+|---|---|---|
+| `height: 218px` on the row (content-box) | 10..227 correct | **218** -- shrinks |
+| margins on the children, no vertical padding on the row | 10..227 correct | 240 correct |
+
+The height fix renders correctly but shrinks the row's flow height to 218,
+which breaks the 480px vertical budget below it. The margins are what this repo
+uses. Write them as plain class selectors: `#agenda-row > *` parses and is
+silently ignored (17), so the rule would apply to nothing.
+
+---
 
 ## 17. A child-combinator selector never applies
 

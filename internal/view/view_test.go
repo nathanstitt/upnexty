@@ -361,7 +361,7 @@ func TestStylesheetMatchesModelGeometry(t *testing.T) {
 	}{
 		{"#agenda-row", fmt.Sprintf("gap: %dpx", model.CardGapPx),
 			"the row's gap is the spacing model.BuildAgenda advances x by"},
-		{"#agenda-row", fmt.Sprintf("padding: 10px %dpx 12px", model.CardPadPx),
+		{"#agenda-row", fmt.Sprintf("padding: 0 %dpx", model.CardPadPx),
 			"model.CardPadPx offsets the row against the unpadded NOW bar"},
 
 		// The dialog's hit rects are stated in cmd/dashboard/touch.go and must
