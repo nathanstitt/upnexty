@@ -11,7 +11,26 @@ export GOOS=linux
 export GOARCH=arm
 export GOARM=7
 export CGO_ENABLED=0
-GO_LDFLAGS='-s -w' # strip debug info; rootfs has ~90MB free
+# Strip debug info by default: it is ~6MB of a ~24MB binary and the rootfs has
+# ~45MB free (not the ~90MB this comment used to claim).
+#
+# Stripping costs nothing at runtime -- .text is byte-identical and the debug
+# sections load at addr=0, so they are never mapped. Measured on the board,
+# interleaved: 6.48/6.61/6.53s stripped vs 6.52/6.48/6.37s unstripped, which is
+# one distribution. It is purely a disk-space tradeoff.
+#
+# What it does cost is the ability to read a crash. -s -w drops .symtab and
+# DWARF, and without them the runtime unwinder gives up mid-stack: the
+# 2026-09-01 fault printed "traceback stuck" and named no application frame.
+# (.gopclntab survives -w, so ordinary panics still symbolize; it is the hard
+# faults that do not.)
+#
+# LUCKFOX_UNSTRIPPED=1 keeps them, for when something needs to be diagnosed.
+if [ -n "${LUCKFOX_UNSTRIPPED:-}" ]; then
+	GO_LDFLAGS=''
+else
+	GO_LDFLAGS='-s -w'
+fi
 
 # upgrade_tool ships as a universal binary but its arm64 slice segfaults in
 # pthread_mutex_init before it touches USB. The x86_64 slice under Rosetta is

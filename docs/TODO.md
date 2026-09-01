@@ -48,7 +48,47 @@ on the panel; it is only unconfirmed in combination with the three above.
 
 ---
 
-## 2. Startup race: first frame after a restart shows a fetch error
+## 2. Swap the board back to a stripped binary — **on or after 2026-09-08**
+
+The deployed `/root/dashboard` is currently built **unstripped** (24MB rather
+than 17MB) so that a repeat of the 2026-09-01 crash produces a stack naming the
+code that faulted. Installed 2026-09-01 for one week.
+
+```bash
+scripts/build.sh dashboard          # stripped is the default
+scripts/deploy.sh build/dashboard   # named file: does not touch S99wlan0
+adb shell /etc/init.d/S99zdashboard restart
+```
+
+Revert unless the crash has recurred and is still unexplained; if it has, keep
+the symbols and diagnose rather than swapping back on schedule.
+
+**This costs disk, not speed.** `-s -w` drops `.symtab` and DWARF, which load at
+`addr=0` and are never mapped: `.text` is byte-identical between the two builds.
+Measured on the board, interleaved to cancel drift — 6.48/6.61/6.53s stripped
+against 6.52/6.48/6.37s unstripped, one distribution. The reason to revert is
+rootfs headroom: 30.8MB free (84% used) unstripped vs 44.9MB stripped, and a
+full rootfs breaks more than a missing stack does.
+
+`LUCKFOX_UNSTRIPPED=1 scripts/build.sh dashboard` rebuilds with symbols if this
+is needed again.
+
+### Why it was needed
+
+The 2026-09-01 fault printed `runtime: traceback stuck` and named no
+application frame — the unwinder had no symbol data to walk. What survived was
+only `sigpanic` at `runtime/slice.go:432`, a segfault in slice growth, with the
+caller unknown. It has not recurred in 30+ runs. Suspect the new allocation
+paths in omnidoc `511b16c` (`perf/shadow-blur-alloc`,
+`perf/gradient-shading-alloc`); a `-race` run on the host against those two is
+the cheaper first move.
+
+Note `.gopclntab` survives `-w`, so ordinary panics symbolize fine either way.
+It is specifically hard faults the runtime cannot unwind that need `.symtab`.
+
+---
+
+## 3. Startup race: first frame after a restart shows a fetch error
 
 The calendar fetch runs before the portal's listener is up, so the first render
 after `S99zdashboard restart` shows
