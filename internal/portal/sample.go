@@ -64,6 +64,27 @@ var sampleEvents = []sampleEvent{
 	{startMin: 0, durMin: 0, summary: "Company Holiday", allDay: true},
 }
 
+// doneEvents is the same day already finished: everything is in the past, with
+// one entry tomorrow so the TOMORROW preview under the mark has something to
+// show.
+//
+// This exists because the end-of-day panel -- the cheers mark and its quote --
+// is otherwise only reachable by waiting for a real calendar to run out, which
+// on a working board means late evening. Served from /sample.ical?state=done.
+//
+// The tomorrow entry is +20h rather than a fixed hour so it stays tomorrow
+// whatever time the board is asked: at 23:00 a "+9h" event would still be
+// today, and the preview would vanish exactly when someone is testing it.
+var doneEvents = []sampleEvent{
+	{startMin: -480, durMin: 30, summary: "Standup"},
+	{startMin: -400, durMin: 60, summary: "Design Review"},
+	{startMin: -300, durMin: 30, summary: "1:1 with Sam"},
+	{startMin: -180, durMin: 45, summary: "Sprint Planning"},
+	{startMin: -90, durMin: 25, summary: "Vendor Call"},
+	{startMin: 1200, durMin: 30, summary: "Morning Standup"}, // +20h: tomorrow
+	{startMin: 0, durMin: 0, summary: "Company Holiday", allDay: true},
+}
+
 // icalTime formats a UTC timestamp in the iCal DATE-TIME form.
 func icalTime(t time.Time) string {
 	return t.UTC().Format("20060102T150405Z")
@@ -73,7 +94,11 @@ func icalTime(t time.Time) string {
 //
 // Written by hand rather than through a library because the output is a fixed
 // shape and the dashboard's own parser is the only consumer.
-func sampleICal(now time.Time) string {
+func sampleICal(now time.Time) string { return sampleICalFor(now, sampleEvents) }
+
+// sampleICalFor renders an arbitrary fixture, so a caller can pick which state
+// the panel should land in.
+func sampleICalFor(now time.Time, events []sampleEvent) string {
 	var b strings.Builder
 	b.WriteString("BEGIN:VCALENDAR\r\n")
 	b.WriteString("VERSION:2.0\r\n")
@@ -81,7 +106,7 @@ func sampleICal(now time.Time) string {
 	b.WriteString("CALSCALE:GREGORIAN\r\n")
 	b.WriteString("X-WR-CALNAME:Sample\r\n")
 
-	for i, e := range sampleEvents {
+	for i, e := range events {
 		b.WriteString("BEGIN:VEVENT\r\n")
 		fmt.Fprintf(&b, "UID:upnext-sample-%d@localhost\r\n", i)
 		fmt.Fprintf(&b, "DTSTAMP:%s\r\n", icalTime(now))
@@ -123,5 +148,14 @@ func (s *Server) handleSampleICal(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
 	// Regenerated per request against the clock, so never cache it.
 	w.Header().Set("Cache-Control", "no-store")
-	fmt.Fprint(w, sampleICal(s.now()))
+
+	// ?state=done serves a day that has already finished, which is the only
+	// way to reach the end-of-day panel without waiting for a real calendar to
+	// run out. Any other value serves the normal fixture, so a typo shows the
+	// usual timeline rather than an error nobody is watching for.
+	events := sampleEvents
+	if r.URL.Query().Get("state") == "done" {
+		events = doneEvents
+	}
+	fmt.Fprint(w, sampleICalFor(s.now(), events))
 }

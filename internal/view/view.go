@@ -18,7 +18,7 @@ import (
 	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
 )
 
-//go:embed templates/*.html assets/*.css assets/fonts/*.ttf
+//go:embed templates/*.html assets/*.css assets/fonts/*.ttf assets/img/*.svg
 var assetFS embed.FS
 
 // FontLoader serves the embedded font files to omnidoc, which resolves
@@ -85,6 +85,10 @@ var funcs = template.FuncMap{
 	"px": func(v float64) template.CSS { return template.CSS(fmt.Sprintf("%.1fpx", v)) },
 	// Sized at the call site so the markup states the box it occupies.
 	"icon": func(code, sizePx int) template.HTML { return template.HTML(chart.Icon(code, sizePx)) },
+	// The end-of-day mark, inlined rather than served: the engine has no
+	// network and an <img src> would need a resource-loader round trip for a
+	// file that never changes.
+	"cheers": func() template.HTML { return template.HTML(cheersSVG) },
 	// alpha renders a calendar colour as a faint tint for all-day pills. The
 	// engine supports #RRGGBBAA, so the suffix is appended rather than
 	// converted to rgba().
@@ -182,3 +186,23 @@ func Render(vm model.ViewModel) (string, error) {
 	}
 	return sb.String(), nil
 }
+
+// cheersSVG is the end-of-day illustration, read once at startup.
+//
+// Inlined into the page rather than referenced with <img src>: the SVG is
+// static, and inlining avoids a resource-loader round trip per render. It
+// carries its own fills, so nothing in style.css needs to reach into it --
+// which is just as well, since CSS does not cascade into an inline <svg> on
+// this engine (see the note in internal/chart).
+//
+// The file keeps its width/height of 100%, so it fills whatever box the
+// stylesheet gives it and the caller states the size.
+var cheersSVG = func() string {
+	b, err := assetFS.ReadFile("assets/img/cheers.svg")
+	if err != nil {
+		// Embedded at build time: a failure here means the asset was renamed
+		// or dropped, which no runtime fallback can repair.
+		panic("view: cheers.svg missing from the embedded assets: " + err.Error())
+	}
+	return string(b)
+}()

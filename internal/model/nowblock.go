@@ -52,7 +52,17 @@ type NowBlock struct {
 	NextLead  string // "NEXT" or "THEN"
 	NextTitle string
 	NextAt    string
+
+	// Quote and QuoteAuthor are shown with the end-of-day mark (ModeDone
+	// only). Empty when none has been fetched, in which case the block simply
+	// omits them -- the panel never waits on the network to render.
+	Quote       string
+	QuoteAuthor string
 }
+
+// IsDone reports whether the day's events are finished, which the template
+// uses to swap the headline for the end-of-day mark and its quote.
+func (n NowBlock) IsDone() bool { return n.Mode == ModeDone }
 
 // BuildNowBlock resolves the left panel's headline.
 //

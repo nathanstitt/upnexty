@@ -30,6 +30,7 @@ import (
 	"github.com/nathanstitt/luckfox-dashboard/internal/fb"
 	"github.com/nathanstitt/luckfox-dashboard/internal/model"
 	"github.com/nathanstitt/luckfox-dashboard/internal/portal"
+	"github.com/nathanstitt/luckfox-dashboard/internal/quote"
 	"github.com/nathanstitt/luckfox-dashboard/internal/view"
 	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
 	"github.com/nathanstitt/luckfox-dashboard/internal/wifi"
@@ -378,6 +379,24 @@ func renderOnce(cfg *config.Config, store *Store, wc *wifi.Client, hintTracker *
 	// process, not about the calendar, so Build cannot derive it.
 	vm.Loading = store.CalendarPending()
 
+	// The end-of-day panel carries a quote. Attach whatever is cached and
+	// kick off a refresh in the background when the day has just ended: the
+	// fetch must never sit in the render path, because a slow or hung request
+	// would stall a frame on a panel whose whole job is showing the time.
+	//
+	// Fetched on entering the state rather than on a timer -- the quote is
+	// only visible for the few hours after the last event, so a periodic
+	// refresh would spend most of its requests on a screen nobody is reading.
+	if vm.NowBlock.Mode == model.ModeDone {
+		if q := quotes.Last(); !q.Empty() {
+			vm.NowBlock.Quote, vm.NowBlock.QuoteAuthor = q.Text, q.Author
+		}
+		refreshQuote()
+	} else {
+		// Out of the done state: let the next entry into it fetch a new line.
+		resetQuoteFetch()
+	}
+
 	html, err := view.Render(vm)
 	if err != nil {
 		return err
@@ -509,4 +528,51 @@ func fetchWeather(ctx context.Context, cfg *config.Config, store *Store) bool {
 	}
 	store.SetWeather(w, nil)
 	return true
+}
+
+// The end-of-day quote, and the guard that fetches it once per entry into that
+// state rather than on every tick.
+//
+// renderOnce runs once a minute, so an unguarded fetch would hit zenquotes 60
+// times an hour for a line that only changes when the day ends. quoteFetching
+// latches on the first render of the done state and clears when the day rolls
+// over into events again, which is the only point a new quote is wanted.
+var (
+	quotes        = &quote.Client{}
+	quoteMu       sync.Mutex
+	quoteFetching bool
+)
+
+// refreshQuote fetches in the background, at most once per entry into ModeDone.
+//
+// The fetch is detached from the render because it is remote: a hung request
+// must not hold up a frame. The result lands in the client's cache and is
+// picked up by the next tick, a minute later -- which is soon enough for a
+// panel that has just told the reader their day is over.
+func refreshQuote() {
+	quoteMu.Lock()
+	if quoteFetching {
+		quoteMu.Unlock()
+		return
+	}
+	quoteFetching = true
+	quoteMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if _, err := quotes.Get(ctx); err != nil {
+			// Not fatal: the panel renders the block without a quote, or with
+			// the last good one. Worth a line in the log to explain a blank.
+			log.Printf("quote: %v", err)
+		}
+	}()
+}
+
+// resetQuoteFetch re-arms refreshQuote, so the next end of day fetches a new
+// line rather than reusing the one from the previous day.
+func resetQuoteFetch() {
+	quoteMu.Lock()
+	quoteFetching = false
+	quoteMu.Unlock()
 }

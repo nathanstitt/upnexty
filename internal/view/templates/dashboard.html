@@ -64,6 +64,19 @@
       {{/* The headline and the next-up preview are wrapped as two groups so
            #now-content can space them apart rather than centring one clump and
            leaving the slack above and below. */}}
+      {{if .IsDone}}
+      {{/* End of day: the mark, the message, and a quote if one has been
+           fetched. Centred as a group -- this is the one state with no
+           timeline to align to. */}}
+      <div class="nb-now nb-done">
+        <div class="nb-cheers">{{cheers}}</div>
+        <div class="nb-done-msg">{{.Big}}</div>
+        {{if .Quote}}
+        <div class="nb-quote">&ldquo;{{.Quote}}&rdquo;</div>
+        {{if .QuoteAuthor}}<div class="nb-quote-author">&mdash; {{.QuoteAuthor}}</div>{{end}}
+        {{end}}
+      </div>
+      {{else}}
       <div class="nb-now">
         {{if .Lead}}<div class="nb-lead">{{.Lead}}</div>{{end}}
         {{if .BigIsDuration}}
@@ -79,6 +92,7 @@
           {{end}}
         {{end}}
       </div>
+      {{end}}
       {{- if .NextTitle -}}
       <div class="nb-next-gap"></div>
       <div class="nb-next">

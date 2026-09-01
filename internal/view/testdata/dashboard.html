@@ -220,6 +220,52 @@ html, body {
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* ---- End of day ---- */
+/* The one state with no timeline to align to, so the group centres itself.
+   Ported from the reference's .nb-cheers, scaled to this panel: its mark is
+   140px on a taller column, and 96px leaves room here for the message, the
+   quote and a TOMORROW preview inside the same 380px. */
+.nb-done {
+  align-items: center; text-align: center;
+}
+.nb-cheers {
+  width: 96px; height: 80px;
+  /* Not full strength: the mark is decoration under a message, and at 100% the
+     saturated amber pulled the eye off the text below it. */
+  opacity: 0.85;
+}
+.nb-done-msg {
+  font-family: 'Roboto', sans-serif;
+  font-size: 19px; font-weight: 600; line-height: 1.2;
+  color: var(--text-mid);
+  letter-spacing: 0.05em; text-transform: uppercase;
+  margin-top: 12px;
+}
+/* The quote is the only italic on the panel: it is a voice rather than data,
+   and the slant is what says so without needing a label.
+   
+   The clamp is a backstop, not a design choice: the quote is shown in full and
+   a typical zenquotes line is well inside it. But the panel is a fixed 480px
+   column with no scroll, and an unbounded quote does not overflow the bottom
+   -- it grows in place and paints over the author line, the TOMORROW preview,
+   and eventually the weather widget above. Measured: intact at 180 characters,
+   overlapping at 400. Six lines is the most that fits beside the mark and the
+   preview, so anything beyond that ends in an ellipsis rather than on top of
+   another line. */
+.nb-quote {
+  font-family: 'Roboto', sans-serif;
+  font-size: 18px; font-weight: 400; line-height: 1.45;
+  color: var(--nb-next-fg); font-style: italic;
+  margin-top: 10px; padding: 0 6px;
+  display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.nb-quote-author {
+  font-family: 'Roboto', sans-serif;
+  font-size: 17px; color: var(--text-mid);
+  letter-spacing: 0.06em; margin-top: 6px;
+}
+
 /* The duration headline: "22 min" free, or "in 4 min" until something starts.
    Both are the same shape deliberately -- these are the two states the panel is
    in most of the time, and swapping which line is large between them makes the
@@ -873,13 +919,15 @@ html, body {
 
     
     <div id="now-content">
+      
       <div class="nb-now">
         <div class="nb-lead">FREE FOR</div>
         
         <div class="nb-free">10 min</div>
         
         
-      </div><div class="nb-next-gap"></div>
+      </div>
+      <div class="nb-next-gap"></div>
       <div class="nb-next">
         <div class="nb-next-lead">NEXT</div>
         <div class="nb-next-title">Standup</div>

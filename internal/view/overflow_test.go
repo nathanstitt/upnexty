@@ -4,6 +4,7 @@ import (
 	"context"
 	"image"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -552,5 +553,76 @@ func TestTemperatureLabelsClearTheCardRow(t *testing.T) {
 		t.Errorf("the topmost temperature label starts at y=%d, only %dpx below "+
 			"the card row's bottom edge at y=%d -- the digits read as touching "+
 			"the cards. Raise chart.topPadPx", top, gap, bandTop)
+	}
+}
+
+// The end-of-day quote must not push the rest of the left panel apart.
+//
+// The panel is a fixed 480px column with no scroll. An unbounded quote does
+// not overflow the bottom -- it grows in place and paints over the author
+// line, the TOMORROW preview, and eventually the weather widget above, so a
+// bottom-spill check reads clean while the panel is unreadable. Measured:
+// intact at 180 characters, collapsed at 400. .nb-quote carries a 6-line
+// clamp as the backstop.
+func TestLongQuoteDoesNotCollapseTheLeftPanel(t *testing.T) {
+	now := time.Date(2026, 9, 1, 19, 30, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+	evs := []calendar.Event{
+		{Title: "Vendor Call", Start: now.Add(-90 * time.Minute), End: now.Add(-65 * time.Minute)},
+		{Title: "Morning Standup", Start: now.Add(14 * time.Hour), End: now.Add(14*time.Hour + 30*time.Minute)},
+	}
+	w := &weather.Weather{
+		Current: weather.Conditions{TempF: 88, Code: 0, Time: now},
+		Daily:   []weather.DayPoint{{Date: now, HiF: 98, LoF: 70, Code: 0}},
+	}
+	for i := range 20 {
+		w.Hourly = append(w.Hourly, weather.HourPoint{
+			Time: now.Add(time.Duration(i-8) * time.Hour), TempF: 80,
+		})
+	}
+
+	vm := model.Build(now, c, evs, w, nil, nil)
+	if vm.NowBlock.Mode != model.ModeDone {
+		t.Fatalf("fixture is not the end-of-day state: mode=%v", vm.NowBlock.Mode)
+	}
+	// Far longer than any real quote, which is the point: this is the backstop.
+	vm.NowBlock.Quote = strings.TrimSpace(strings.Repeat("achievement ", 40))[:400]
+	vm.NowBlock.QuoteAuthor = "Seneca"
+
+	html, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := fb.RenderHTML(context.Background(), []byte(html), 1920, 480,
+		omnidoc.WithResourceLoader(FontLoader()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The TOMORROW preview occupies the bottom of the column: a lead, a title
+	// and a time, which is three lines of ink in a band of empty rows. An
+	// unclamped quote grows down into that band and paints over it, so the
+	// count of inked rows there is what separates a legible panel from an
+	// overlapped one. Measured on this fixture: 43 rows clamped, 54 unclamped,
+	// so the threshold sits between them.
+	//
+	// Counting rows rather than looking for the weather rule above: the rule
+	// survives at this length either way, so it does not discriminate. The
+	// overlap is the defect, and it is only visible where the two blocks meet.
+	inked := 0
+	for y := 400; y < 480; y++ {
+		for x := 20; x < leftZoneWidthPx-20; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if int(r>>8)+int(g>>8)+int(b>>8) > 150 {
+				inked++
+				break
+			}
+		}
+	}
+	if inked > 48 {
+		t.Errorf("%d inked rows in the TOMORROW band, past the ~43 the preview "+
+			"alone occupies: the quote has grown into it and the two are "+
+			"overlapping (check the -webkit-line-clamp on .nb-quote)", inked)
 	}
 }
