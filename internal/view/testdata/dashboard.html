@@ -627,6 +627,20 @@ html, body {
   font-family: 'Roboto', sans-serif;
   font-size: 22px; font-weight: 600;
 }
+/* The overnight chip carries no duration, so its single line is the whole
+   label. "Overnight" is ~100px of ink at this size against an 86px chip, so it
+   is set down the chip's long axis instead of across it -- the box is 240px
+   tall and otherwise empty, and turning the word is what makes it fit without
+   shrinking the type below the size the panel is read at.
+
+   Stacked blocks rather than writing-mode, for the reason in #now-bar-label:
+   text-align does not reach glyphs in a vertical writing-mode on this engine,
+   so the letters would sit ragged. One block per letter keeps them centred. */
+.gap-overnight {
+  margin-top: 0;
+  line-height: 1.05;
+  text-align: center;
+}
 .gap-label {
   font-family: 'Roboto', sans-serif;
   font-size: 14px; font-weight: 700; margin-top: 4px;
@@ -950,8 +964,10 @@ html, body {
       
         
         <div class="gap" style="width:86.0px">
+          
           <div class="gap-dur">10m</div>
           <div class="gap-label">Free</div>
+          
         </div>
         
       

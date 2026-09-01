@@ -108,8 +108,12 @@ type Card struct {
 	Ghost bool   // a tentative or unaccepted invite
 	Badge string // "29M LEFT" on a current card, "IN 5M" when imminent
 
-	GapText string // duration on a free-time chip, e.g. "20m"
-	SepText string // "Tomorrow", "Monday, Sep 1" on a day separator
+	GapText string // duration on a free-time chip, e.g. "20m"; empty when Overnight
+	// Overnight marks a gap that runs to the next day. Such a span is labelled
+	// rather than measured: "19h59m free" is arithmetic nobody reads, and the
+	// useful fact is simply that the day is over.
+	Overnight bool
+	SepText   string // "Tomorrow", "Monday, Sep 1" on a day separator
 
 	// Stacked holds the in-progress events when Kind is CardStack. They share
 	// the slot's width and split its height, so one NOW bar bisects all of them
@@ -193,7 +197,15 @@ func BuildAgenda(events []calendar.Event, now time.Time, clock24 bool) CardRow {
 		if !isCurrent {
 			gap := e.Start.Sub(prevEnd)
 			if gap >= GapMinutes*time.Minute {
-				chip := Card{Kind: CardGap, XPx: x, WidthPx: GapChipWidthPx, GapText: shortDuration(gap)}
+				chip := Card{Kind: CardGap, XPx: x, WidthPx: GapChipWidthPx}
+				// A gap that crosses into another day reads as "overnight"
+				// rather than as a duration: the span is long enough that its
+				// exact length is not information anyone acts on.
+				if !sameDay(prevEnd, e.Start) {
+					chip.Overnight = true
+				} else {
+					chip.GapText = shortDuration(gap)
+				}
 				// Free time is an entry like any other: the bar sweeps the chip
 				// in proportion to how much of the gap has elapsed.
 				if !now.Before(prevEnd) && now.Before(e.Start) {

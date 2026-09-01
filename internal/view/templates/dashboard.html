@@ -120,8 +120,12 @@
       {{range .VM.Agenda.Cards}}
         {{if .IsGap}}
         <div class="gap" style="width:{{px .WidthPx}}">
+          {{if .Overnight}}
+          <div class="gap-label gap-overnight"><div>O</div><div>V</div><div>E</div><div>R</div><div>N</div><div>I</div><div>G</div><div>H</div><div>T</div></div>
+          {{else}}
           <div class="gap-dur">{{.GapText}}</div>
           <div class="gap-label">Free</div>
+          {{end}}
         </div>
         {{else if .IsDaySep}}
         <div class="day-sep"><span>{{.SepText}}</span></div>

@@ -336,8 +336,13 @@ func TestOvernightGapIsAnEntry(t *testing.T) {
 		t.Errorf("first card is %v, want a free-time chip covering the overnight span",
 			row.Cards[0].Kind)
 	}
-	if got := row.Cards[0].GapText; got != "16h" {
-		t.Errorf("gap chip reads %q, want the 16h until the next event", got)
+	// An overnight span is labelled, not measured: "19h59m free" is arithmetic
+	// nobody reads, and the useful fact is that the day is over.
+	if !row.Cards[0].Overnight {
+		t.Error("the overnight chip is not marked Overnight, so it would print a duration")
+	}
+	if got := row.Cards[0].GapText; got != "" {
+		t.Errorf("overnight chip carries the duration %q; it should carry none", got)
 	}
 	var sawSep bool
 	for _, c := range row.Cards {
@@ -383,4 +388,27 @@ func TestNoSpuriousGapWhenAnEventIsImminent(t *testing.T) {
 		t.Errorf("a %s chip was inserted before an event starting in 2 minutes",
 			row.Cards[0].GapText)
 	}
+}
+
+// A gap inside one day still shows how long it is: the label is only dropped
+// when the span crosses midnight, where the number stops being useful.
+func TestSameDayGapKeepsItsDuration(t *testing.T) {
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		{Title: "A", Start: now.Add(-2 * time.Hour), End: now.Add(-time.Hour)},
+		{Title: "B", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour)},
+	}
+	for _, c := range BuildAgenda(evs, now, false).Cards {
+		if c.Kind != CardGap {
+			continue
+		}
+		if c.Overnight {
+			t.Error("a gap inside one day was marked Overnight")
+		}
+		if c.GapText == "" {
+			t.Error("a same-day gap lost its duration")
+		}
+		return
+	}
+	t.Fatal("no gap chip emitted")
 }
