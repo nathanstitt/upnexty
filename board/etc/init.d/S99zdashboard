@@ -27,6 +27,21 @@ start() {
 	# bounds the growth without needing logrotate.
 	: > "$LOGFILE"
 
+	# Detach the kernel's text console from the framebuffer. fbcon shares
+	# /dev/fb0 and keeps drawing its caret on top of whatever we write -- a
+	# small grey block near the top-left of the panel that blinks roughly once
+	# a second. Clearing cursor_blink alone only freezes it visible; the
+	# console has to be unbound.
+	#
+	# Guarded because it is not worth failing to start over, and vtcon
+	# numbering is not guaranteed: pick the console that names itself the
+	# frame buffer device rather than hardcoding vtcon1.
+	for vt in /sys/class/vtconsole/vtcon*; do
+		if grep -qi "frame buffer" "$vt/name" 2>/dev/null; then
+			echo 0 > "$vt/bind" 2>/dev/null
+		fi
+	done
+
 	start-stop-daemon --start --quiet --background \
 		--make-pidfile --pidfile "$PIDFILE" \
 		--exec "$DAEMON" -- --config "$CONFIG" >>"$LOGFILE" 2>&1
@@ -45,6 +60,15 @@ stop() {
 	start-stop-daemon --stop --quiet --oknodo --retry 5 --pidfile "$PIDFILE"
 	status=$?
 	rm -f "$PIDFILE"
+
+	# Give the console back. Without this a stopped dashboard leaves a frozen
+	# last frame and no way to see boot or kernel messages on the panel.
+	for vt in /sys/class/vtconsole/vtcon*; do
+		if grep -qi "frame buffer" "$vt/name" 2>/dev/null; then
+			echo 1 > "$vt/bind" 2>/dev/null
+		fi
+	done
+
 	[ $status -eq 0 ] && echo "OK" || echo "FAIL"
 	return $status
 }

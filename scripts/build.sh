@@ -18,17 +18,21 @@ if [ "${1:-}" = "-C" ]; then
 	shift 2
 fi
 
-# doctaculous is the HTML/document renderer these tools are built around.
-DOCTACULOUS="${DOCTACULOUS_DIR:-$HOME/code/doctaculous}"
-# "dashboard" builds this repo's service; no args builds the doctaculous tools.
+# "dashboard" is accepted for symmetry with the docs; it is also the default,
+# since it is the only command this repo ships.
+#
+# The no-arg case used to build ./cmd/html2fb and ./cmd/fbtouch out of the
+# renderer's repo. Those commands do not exist in omnidoc and are not needed:
+# the dashboard rasterizes in-process through internal/fb. Stale binaries may
+# still be sitting in build/ from before the rename.
 if [ "${1:-}" = "dashboard" ]; then
 	shift
-	set -- ./cmd/dashboard "$@"
-elif [ "$MODULE_DIR" = "$REPO_ROOT" ] && [ $# -eq 0 ]; then
-	[ -d "$DOCTACULOUS" ] || die "doctaculous not found at $DOCTACULOUS
-set DOCTACULOUS_DIR, or pass packages to build"
-	MODULE_DIR="$DOCTACULOUS"
-	set -- ./cmd/html2fb ./cmd/fbtouch
+fi
+# Only default the package when building THIS repo -- with -C the caller named
+# another module, and ./cmd/dashboard would not exist there.
+if [ $# -eq 0 ]; then
+	[ "$MODULE_DIR" = "$REPO_ROOT" ] || die "no packages to build in $MODULE_DIR"
+	set -- ./cmd/dashboard
 fi
 
 OUT="$REPO_ROOT/build"
