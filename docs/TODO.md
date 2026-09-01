@@ -3,74 +3,70 @@
 What is left before the display is *finished* rather than merely working.
 
 The board boots, associates, fetches live weather, renders every minute, serves
-the portal, and falls back to an AP when it cannot join a network — all verified
-on hardware. What remains is mostly **appearance**: the panel currently renders
-black-on-white instead of the intended dark theme, and one whole feature has
-never been exercised with real data.
+the portal, falls back to an AP when it cannot join a network, and now renders
+the ported pi-dashboard design with real fonts and real calendar data — all
+verified on hardware.
 
-Line numbers are as of `956e6ef`. Engine findings re-tested 2026-08-27 against
-doctaculous `957c9e1`.
+The visual-fidelity port is **essentially complete**: 27 of the 28 catalogued
+differences are closed and verified on the panel. What is left is one item that
+cannot be compared against the reference, a handful of changes awaiting a
+hardware pass, and the non-visual work below.
+
+Reference: the pi-dashboard served at `http://127.0.0.1:8777/` (its `style.css`
+and `app.js` are the authority — a screenshot is not). Engine constraints are in
+`docs/omnidoc-gaps.md`; re-run its probes before trusting any entry.
 
 ---
 
-## 1. The panel renders black-on-white — `var()` is unimplemented
+## 1. Visual fidelity vs the reference
 
-**This is the single biggest gap between what is on screen and what was
-designed.** `internal/view/assets/style.css` uses `var(--…)` in **18** places;
-that is the entire palette — background, text, dim text, hairlines, accent.
-`internal/portal/assets/portal.css` uses it in **20**.
+Compared 2026-08-28 against a device capture with the sample feed populated.
+**27 of 28 items are closed** — see the summary under Done. What is left:
 
-The failure is not a fallback to a default color. A `background` set through
-`var()` paints **zero** pixels where a literal color paints the full box: the
-element vanishes. That is why the panel is white with black text rather than
-`#0b0d12` with `#e8ecf3`.
+- [ ] **All-day pill placement is unverified against the design.** The reference
+      frame has no all-day event, so there is nothing to compare against. Check
+      the reference app with one present before calling this finished. A
+      coverage gap, not a defect: the pill itself renders correctly.
 
-Fix belongs in doctaculous (`docs/doctaculous-gaps.md` §1), per the standing
-project rule: do not work around engine gaps here. The stylesheet is already
-correct CSS and will render properly once `var()` lands.
+### Not yet seen on hardware
 
-Until then the panel is legible but wrong — worth knowing before showing it to
-anyone as finished.
+Written and passing host-side checks, but not eyeballed on the panel — the board
+went unreachable mid-deploy (see the deploy gotcha in CLAUDE.md) and needs a
+power cycle before the next verification pass:
 
-## 2. Precipitation shading is invisible — alpha colors unimplemented
+- [ ] `ALL DAY` caption brightness — raised to `--text-mid` after the caption
+      read as too faint to identify what the pill was.
+- [ ] Framebuffer console caret — `S99zdashboard` now unbinds `fbcon` on start
+      and rebinds on stop. The unbind itself was confirmed by probe (caret 0px,
+      render intact); the init-script wiring has not survived a clean boot.
+- [ ] `#now-content` centring — it was silently not centring because the box
+      took its height from `flex: 1` (gap 11); now an explicit 345px. The panel
+      had ~120px dead at the bottom.
 
-`internal/view/assets/style.css:75` — `.wx-precip { fill: rgba(79,156,255,0.35); }`
-is the only alpha color in either stylesheet, and it paints nothing (same
-vanish-entirely mode as `var()`). The precipitation band on the hourly chart is
-simply absent.
+The clock-row fix (the ~30px hole under the time, 98px → 21px) **was** measured
+on the panel; it is only unconfirmed in combination with the three above.
 
-doctaculous §2. One declaration, so this resolves the moment alpha lands.
+---
 
-## 3. Real calendar events have never rendered
+## 2. Startup race: first frame after a restart shows a fetch error
 
-`config.sample.json:23` still ships `"url": "PASTE_ICAL_URL"`, and the board
-still holds that placeholder. **Step 4 of the hardware verification was never
-run.**
+The calendar fetch runs before the portal's listener is up, so the first render
+after `S99zdashboard restart` shows
+`ical(Personal): ... 127.0.0.1:8080: connect: connection refused` and an empty
+agenda. It self-corrects on the next tick.
 
-This is the largest correctness unknown left. The timeline's block placement and
-floating-label collision handling have only ever seen synthetic fixtures — and
-label overlap is exactly the class of bug that only appears with real,
-irregularly-spaced events. The agenda is the reason the display exists.
+Only visible with the built-in sample feed (`/sample.ical` on the portal port),
+since that is the only source served by the same process. A remote feed is
+unaffected.
 
-To close it, paste a real feed into the portal, then:
+- [ ] Start the portal listener before the first fetch, or retry the first fetch
+      once after a short delay.
 
-```bash
-adb shell 'cat /dev/fb0' > /tmp/fb.raw
-go run ./tools/fb2png /tmp/fb.raw /tmp/panel.png 480 1920 unrotate
-```
-
-Look for overlapping labels, events misplaced relative to the NOW line, and
-anything clipped at the document edge. Note the engine does not break long words
-(doctaculous §8), so a long event title will overflow rather than wrap.
-
-## 4. Letter-spacing is silently ignored
-
-Used **6** times in the dashboard stylesheet and **3** in the portal's — every
-uppercase eyebrow label, including the panel's `SET ME UP`. The declaration
-parses and then does nothing: glyph positions are byte-identical with and
-without it.
-
-doctaculous §6. Cosmetic, but it means those labels are tighter than designed.
+**Touch makes this more visible than it was.** The empty agenda is not just a
+cosmetic first frame any more: with no cards there is nothing to tap, so the
+panel is genuinely non-interactive until the next calendar refresh — up to ten
+minutes after a restart. That is long enough for someone to conclude the
+touchscreen does not work. This moved up the list because of it.
 
 ---
 
@@ -78,17 +74,16 @@ doctaculous §6. Cosmetic, but it means those labels are tighter than designed.
 
 ### Calendar fetch errors never reach the portal
 
-`cmd/dashboard/main.go:356` collects `ical(<name>): <err>` into `errs`, which
-drives the panel's stale flag. The portal page does not read it. A user who
-pastes a wrong or private feed URL sees a normal-looking settings page with no
-indication anything failed.
+`cmd/dashboard/main.go` collects `ical(<name>): <err>` into `errs`, which drives
+the panel's stale flag. The portal page does not read it. A user who pastes a
+wrong or private feed URL sees a normal-looking settings page with no indication
+anything failed.
 
 The portal is where the URL was entered, so it is where the error belongs. The
 design doc already specifies the copy: "That calendar link didn't load. Check
 the address, or the calendar may be private."
 
-Note this compounds item 3 — the first thing a user does is paste a feed, and
-that is precisely the operation with no error reporting.
+- [ ] Surface calendar fetch errors on the portal settings page.
 
 ### Portal's MAC is read once at startup
 
@@ -102,17 +97,16 @@ guaranteed inside that window. The panel recovers on its own because
 `renderOnce` re-reads the MAC every tick; the portal does not. The two then
 disagree: the panel displays a password the portal will not accept.
 
-Fix: derive the MAC lazily in `auth`, or re-read when empty.
+- [ ] Derive the MAC lazily in `auth`, or re-read when empty.
 
 ### Setup hint hierarchy
 
-`internal/view/assets/style.css:40` — `.sh-lead` ("SET ME UP") is 15px dim
-uppercase, the smallest text in the left block, above two 22px steps.
+`.sh-lead` ("SET ME UP") is the smallest text in the left block, above two 22px
+steps. On an unconfigured panel this is the only actionable thing on a 1920×480
+screen read from across a room, and it reads as a footnote. Transcribed verbatim
+from the plan, so not an implementation defect — a product call.
 
-On an unconfigured panel this is the only actionable thing on a 1920×480 screen
-read from across a room, and it reads as a footnote. Transcribed verbatim from
-the plan, so not an implementation defect — a product call about whether the
-plan's hierarchy is right. One CSS value.
+- [ ] Decide whether the setup hint should lead the left panel.
 
 ---
 
@@ -132,45 +126,168 @@ The obvious fix — swapping the trailing `restart` for `stop` — is wrong. `st
 downs the link entirely, contradicting `StopAP`'s contract of returning the
 board to STA mode.
 
+- [ ] Resolve before `StartAP`/`StopAP` gain a caller.
+
 ### Shell SSID derivation lacks Go's short-MAC guard
 
 `board/etc/init.d/S99wlan0:84` uses `tail -c 5` unguarded; `wifi.APName`
 (`internal/wifi/ap.go:14-25`) returns `upnext-setup` when the MAC is under 4
 chars. A truncated sysfs read would make the panel name a network that is not
 being broadcast, and panel-vs-radio disagreement has no recovery path for the
-user. `[ ${#mac} -ge 4 ]` closes it.
+user.
 
 The hostapd and dnsmasq config bodies are otherwise **byte-identical** between
 the shell script and `ap.go` — verified. Nothing fails a test if they drift, so
 change both together.
 
+- [ ] Add `[ ${#mac} -ge 4 ]` to the shell path.
+
 ---
 
 ## Cosmetic
 
-- **`os.IsNotExist` vs `errors.Is`** — `internal/config/config.go:179`. Correct
-  for the unwrapped `os.ReadFile` error it inspects; `errors.Is(err,
-  fs.ErrNotExist)` is the modern idiom.
-- **Constant-time compare on raw strings** — `internal/portal/auth.go:61`. The
-  MAC-default branch compares raw strings, leaking whether a guess is 6
-  characters; the hash branch compares digests and does not. Not exploitable
-  under the stated threat model (a houseguest on the LAN), already commented at
-  `auth.go:58`.
+- [ ] **`os.IsNotExist` vs `errors.Is`** — `internal/config/config.go:179`.
+      Correct for the unwrapped `os.ReadFile` error it inspects; `errors.Is(err,
+      fs.ErrNotExist)` is the modern idiom.
+- [ ] **Constant-time compare on raw strings** — `internal/portal/auth.go:61`.
+      The MAC-default branch compares raw strings, leaking whether a guess is 6
+      characters; the hash branch compares digests and does not. Not exploitable
+      under the stated threat model (a houseguest on the LAN), already commented
+      at `auth.go:58`.
 
 ---
 
-## Recently fixed upstream — nothing to do
+## Done
 
-Re-tested against doctaculous `957c9e1`:
+- [x] **Engine gaps** — all ten resolved upstream (omnidoc `fb42ebe`) and
+      adopted: `var()`, alpha colours, `linear-gradient`, `border-radius`,
+      `box-shadow`, `letter-spacing`, `overflow-wrap`, context cancellation,
+      `.notdef` fallback, inline `<svg>`.
+- [x] **Real calendar events render on the panel** — closed with a date-shifted
+      feed, then with the built-in `/sample.ical` generator. Block placement, the
+      NOW line, and label handling all exercised against real parsed events.
+- [x] **Sample data endpoint** — `GET /sample.ical` on the portal port generates
+      a clock-relative fixture, so the panel always has events for design work.
+      Board config points at `http://127.0.0.1:8080/sample.ical`.
+- [x] **Real fonts** — Roboto, Barlow Condensed, IBM Plex Mono embedded and
+      served via `@font-face`; OS installation cannot work (see the gaps doc).
+- [x] **Card-based agenda** replacing the proportional timeline. The NOW bar
+      sweeps the entry containing "now" and the row shifts a whole entry at a
+      time, keeping one entry behind it for context; the earlier fixed 30%
+      pre-scroll needed a 462px lead pad that showed as dead space on a quiet
+      morning.
 
-- **Inline `<svg>` now renders.** This was the top-priority gap: every weather
-  icon was invisible. Icons now appear on the panel. Verified by pixel count:
-  an empty svg paints 0, a `<circle r=35>` paints 3924, a full `<rect>` fills
-  6400 — the subtree renders with correct geometry.
+### Visual fidelity — 27 of 28 items, all verified on the panel
 
-`border-radius` is **not** fixed, despite an earlier note here saying so. The
-box paints, which looked like success, but a 40px radius on an 80×80 box gives
-a pixel count identical to the square box — the corners are untouched.
+Closed 2026-08-28 by region: the left panel (icon, clipping, divider, spacing),
+the NOW bar (glow, vertical label, full height, crossing the current card), the
+agenda cards (centring, borders, badge, truncation, gaps, chip height), the
+all-day pill, the weather chart (padding, label size and count, curve weight,
+time window), the forecast row (icon size, spacing, precipitation format), and
+the overall tone (vignette, agenda background).
 
-`docs/doctaculous-gaps.md` carries the full re-test table. That file goes stale
-as the engine advances — re-run the probes before trusting any entry in it.
+**Almost none of these were styling mistakes.** The CSS was largely faithful to
+the reference and was failing silently against the engine. Nine gaps came out of
+this work — SVG stroke inheritance, `line-height`, `margin`/`transform` on flex
+children, `z-index` ordering, `top`+`bottom` sizing, flex-derived heights
+blocking `justify-content`, absolute boxes never shrink-wrapping, layered
+`background` lists, and `writing-mode`. Read `docs/omnidoc-gaps.md` before
+assuming a rule in `style.css` does what it says.
+
+All but one of those are now **fixed upstream** and their workarounds removed;
+the shrink-wrap entry turned out not to reproduce at all. What remains is a
+vertical shrink-to-fit box being sized on the horizontal axis, with a probe
+under `docs/engine-probes/`. The probes for the closed gaps went with them.
+
+Three entries in the original catalogue were **misdiagnoses**, corrected rather
+than "fixed": the all-day pill was clipped at the bottom (not the top), the
+forecast already showed precipitation the way the reference does, and the
+current card never carried a duration. Two more — the warm vignette and the
+inches-vs-percent note — came from reading the reference's *screenshot* rather
+than its stylesheet, which is why the header above insists the CSS is the
+authority.
+
+Guardrails added, since most of these failed invisibly:
+`TestNowBarLandsOnTheCurrentCard` walks the template's flex packing so the
+model's arithmetic and the rendered layout cannot drift apart again;
+`TestStylesheetMatchesModelGeometry` pins the shared constants (both were
+verified to fail on a deliberate regression, not just to pass);
+`TestIconStrokesAreNotInheritedFromRoot` catches the SVG gap that no screen
+would show.
+
+**Touch landed 2026-08-31.** Tapping an event card opens a detail sheet with a
+Hide-from-panel action; hidden events are listed on the settings page and can be
+restored there. `internal/touch` decodes the Goodix digitizer, `CardRects` /
+`EventAt` hit-test, and `cmd/dashboard/touch.go` holds the interaction rules.
+
+Three defects came out of building it, all caught by tests rather than by
+inspection, and all worth knowing about:
+
+- **Card rects extended under the left panel.** The row is pre-scrolled with a
+  negative offset, so a past card's rect ran to negative x. On screen
+  `#timeline-zone`'s `overflow:hidden` clips it, but a rect does not know that —
+  a tap on the clock opened a sheet for an invisible event. `CardRects` now
+  clips to the viewport.
+- **The first tap deadlocked the process.** The dialog pointer and the
+  framebuffer shared one `sync.Mutex`, and the touch callback took it twice.
+  The panel froze on whatever frame it had, with the tick loop stopped too.
+  They have separate locks now.
+- **Pruning ran after muting**, so muting an event that had already ended
+  deleted the mute that had just been written — the card came straight back.
+  Prune now runs first, and mutes outlive their event by `config.MuteGrace`.
+
+Two engine gaps also came out of it (15 and 16 in `docs/omnidoc-gaps.md`), both
+of the same kind: the box paints and its content does not.
+
+- [ ] **A render takes ~10s on the board, so the dialog is unusably slow.**
+      Confirmed by use: the sheet takes about ten seconds to appear and the
+      same to dismiss, which reads as "close doesn't work" long before the
+      frame lands. Measured 10.1–10.4s per `--once` on hardware against 172ms
+      for the same document on an M4 Pro, so it is the rasterizer on a 1.2GHz
+      Cortex-A7 — not the fetches, and not the dialog. Every frame has always
+      cost this; only interactivity made it matter.
+
+      Options, roughly in order of payoff: render the dialog as a small
+      composited overlay instead of re-rendering the whole 1920x480 document;
+      cache the last full frame and blit the sheet over it; or cut what the
+      page costs to rasterize. Worth measuring which part of the render
+      dominates before choosing.
+
+- [x] **A real finger has touched the panel.** Confirmed working on hardware
+      2026-08-31: tapping a card opens the sheet with the right event. Two
+      defects came out of that first real use, both fixed —
+
+      - **Close appeared not to work.** The tap channel was unbuffered and the
+        consumer sits inside a ~10s render, so the decode loop blocked on the
+        send, stopped reading the device, and the close tap queued in the
+        kernel behind the tap that opened the dialog. The reader now drops the
+        oldest queued tap rather than blocking, so a late consumer gets the
+        user's most recent touch.
+      - **Coordinate state leaked between taps.** `haveX`/`haveY` were never
+        reset, and the digitizer only reports an axis when it changes, so a
+        frame carrying no coordinates decoded as a tap at the previous
+        position.
+
+Note for whoever tests this next: taps **cannot be injected on this board** —
+there is no `/dev/uinput`, and writing to `/dev/input/event0` returns success
+while the kernel discards it (see CLAUDE.md). Touch changes have to be tried
+with a finger; both defects above were found that way and neither was visible
+to any host-side test.
+
+**A tenth defect was ours, not the engine's** (found 2026-08-31, on hardware).
+`#timeline-zone` had no `overflow: hidden`, and `#agenda-row` is both wider than
+that zone and pre-scrolled with `transform: translateX(-Npx)`. As soon as the
+agenda scrolls, the row's background paints out past the zone's left edge and
+washes over the entire left panel — clock, weather, and headline all vanish
+behind a dim blue rectangle. A browser does exactly the same; nothing was
+clipping it.
+
+It hid for the same reason several engine gaps did: **the golden fixture's
+agenda sits at offset 0**, where there is nothing to overflow. Every host-side
+check passed while the panel was visibly wrong. It was caught by pulling the
+board's own generated HTML and re-rendering it on the host, which reproduced it
+exactly — that technique is worth reaching for before suspecting the engine.
+
+`TestAgendaScrollDoesNotPaintOverLeftZone` builds a model whose agenda really is
+scrolled, rasterizes, and asserts no agenda ink lands left of the 380px
+boundary. Verified to fail with the fix reverted.

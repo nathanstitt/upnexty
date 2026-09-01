@@ -42,17 +42,17 @@ Task 8: fix round 1/5 (4 addressed, 0 open; commits ed5c822..1fe4935) — y-axis
 Task 8: complete (commits 503000c..1fe4935, review clean) — 8/8 chart tests, 11 SVG icons
 Task 8: note (design tradeoff, not a defect): chart window is now strictly half-open [Start, End) — a point landing exactly on win.End is excluded rather than clamped
 Task 9: implemented (commit 4ad5b83, 5/5) — contracts correct; implementer's browser check caught a NOW-tick/ribbon collision
-Task 9: ENGINE GAP FOUND (doctaculous, not this repo) — no CSS custom property support. var(--x) silently resolves to nothing; the dark theme rendered black-on-white. Isolated: `.a{background:var(--bg)}` blank vs `.b{background:#0b0d12}` correct. No var()/custom-prop handling in pkg/css; absent from FEATURES.md.
-Task 9: RULING (Nathan) — do NOT work around engine limitations. Stylesheet keeps var(); doctaculous will gain var() support. Fix round cancelled, style.css left as authored.
-Task 9: verification note — CSS correctness must be checked by rasterizing through doctaculous, not by opening in a browser (browsers support var(), so a preview hides engine gaps).
+Task 9: ENGINE GAP FOUND (omnidoc, not this repo) — no CSS custom property support. var(--x) silently resolves to nothing; the dark theme rendered black-on-white. Isolated: `.a{background:var(--bg)}` blank vs `.b{background:#0b0d12}` correct. No var()/custom-prop handling in pkg/css; absent from FEATURES.md.
+Task 9: RULING (Nathan) — do NOT work around engine limitations. Stylesheet keeps var(); omnidoc will gain var() support. Fix round cancelled, style.css left as authored.
+Task 9: verification note — CSS correctness must be checked by rasterizing through omnidoc, not by opening in a browser (browsers support var(), so a preview hides engine gaps).
 Task 9: review (spec OK, no Critical; escaping traced clean, layout arithmetic verified 380+1540=1920 and bands fit 480) — 2 Important test-coverage gaps
 Task 9: fix round 1/5 (3 addressed, 0 open; commit 2bb5f69) — stale flag asserted both directions, leader mark covered by real 40.7px drift from actual events (independently reproduced), dead-branch comment
 Task 9: complete (commits 1fe4935..2bb5f69, review clean) — 8/8 view tests; stylesheet untouched, still 16 var() usages
-Task 9: DELIVERABLE for doctaculous — docs/doctaculous-css-gaps.md (commit 9441d9e) lists 6 unimplemented CSS features with isolated repros
+Task 9: DELIVERABLE for omnidoc — docs/omnidoc-css-gaps.md (commit 9441d9e) lists 6 unimplemented CSS features with isolated repros
 Task 10: implemented (commit ae07063) — go.sum created; E2E verified: golden HTML -> RenderHTML 1920x480 full-bleed -> Pack 3686400 bytes -> inverse rotation recovers upright image
 Task 10: fix round 1/5 (2 addressed, 0 open; commit 66a19d5) — Pack precondition panic on aspect mismatch (was silently cropping), 90/180 branches kept + real pixel tests
 Task 10: complete (commits 2bb5f69..66a19d5, review clean) — 8/8 fb tests
-Task 10: ENGINE GAP #7 (doctaculous) — renderPage(_ context.Context) discards ctx and OpenHTMLBytes takes none, so a hung HTML render cannot be cancelled. Documented in docs/doctaculous-gaps.md; NOT worked around per ruling. Task 12 must not rely on ctx as a render timeout.
+Task 10: ENGINE GAP #7 (omnidoc) — renderPage(_ context.Context) discards ctx and OpenHTMLBytes takes none, so a hung HTML render cannot be cancelled. Documented in docs/omnidoc-gaps.md; NOT worked around per ruling. Task 12 must not rely on ctx as a render timeout.
 Task 11: complete (commits 66a19d5..bfc4e3b, review clean, NO fix round) — round trip independently verified: 4 corner blocks land exactly right, no mirror/shear. .gitignore exception needed because /tools/ was ignored wholesale.
 Task 12: implemented (commit 75a6ae2) — race clean, --once verified end-to-end with live weather; review: spec NO (2 requirements not actually met), 1 Critical
 Task 12: fix round 1/5 dispatched — CRITICAL: fetchLoop retry reads CONCATENATED errs, so a failing calendar pins the weather loop to 30s retries forever (120 req/hr vs 4); Important: change-detection skip is dead code (clock guarantees HTML differs — MY plan design error); Important: no recover(), one panic ends the kiosk
@@ -65,7 +65,7 @@ FINAL WHOLE-BRANCH REVIEW (opus, 29 commits / 48 files / ~4.7k lines): verdict "
   (3) fetch error strings assembled, threaded through 3 layers, then discarded by an unreachable else-if
 FINAL FIX WAVE (commits 9797d14, 2eb7e4f, 0cdc3cc) + tzid.ics fixture — re-review: ALL 4 ADDRESSED, verdict READY TO MERGE
   FIX 4 independently confirmed load-bearing (removing .UTC() makes the test fail); implementer's first fixture attempt did NOT catch it and they iterated until it did
-ENGINE GAP #8 (doctaculous, commit b13eebc) — no overflow-wrap/word-break; long error URLs overflow. Documented, not worked around.
+ENGINE GAP #8 (omnidoc, commit b13eebc) — no overflow-wrap/word-break; long error URLs overflow. Documented, not worked around.
 DEFERRED MINORS triaged by final review: all "ship it" except the two folded into the fix wave.
 SPEC GAP (flagged, not implemented): past_temps.json history — spec said "worth keeping"; silently dropped in Task 4. Needs an explicit decision.
 DECISIONS (Nathan): Task 13 (hardware) deferred — board disconnected, will run when reconnected. past_temps -> follow-up task, spec amended (a4ab79b) so it is tracked not silent.

@@ -2,20 +2,20 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A Go service on the Luckfox Lyra Zero W that fetches calendar and weather data, generates HTML+SVG, rasterizes it with doctaculous, and writes the result to `/dev/fb0` as a 1920×480 landscape dashboard.
+**Goal:** A Go service on the Luckfox Lyra Zero W that fetches calendar and weather data, generates HTML+SVG, rasterizes it with omnidoc, and writes the result to `/dev/fb0` as a 1920×480 landscape dashboard.
 
 **Architecture:** Single static binary, display-only (no touch, no HTTP server). A tick loop rebuilds a view model each minute and re-renders only when the generated HTML changes. Layout logic lives in a pure `model` package that takes time as a parameter, so the timeline algorithm is unit-testable without network, rendering, or hardware.
 
-**Tech Stack:** Go 1.25+ (stdlib only, plus `github.com/nathanstitt/doctaculous` for HTML layout/rasterization). Cross-compiled `GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0`. Deployed over adb.
+**Tech Stack:** Go 1.25+ (stdlib only, plus `github.com/nathanstitt/omnidoc` for HTML layout/rasterization). Cross-compiled `GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0`. Deployed over adb.
 
 ## Global Constraints
 
 - **Module path:** `github.com/nathanstitt/luckfox-dashboard` — this repo has no `go.mod` yet; Task 1 creates it.
-- **Go version:** `go 1.26.0` in `go.mod`, matching the host toolchain (1.26.3). doctaculous declares 1.25.0; a newer declaration builds it fine under the replace directive.
-- **Dependencies:** stdlib only, plus doctaculous via a `replace` directive to a local path. No other third-party modules.
+- **Go version:** `go 1.26.0` in `go.mod`, matching the host toolchain (1.26.3). omnidoc declares 1.25.0; a newer declaration builds it fine under the replace directive.
+- **Dependencies:** stdlib only, plus omnidoc via a `replace` directive to a local path. No other third-party modules.
 - **Cross-compile:** `GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0`, `-ldflags="-s -w"`. Binaries must be 32-bit ARM ELF or they fail on the board with a confusing exec error.
 - **Panel geometry:** framebuffer is 480×1920 portrait XR24 (stride 1920, 3686400 bytes). The UI is 1920×480 landscape, rotated 270° at blit time.
-- **Page sizing:** always `doctaculous.WithPageSize(1920, 480)`. Without it the viewport defaults to 1280px and the render is pillarboxed.
+- **Page sizing:** always `omnidoc.WithPageSize(1920, 480)`. Without it the viewport defaults to 1280px and the render is pillarboxed.
 - **No `time.Now()` inside logic.** Every function whose behavior depends on the clock takes a `now time.Time` parameter. The board has no RTC and boots at 1970; tests must be deterministic.
 - **No emoji in rendered output.** The board has only DejaVu and Liberation; 6 of 9 weather emoji render as nothing at all. Weather icons must be SVG.
 - **Never deploy to the board without being asked.** Building is fine; pushing to hardware is a separate, explicitly-requested step.
@@ -23,7 +23,7 @@
 ## File Structure
 
 ```
-go.mod                          module + doctaculous replace
+go.mod                          module + omnidoc replace
 cmd/dashboard/main.go           flag parsing, tick loop wiring
 internal/config/config.go       Config struct, load, defaults
 internal/config/config_test.go
@@ -66,7 +66,7 @@ Rationale: `model` holds all the interesting logic and is pure. `view` and `char
 - Consumes: nothing
 - Produces: a buildable `./cmd/dashboard` package; `scripts/build.sh dashboard` cross-compiles it to `build/dashboard`
 
-Note on `build.sh`: with no arguments it switches `MODULE_DIR` to the doctaculous repo and builds `html2fb`/`fbtouch`. Building a package from *this* repo currently requires passing the package path. Task 1 adds a `dashboard` shorthand so `scripts/build.sh dashboard` works.
+Note on `build.sh`: with no arguments it switches `MODULE_DIR` to the omnidoc repo and builds `html2fb`/`fbtouch`. Building a package from *this* repo currently requires passing the package path. Task 1 adds a `dashboard` shorthand so `scripts/build.sh dashboard` works.
 
 - [ ] **Step 1: Create the module**
 
@@ -77,13 +77,13 @@ module github.com/nathanstitt/luckfox-dashboard
 
 go 1.26.0
 
-require github.com/nathanstitt/doctaculous v0.0.0
+require github.com/nathanstitt/omnidoc v0.0.0
 
-replace github.com/nathanstitt/doctaculous => ../../doctaculous
+replace github.com/nathanstitt/omnidoc => ../../omnidoc
 EOF
 ```
 
-The `replace` path is relative to this repo (`/Users/nas/code/upnext/luckfox` → `/Users/nas/code/doctaculous`). If `DOCTACULOUS_DIR` differs, adjust it.
+The `replace` path is relative to this repo (`/Users/nas/code/upnext/luckfox` → `/Users/nas/code/omnidoc`). If `OMNIDOC_DIR` differs, adjust it.
 
 - [ ] **Step 2: Write a minimal main that proves the toolchain**
 
@@ -120,11 +120,11 @@ Expected: prints `dashboard: once=true fb=/dev/fb0 config=/root/config.json`
 In `scripts/build.sh`, replace the block that currently reads:
 
 ```bash
-DOCTACULOUS="${DOCTACULOUS_DIR:-$HOME/code/doctaculous}"
+OMNIDOC="${OMNIDOC_DIR:-$HOME/code/omnidoc}"
 if [ "$MODULE_DIR" = "$REPO_ROOT" ] && [ $# -eq 0 ]; then
-	[ -d "$DOCTACULOUS" ] || die "doctaculous not found at $DOCTACULOUS
-set DOCTACULOUS_DIR, or pass packages to build"
-	MODULE_DIR="$DOCTACULOUS"
+	[ -d "$OMNIDOC" ] || die "omnidoc not found at $OMNIDOC
+set OMNIDOC_DIR, or pass packages to build"
+	MODULE_DIR="$OMNIDOC"
 	set -- ./cmd/html2fb ./cmd/fbtouch
 fi
 ```
@@ -132,15 +132,15 @@ fi
 with:
 
 ```bash
-DOCTACULOUS="${DOCTACULOUS_DIR:-$HOME/code/doctaculous}"
-# "dashboard" builds this repo's service; no args builds the doctaculous tools.
+OMNIDOC="${OMNIDOC_DIR:-$HOME/code/omnidoc}"
+# "dashboard" builds this repo's service; no args builds the omnidoc tools.
 if [ "${1:-}" = "dashboard" ]; then
 	shift
 	set -- ./cmd/dashboard "$@"
 elif [ "$MODULE_DIR" = "$REPO_ROOT" ] && [ $# -eq 0 ]; then
-	[ -d "$DOCTACULOUS" ] || die "doctaculous not found at $DOCTACULOUS
-set DOCTACULOUS_DIR, or pass packages to build"
-	MODULE_DIR="$DOCTACULOUS"
+	[ -d "$OMNIDOC" ] || die "omnidoc not found at $OMNIDOC
+set OMNIDOC_DIR, or pass packages to build"
+	MODULE_DIR="$OMNIDOC"
 	set -- ./cmd/html2fb ./cmd/fbtouch
 fi
 ```
@@ -2154,7 +2154,7 @@ Create `internal/chart/chart.go`:
 
 ```go
 // Package chart renders weather data as SVG. SVG rather than <canvas> because
-// doctaculous has no JavaScript engine, and rather than emoji/PNG because the
+// omnidoc has no JavaScript engine, and rather than emoji/PNG because the
 // board has no emoji font and vector art scales cleanly.
 package chart
 
@@ -2334,7 +2334,7 @@ func TestRenderProducesCompleteDocument(t *testing.T) {
 		t.Error("output has a <link> tag; CSS must be inlined")
 	}
 	if strings.Contains(got, "<script") {
-		t.Error("output has a <script> tag; doctaculous discards scripts")
+		t.Error("output has a <script> tag; omnidoc discards scripts")
 	}
 }
 
@@ -2554,7 +2554,7 @@ Create `internal/view/view.go`:
 ```go
 // Package view renders the view model to a complete HTML document. CSS is
 // inlined and SVG embedded: the board loads no external resources, and
-// doctaculous discards <script>, so all layout must be static.
+// omnidoc discards <script>, so all layout must be static.
 package view
 
 import (
@@ -2796,7 +2796,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nathanstitt/doctaculous/pkg/doctaculous"
+	"github.com/nathanstitt/omnidoc/pkg/omnidoc"
 )
 
 // Geometry reads the visible resolution from sysfs.
@@ -2824,14 +2824,14 @@ func Geometry(dev string) (int, int, error) {
 // RenderHTML lays out and rasterizes an HTML document at exactly pageW x pageH.
 //
 // WithPageSize is required: without it the layout viewport defaults to 1280px,
-// and doctaculous's fit-within sizing preserves aspect ratio, so the render
+// and omnidoc's fit-within sizing preserves aspect ratio, so the render
 // comes back 1280x480 and is pillarboxed with white on a 1920x480 panel.
 func RenderHTML(ctx context.Context, html []byte, pageW, pageH int) (image.Image, error) {
-	doc, err := doctaculous.OpenHTMLBytes(html, doctaculous.WithPageSize(float64(pageW), float64(pageH)))
+	doc, err := omnidoc.OpenHTMLBytes(html, omnidoc.WithPageSize(float64(pageW), float64(pageH)))
 	if err != nil {
 		return nil, fmt.Errorf("layout: %w", err)
 	}
-	img, err := doc.RasterizePage(ctx, 0, doctaculous.RasterOptions{
+	img, err := doc.RasterizePage(ctx, 0, omnidoc.RasterOptions{
 		MaxWidthPx: pageW, MaxHeightPx: pageH, Background: color.White,
 	})
 	if err != nil {
@@ -3426,7 +3426,7 @@ Add to `CLAUDE.md` after the "Display and touch" section:
 ## Dashboard
 
 The `dashboard` service renders the UpNext display: it fetches calendars and
-weather, generates HTML+SVG, rasterizes with doctaculous, and writes `/dev/fb0`.
+weather, generates HTML+SVG, rasterizes with omnidoc, and writes `/dev/fb0`.
 Display-only — no touch, no HTTP server.
 
 ```bash
@@ -3440,7 +3440,7 @@ adb shell 'nohup /root/dashboard >/root/dashboard.log 2>&1 &'
 Cost per refresh is ~1.5s (~1.37s layout, ~170ms raster) at ~115-154MB RSS.
 The loop wakes each minute and skips the raster when the HTML is unchanged.
 
-**`WithPageSize(1920, 480)` is required.** doctaculous defaults to a 1280px
+**`WithPageSize(1920, 480)` is required.** omnidoc defaults to a 1280px
 layout viewport, and its fit-within sizing preserves aspect ratio — so without
 it the page renders 1280x480 and is pillarboxed with white.
 

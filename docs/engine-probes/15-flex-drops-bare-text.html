@@ -1,0 +1,36 @@
+<html><head><style>
+body{background:#07080d;margin:0;width:900px;height:340px;
+     font-family:sans-serif;font-size:26px;color:#fff}
+div{width:280px;height:68px;margin:8px;background:#2a4a7a}
+.f1{display:flex}
+.f2{display:flex;align-items:center;justify-content:center}
+/* the two constructs that DO paint */
+.ok1{display:flex;align-items:center;justify-content:center}
+.ok2{line-height:68px;text-align:center}
+</style></head><body>
+<!-- A flex container drops a bare TEXT child: the box paints, the text does
+     not. Both .f1 and .f2 below render as empty blue rectangles.
+
+     This is not about align-items or justify-content -- bare `display:flex`
+     alone is enough, which is what makes it easy to misdiagnose as a
+     centring problem. The engine is not wrapping the anonymous text in a
+     flex item.
+
+     .ok1 shows the fix that keeps flex: wrap the text in an element, so the
+     container has a real child to lay out. .ok2 shows the fix that drops flex
+     entirely -- line-height equal to the box height centres a single line and
+     needs no extra element.
+
+     Why it matters here: this is how a button is normally built. The failure
+     is an unlabelled control that still paints its background, so it looks
+     like a deliberate blank box rather than a bug, and nothing structural
+     catches it. The dashboard's dialog buttons use .ok2 and are pinned by
+     TestDialogButtonLabelsAreVisible.
+
+     Measure the dark glyph pixels inside each box, not the box itself: every
+     one of these paints its background either way. -->
+<div class="f1">flex, bare text</div>
+<div class="f2">flex + centring</div>
+<div class="ok1"><span>flex + span child</span></div>
+<div class="ok2">line-height centred</div>
+</body></html>

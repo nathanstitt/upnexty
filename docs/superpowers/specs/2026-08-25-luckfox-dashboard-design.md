@@ -5,7 +5,7 @@ service. Known gaps are tracked in `docs/TODO.md`.
 **Date:** 2026-08-25
 
 Port the `pi-dashboard` display to the Luckfox Lyra Zero W: a Go service that
-generates HTML, rasterizes it with doctaculous, and writes the result to
+generates HTML, rasterizes it with omnidoc, and writes the result to
 `/dev/fb0`. No browser, no compositor, no X/Wayland.
 
 ## Why this is not a straight port
@@ -13,7 +13,7 @@ generates HTML, rasterizes it with doctaculous, and writes the result to
 The Pi ran Chromium in kiosk mode. The dashboard is therefore a browser
 application: it polls JSON, renders DOM, draws two `<canvas>` charts, measures
 laid-out elements to place a "NOW" bar, and handles touch. The Luckfox has no
-browser. doctaculous provides the CSS layout engine and rasterizer, but has **no
+browser. omnidoc provides the CSS layout engine and rasterizer, but has **no
 JavaScript engine and no canvas** — `<script>` is parsed and discarded.
 
 Three classes of browser work move into Go:
@@ -46,7 +46,7 @@ means a new document.
 
 ### Two constraints found by measurement
 
-**1. Default viewport is 1280px, not the panel width.** doctaculous's
+**1. Default viewport is 1280px, not the panel width.** omnidoc's
 fit-within sizing preserves aspect ratio, so an HTML document (which defaults to
 a 1280pt-wide viewport) fitted into 1920×480 renders 1280×480 and is
 pillarboxed with white. Fix: `WithPageSize(1920, 480)`, which sets the viewport
@@ -68,7 +68,7 @@ later, and is the only reason to add one).
 ```
  config.json ──┐
                ├─> fetch (weather, calendars) ──> model ──> HTML+SVG ──> raster ──> /dev/fb0
- tick loop ────┘         (own intervals)                   doctaculous     blit 270°
+ tick loop ────┘         (own intervals)                   omnidoc     blit 270°
 ```
 
 ### Packages
@@ -166,7 +166,7 @@ agenda and weather strip align by construction.
 
 ## SVG
 
-Assumes complete SVG support in doctaculous.
+Assumes complete SVG support in omnidoc.
 
 **Icons** — the ~11 weather conditions (clear, mainly clear, partly cloudy,
 overcast, fog, drizzle, rain, snow, heavy snow, showers, thunderstorm) plus a

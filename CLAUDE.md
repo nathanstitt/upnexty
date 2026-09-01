@@ -35,8 +35,18 @@ Firmware images are **not** in the repo (~130MB, vendor-supplied). Default
 location `~/Downloads/Luckfox_Lyra_Flash_250717/`; override with
 `LUCKFOX_IMAGE_DIR`.
 
-The Go commands (`html2fb`, `fbtouch`) live in the **doctaculous** repo under
-`cmd/`. Override its location with `DOCTACULOUS_DIR`.
+**`html2fb` and `fbtouch` no longer exist.** They used to be built out of the
+renderer's repo, and the doctaculous→omnidoc rename did not carry them over —
+omnidoc ships only `cmd/omnidoc` and `cmd/dumpfixtures`, and no copy is on disk.
+The dashboard never needed them: it rasterizes in-process through `internal/fb`
+and writes `/dev/fb0` itself. `scripts/build.sh` builds `./cmd/dashboard`.
+
+The sections below that invoke `/root/html2fb` and `/root/fbtouch` describe how
+the panel and touch rotation work and are kept for that; the commands themselves
+would have to be recovered from git history or rewritten to run again.
+
+The renderer is the **omnidoc** repo; override its location with `OMNIDOC_DIR`
+(`go.mod` has a `replace` pointing at `../../omnidoc`).
 
 ## Setup
 
@@ -168,10 +178,30 @@ rendered at landscape resolution rather than scaled up from portrait.
 Touch reports in panel-native portrait, already aligned with the framebuffer —
 no calibration needed. `-rotate` just undoes the display rotation. **Use the
 same angle for both tools**; `fbtouch`'s mapping is the exact inverse of
-`html2fb`'s blit, covered by round-trip tests in the doctaculous repo.
+`html2fb`'s blit, covered by round-trip tests in the omnidoc repo.
 
 Writes to `/dev/fb0` are not vsynced. Fine for static pages; animation would
 want double-buffering via `FBIOPAN_DISPLAY` or the DRM path (`card0` exists).
+
+**The kernel console shares `/dev/fb0` and draws over us.** `fbcon` is bound to
+the framebuffer, so its caret — a 2x8px grey block near the top-left, blinking
+about once a second — paints on top of every frame. It is not in the rendered
+HTML; rasterizing the same document on the host shows nothing there, which makes
+it easy to hunt for a phantom CSS bug.
+
+`echo 0 > /sys/class/graphics/fbcon/cursor_blink` only freezes the caret
+visible. The console has to be unbound:
+
+```bash
+for vt in /sys/class/vtconsole/vtcon*; do
+  grep -qi "frame buffer" "$vt/name" && echo 0 > "$vt/bind"
+done
+```
+
+`S99zdashboard` does this on start and rebinds on stop — without the rebind a
+stopped dashboard leaves a frozen frame and no way to see kernel messages on the
+panel. Pick the vtcon whose `name` says "frame buffer"; the numbering is not
+guaranteed.
 
 Vendor display test, if you suspect the pipeline:
 
@@ -235,7 +265,22 @@ credentials, wrong password, router down — it raises an open AP named
 offer its "sign in to network" sheet; there is no `iptables` on this image, so
 that wildcard is the entire redirect.
 
-The portal is on `:8080` in both modes. The admin password defaults to the last
+The portal is on `:80` in both modes — the port a phone's captive-portal probe
+actually hits. It answers the probe endpoints (`/hotspot-detect.html`,
+`/generate_204`, `/connecttest.txt`, …) with the settings page itself, which is
+what raises the "sign in to network" sheet; the DNS wildcard only points the
+name at the board, it cannot answer a request. Serving the page in place rather
+than redirecting is deliberate: a redirect to another port made the iOS sheet
+render the destination's response as a bare error, which reads as a blank page.
+Auth is a **session cookie**, not Basic auth: a captive-portal sheet does not
+render a `WWW-Authenticate` challenge — it displays the 401 body instead, which
+reads as a blank page with nothing to type into. `POST /login` sets the cookie;
+the session is an HMAC over the stored password hash, so changing the password
+invalidates every existing session for free, and the secret is minted per
+process so sessions do not survive a restart. A POST that carries
+`device_password` inline authenticates and performs the action in one step,
+which is what makes submitting the settings form from a fresh sheet work.
+The admin password defaults to the last
 6 hex of the WiFi MAC and is shown on the panel whenever the board is **not
 associated** — which covers a fresh board, but also a wrong password, a router
 that went away, and a move out of range. Gating on saved credentials instead
@@ -262,8 +307,8 @@ wrong is how the board gets stranded.
 ## Dashboard
 
 The `dashboard` service renders the UpNext display: it fetches iCal calendars
-and Open-Meteo weather, generates HTML+SVG, rasterizes with doctaculous, and
-writes `/dev/fb0`. No touch. It also serves the configuration portal on `:8080`
+and Open-Meteo weather, generates HTML+SVG, rasterizes with omnidoc, and
+writes `/dev/fb0`. It also serves the configuration portal on `:80`
 as a goroutine in the same process — a settings save swaps the config pointer
 under the `Store` mutex and the next tick picks it up, so there is no IPC, no
 second binary, and nothing to restart.
@@ -283,16 +328,75 @@ these sequentially, and wlan0 blocks up to ~45s on DHCP) so the first frame has
 live data. It has `start|stop|restart|status` and truncates its log at boot —
 `/root` is UBI with ~50MB free and this runs every minute forever.
 
-Measured on the board: **~1.05–1.18s per frame**, ~167MB RSS at the peak of a
-render, settling to **~46MB between renders**. The loop wakes on the minute
-boundary; verified re-rendering on rollover.
+**The bare `deploy.sh` reinstalls `S99wlan0` too.** That makes it a wlan0-touching
+operation, subject to the stranding gotcha below — a bare deploy followed by a
+service restart took out adb and WiFi together and needed a power cycle. When
+only the dashboard changed, name the files (`deploy.sh build/dashboard`), and
+deploy an init-script change on its own rather than alongside anything that
+restarts networking.
+
+**Deploying the binary does not update a running service.** `deploy.sh` replaces
+the file; the already-running process keeps executing the old image. `--once`
+picks up the new binary immediately, so a one-shot render can look correct while
+the panel still shows the old frame. Restart the service, then verify against
+`/dev/fb0` rather than a `--once` capture.
+
+**A frame takes ~10.3s on the board** (measured 2026-08-31, three consecutive
+`--once` runs: 10.1 / 10.3 / 10.4s, including the calendar and weather fetches).
+The same document rasterizes in 172ms on an M4 Pro, so this is the renderer on a
+1.2GHz Cortex-A7, not the network.
+
+An earlier note here claimed **~1.05–1.18s per frame**. That figure is stale —
+it predates the portal, the font embedding, and the current design, and it was
+never re-measured. Do not plan against it.
+
+Once a minute this is invisible. It stops being invisible the moment anything is
+interactive: a tap re-renders, so the detail sheet takes ~10s to appear and ~10s
+to dismiss. That is the dominant open problem with touch (see docs/TODO.md).
 
 Those figures predate the portal. With it running in the same process, idle RSS
 measured 33–38MB across two observations on 2026-08-27 (354MB free), so the
 portal costs nothing meaningful at rest — but the per-frame and peak numbers
 have not been re-measured since.
 
-**`WithPageSize(1920, 480)` is required.** doctaculous defaults to a 1280px
+## Touch
+
+The panel's Goodix digitizer is on `/dev/input/event0`, reporting **portrait**
+coordinates (0–479 x, 0–1919 y) whatever the framebuffer rotation is.
+`internal/touch` decodes `ABS_X`/`ABS_Y` plus `BTN_TOUCH` and rotates into
+landscape panel space; a tap is emitted on **release**, so a press-and-drag off
+a control does not fire it.
+
+`struct input_event` is **16 bytes** here — a 32-bit kernel. Decoding with the
+64-bit layout yields plausible garbage rather than an error, so the size is
+pinned by a test.
+
+Tapping an event card opens a detail sheet with a **Hide from panel** action.
+Hidden events are stored in `config.json` under `muted`, keyed by iCal UID +
+occurrence start (a series shares one UID, so the start is what makes a single
+occurrence targetable), and are dropped in `model.Build` before the timed and
+all-day split — so a mute removes the event from the card row, the ribbon, and
+the NOW/NEXT headline together. Unhide them from the settings page.
+
+Taps and the minute loop both render, serialized by `renderMu`. The dialog
+pointer has its **own** mutex: sharing one deadlocked the process on the first
+tap and froze the panel, which is now covered by a test.
+
+**Taps cannot be injected on this board — test with a finger.** There is no
+`/dev/uinput` in this kernel, and writing `input_event` records to
+`/dev/input/event0` is not event injection: the write *succeeds* (rc=0) and the
+kernel discards it, because writes to an evdev node are for force-feedback, not
+input. A synthetic-tap tool was built, deployed, and confirmed useless this way
+— its success return is a false signal, which is why this note exists.
+
+What can be verified without touching the glass: the decoder, the rotation, the
+hit-testing, the mute round-trip, and the dialog's rendering, all of which have
+tests. What cannot: that a real finger produces the events the decoder expects.
+
+Panel↔device coordinates, for reading a tap by hand:
+`deviceX = 479 - panelY`, `deviceY = panelX`.
+
+**`WithPageSize(1920, 480)` is required.** omnidoc defaults to a 1280px
 layout viewport, and its fit-within sizing preserves aspect ratio — so without
 it the page renders 1280×480 and is pillarboxed with white.
 
@@ -303,21 +407,40 @@ adb shell cat /dev/fb0 > /tmp/fb.raw
 go run ./tools/fb2png /tmp/fb.raw /tmp/panel.png 480 1920 unrotate
 ```
 
-**Some of the design does not render yet.** doctaculous does not implement
-`var()`, alpha colors, `border-radius`, `letter-spacing`, or `overflow-wrap`,
-so **the dark theme renders black-on-white** — `var()` drops the declaration
-entirely rather than falling back, and the palette is defined once in `:root`.
-These are being fixed upstream, not worked around here — see
-`docs/doctaculous-gaps.md` for the list, each with a repro and a pixel-count
-measurement. Inline `<svg>` was the worst of these and is now fixed upstream,
-so the weather icons render.
+**The design renders in full as of omnidoc `15ea0c4`** (verified
+2026-08-29). Two rounds of engine gaps hit this project and both are now closed
+upstream, so `style.css` is ordinary CSS again — `line-height`, `color-mix()`,
+`-webkit-line-clamp`, `text-overflow`, layered `background` lists, `z-index`,
+`top`+`bottom` sizing, `transform`, and CSS cascading into inline `<svg>` all
+work. Roughly 200 lines of workaround came back out, including a Go module that
+measured glyph advances from the embedded TTFs to truncate titles.
+
+**One engine gap remains**, in `docs/omnidoc-gaps.md` with a runnable case in
+`docs/engine-probes/`: a shrink-to-fit box in a vertical `writing-mode` is sized
+on the horizontal axis, so an auto-width vertical box comes out as wide as its
+text is long. The fix is to state a `width`; `#now-bar-label` does, and says so.
+The other standing item is `sysfont`, which matches a registry rather than the
+disk — that is why fonts ship via `@font-face` and `view.FontLoader` instead of
+being installed on the board.
+
+`writing-mode` itself works as of `8f7a2f9`/`4543fa3`, so the NOW label is the
+string `NOW` with `writing-mode: vertical-rl; text-orientation: upright` rather
+than one `<span>` per letter. The flex-margin and shrink-wrap gaps this file
+used to list are closed; `padding`-for-margin and `inline-block`-for-sizing are
+no longer needed anywhere.
+
+Re-run the probes before trusting either file if the engine moves again. Several
+entries were mis-stated on a first reading and only a runnable case with a
+working control settled them.
 
 **`docs/TODO.md` is the running list** of what is left before the display is
-finished — engine gaps, unfinished verification, and deferred findings, ranked.
-Start there rather than re-deriving it.
+finished — unfinished verification and deferred findings, ranked. The
+visual-fidelity port is closed out there (27 of 28 items); what remains is
+mostly portal behaviour and latent issues. Start there rather than re-deriving
+it.
 
 A browser preview cannot find these (browsers implement them all); only
-rasterizing through doctaculous can. And some bugs only appear on the panel —
+rasterizing through omnidoc can. And some bugs only appear on the panel —
 the forecast row's clipped bottom line was invisible in both the golden HTML
 and the host-side raster, because nothing clips at the document level.
 

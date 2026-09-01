@@ -1,0 +1,36 @@
+<html><head><style>
+/* Both boxes are out of flow, so without a stated height the body collapses
+   and `-page-size tall` renders an empty page. */
+body{background:#07080d;margin:0;height:120px}
+.lbl{position:absolute;top:14px;font-family:sans-serif;
+     font-size:20px;font-weight:700;color:#f59e0b;letter-spacing:0.04em;
+     writing-mode:vertical-rl;text-orientation:upright}
+#auto{left:9px;background:#00ff00}
+#fixed{left:209px;width:16px;background:#0000ff}
+</style></head><body>
+<!-- writing-mode itself works as of omnidoc 4543fa3: both boxes below lay their
+     text out down the page, letters upright. What this probe isolates is the
+     gap that REMAINS -- a shrink-to-fit box in a vertical writing-mode is still
+     sized on the HORIZONTAL axis, so an auto width comes out as wide as the
+     text is long.
+
+     #auto and #fixed differ only in `width`. Measure each background colour's
+     span: #fixed is 16px (correct, about one em), #auto is ~51px for the same
+     ~18px of ink. Both are 60px tall, and their glyph ink matches, so this is
+     purely a cross-size bug -- the text itself lays out correctly either way.
+
+     The engine logs "a shrink-to-fit box in a vertical writing-mode is sized on
+     the horizontal axis" when it happens. It warns once per DOCUMENT, so the
+     line appears even when every such box states a width and is sized right;
+     the log is not on its own evidence that a given box is wrong. Measure.
+
+     position:absolute is what makes these shrink-to-fit; inline-block and float
+     take the same path. Block-level boxes do not, but they are not a useful
+     control here: a block fills its container's width, so it is never sized to
+     its text in the first place. The control that matters is #fixed.
+
+     Keep this comment inside <body>. A comment before <html> puts the parser in
+     quirks mode, and both absolute boxes then paint nothing at all. -->
+<div class="lbl" id="auto">NOW</div>
+<div class="lbl" id="fixed">NOW</div>
+</body></html>

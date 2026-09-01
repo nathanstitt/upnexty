@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Module:** `github.com/nathanstitt/luckfox-dashboard`, `go 1.26.0`.
-- **Dependencies:** stdlib only, plus the existing doctaculous dependency. **No new third-party modules** — not for routing, not for templating, not for password hashing (`golang.org/x/crypto` is NOT available; use `crypto/sha256` + `crypto/subtle`).
+- **Dependencies:** stdlib only, plus the existing omnidoc dependency. **No new third-party modules** — not for routing, not for templating, not for password hashing (`golang.org/x/crypto` is NOT available; use `crypto/sha256` + `crypto/subtle`).
 - **Cross-compile:** `GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0`, `-ldflags="-s -w"`. Verify with `scripts/build.sh dashboard`.
 - **No `time.Now()` in testable logic** — pass `now time.Time` as a parameter. The board has no RTC and boots at 1970.
 - **gofmt clean.** The repo is currently clean and must stay so.
