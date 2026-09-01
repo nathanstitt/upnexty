@@ -22,10 +22,29 @@ start() {
 		return 1
 	fi
 
-	# Truncate rather than append: /root is UBI on NAND with ~50MB free, and
-	# this runs every minute forever. Keeping only the current boot's log
-	# bounds the growth without needing logrotate.
+	# Keep one generation before truncating. /root is UBI on NAND with ~50MB
+	# free and this runs every minute forever, so the log cannot simply grow --
+	# but truncating outright destroys the evidence in the one case that
+	# matters: a process that died and is being restarted, whose stack is in
+	# the log we are about to erase.
+	[ -s "$LOGFILE" ] && mv "$LOGFILE" "$LOGFILE.1"
 	: > "$LOGFILE"
+
+	# Go writes a fatal stack to stderr, which the log now captures. That is the
+	# only crash evidence available here: this kernel has coredump support
+	# compiled out. Setting ulimit -c and core_pattern looks like it works --
+	# both take, and /proc/PID/limits reports "unlimited" -- but nothing is ever
+	# written. Verified by SEGV-ing a shell with the limit raised and the
+	# pattern set to an absolute path, which produced no file either.
+	#
+	# So the stack has to be sufficient, which means GOTRACEBACK below and an
+	# unstripped binary when hunting something the unwinder cannot walk.
+	#
+	# GOTRACEBACK=crash would re-raise for a core on a kernel that supported
+	# them; it is deliberately not set, because without coredump support it
+	# only adds runtime frames to a stack that is already long.
+	GOTRACEBACK=all
+	export GOTRACEBACK
 
 	# Detach the kernel's text console from the framebuffer. fbcon shares
 	# /dev/fb0 and keeps drawing its caret on top of whatever we write -- a
@@ -42,10 +61,34 @@ start() {
 		fi
 	done
 
-	start-stop-daemon --start --quiet --background \
-		--make-pidfile --pidfile "$PIDFILE" \
-		--exec "$DAEMON" -- --config "$CONFIG" >>"$LOGFILE" 2>&1
-	status=$?
+	# Backgrounded by the shell, not by --background, and the pidfile is written
+	# here rather than by --make-pidfile.
+	#
+	# BusyBox's start-stop-daemon reopens a --background child's stdout and
+	# stderr on /dev/null unconditionally, and has no option to redirect them
+	# (see its --help: -b takes no argument). The redirect on the invocation
+	# only ever applied to start-stop-daemon's own output, so the daemon's fd 1
+	# and 2 pointed at /dev/null and $LOGFILE could never receive anything.
+	#
+	# That silently discarded every crash: a Go runtime stack goes to stderr,
+	# so a fatal fault left an empty log and looked like a clean run. Verified
+	# by reading /proc/PID/fd/2 on the running daemon, which is the only way to
+	# see it -- the log being empty is exactly what a healthy service looks
+	# like too.
+	#
+	# setsid detaches from the controlling terminal, which is the other thing
+	# --background was providing.
+	setsid "$DAEMON" --config "$CONFIG" >>"$LOGFILE" 2>&1 &
+	echo $! > "$PIDFILE"
+	status=0
+
+	# A fault at startup (bad config, missing framebuffer) exits within a
+	# second, and reporting OK for a process that is already gone is worse than
+	# a slow start. Confirm it is still alive before claiming success.
+	sleep 1
+	if ! kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+		status=1
+	fi
 
 	if [ $status -eq 0 ]; then
 		echo "OK"
