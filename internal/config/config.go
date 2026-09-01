@@ -37,6 +37,23 @@ type DisplayConfig struct {
 	Brightness *int `json:"brightness"`
 }
 
+// MutedEvent is one event hidden from the panel by a tap on its card.
+//
+// Key is the identity (calendar.Event.Key); the rest is denormalized copy so
+// the portal can show a human-readable unmute list. The panel never reads
+// Title/Start -- only Key is load-bearing -- but without them the settings page
+// could only offer a list of opaque UIDs, which nobody can act on.
+type MutedEvent struct {
+	Key   string    `json:"key"`
+	Title string    `json:"title"`
+	Start time.Time `json:"start"`
+	// End is when this occurrence finishes, used to prune the list: a mute for
+	// an event that is over can never match again and is dead weight in a file
+	// on NAND.
+	End   time.Time `json:"end"`
+	Muted time.Time `json:"muted_at"`
+}
+
 // Config mirrors config.json. Zero values are replaced by defaults in Load.
 type Config struct {
 	Location struct {
@@ -60,6 +77,70 @@ type Config struct {
 	Portal    PortalConfig     `json:"portal"`
 	Display   DisplayConfig    `json:"display"`
 	Calendars []CalendarSource `json:"calendars"`
+	// Muted lists events hidden from the panel. Written by a tap on the panel,
+	// cleared from the settings page.
+	Muted []MutedEvent `json:"muted,omitempty"`
+}
+
+// IsMuted reports whether an event key is in the muted list.
+func (c *Config) IsMuted(key string) bool {
+	for _, m := range c.Muted {
+		if m.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// Mute adds an event to the muted list. Muting an already-muted event is a
+// no-op rather than a duplicate, so a double tap cannot corrupt the list.
+func (c *Config) Mute(m MutedEvent) {
+	if c.IsMuted(m.Key) {
+		return
+	}
+	c.Muted = append(c.Muted, m)
+}
+
+// Unmute removes an event from the muted list, reporting whether it was there.
+func (c *Config) Unmute(key string) bool {
+	for i, m := range c.Muted {
+		if m.Key == key {
+			c.Muted = append(c.Muted[:i], c.Muted[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// MuteGrace is how long a mute outlives the event it hides.
+//
+// Pruning on End alone is wrong: the agenda still shows events that have
+// finished (they scroll left as "past" cards), and the in-progress event is
+// the single most likely thing to be muted. Both would have their mute deleted
+// the moment it was written, so the card would reappear on the next render and
+// the button would look broken.
+//
+// A day covers the panel's whole visible window with room to spare, and an
+// entry that outlives its usefulness by a day costs a few dozen bytes.
+const MuteGrace = 24 * time.Hour
+
+// PruneMuted drops mutes for occurrences that ended more than MuteGrace ago.
+// Their keys embed a start time and can never match a future event, so keeping
+// them only grows a file that lives on NAND and pads every settings page.
+//
+// Entries with a zero End are kept: they predate End being recorded, and
+// guessing an expiry for them risks unmuting something the user muted.
+func (c *Config) PruneMuted(now time.Time) int {
+	cutoff := now.Add(-MuteGrace)
+	kept := make([]MutedEvent, 0, len(c.Muted))
+	for _, m := range c.Muted {
+		if m.End.IsZero() || m.End.After(cutoff) {
+			kept = append(kept, m)
+		}
+	}
+	n := len(c.Muted) - len(kept)
+	c.Muted = kept
+	return n
 }
 
 // Load reads config.json and fills in defaults for unset fields.

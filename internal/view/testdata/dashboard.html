@@ -3,166 +3,900 @@
 <head>
 <meta charset="utf-8"/>
 <title>UpNext</title>
-<style>:root {
-  --bg: #0b0d12;
-  --panel: #141924;
-  --border: #263041;
-  --text: #e8ecf3;
-  --text-mid: #8b97ab;
-  --text-dim: #5b6678;
-  --blue: #4f9cff;
+<style>/* UpNext — landscape 1920x480 panel. Ported from the pi-dashboard reference.
+ *
+ * Three engine constraints shape this file; each was verified by rasterizing
+ * through omnidoc rather than assumed:
+ *
+ *  1. Every font-family MUST end in a generic fallback (sans-serif/monospace).
+ *     Without one the text does not fall back -- it renders nothing at all.
+ *  2. color-mix() is unsupported and drops the whole declaration, so the
+ *     reference's color-mix(in srgb, X N%, transparent) is written as
+ *     rgba(...). Verified identical output: both give rgb(23,40,61) for the
+ *     24%-blue card wash.
+ *  3. Fonts arrive via @font-face url() served from the embedded asset FS.
+ *     Installing them on the board does not work -- see view.FontLoader.
+ */
+
+@font-face { font-family: 'Barlow Condensed'; font-weight: 300;
+  src: url('fonts/BarlowCondensed-Light.ttf') format('truetype'); }
+@font-face { font-family: 'Barlow Condensed'; font-weight: 400;
+  src: url('fonts/BarlowCondensed.ttf') format('truetype'); }
+@font-face { font-family: 'Barlow Condensed'; font-weight: 600;
+  src: url('fonts/BarlowCondensed-SemiBold.ttf') format('truetype'); }
+@font-face { font-family: 'Barlow Condensed'; font-weight: 700;
+  src: url('fonts/BarlowCondensed-Bold.ttf') format('truetype'); }
+@font-face { font-family: 'IBM Plex Mono'; font-weight: 400;
+  src: url('fonts/IBMPlexMono.ttf') format('truetype'); }
+@font-face { font-family: 'IBM Plex Mono'; font-weight: 600;
+  src: url('fonts/IBMPlexMono-SemiBold.ttf') format('truetype'); }
+@font-face { font-family: 'Roboto'; font-weight: 400;
+  src: url('fonts/Roboto.ttf') format('truetype'); }
+@font-face { font-family: 'Roboto'; font-weight: 500;
+  src: url('fonts/Roboto-Medium.ttf') format('truetype'); }
+@font-face { font-family: 'Roboto'; font-weight: 700;
+  src: url('fonts/Roboto-Bold.ttf') format('truetype'); }
+@font-face { font-family: 'Roboto'; font-weight: 900;
+  src: url('fonts/Roboto-Black.ttf') format('truetype'); }
+
+:root {
+  --bg:         #07080d;
+  --bg-panel:   #0c0e16;
+  --border:     rgba(255,255,255,0.055);
+  /* A hairline that survives this panel: see #wx-widget. */
+  --rule:       rgba(255,255,255,0.16);
+  --text:       #dde3ef;
+  --text-dim:   #3d4a62;
+  --text-mid:   #6b7a96;
+  --amber:      #f59e0b;
+  --blue:       #4a90d9;
+  --green:      #6ad28a;
+  --now-cursor: #f59e0b;
+  --wx-curve:   #7ec8f0;
 }
+
 * { box-sizing: border-box; }
+
 html, body {
   margin: 0; padding: 0;
   width: 1920px; height: 480px;
   background: var(--bg); color: var(--text);
-  font-family: "DejaVu Sans", sans-serif;
+  font-family: 'Roboto', sans-serif;
   overflow: hidden;
 }
-#app { display: flex; width: 1920px; height: 480px; }
 
-/* Left: fixed-width now block */
+/* A warm glow so the panel's edges do not read as a hard cut to black. The
+   reference stylesheet has no vignette -- it was read off a screenshot -- so
+   this stays subtle. */
+#app {
+  display: flex; width: 1920px; height: 480px;
+  background:
+    radial-gradient(70% 120% at 0% 0%, rgba(245,158,11,0.05), transparent 60%),
+    radial-gradient(70% 120% at 100% 100%, rgba(245,158,11,0.04), transparent 60%),
+    var(--bg);
+}
+
+/* ---- Left panel ---- */
 #now-block {
   width: 380px; flex-shrink: 0; height: 480px;
   border-right: 1px solid var(--border);
-  padding: 20px 22px; display: flex; flex-direction: column;
+  display: flex; flex-direction: column;
 }
-#clock-time { font-size: 78px; font-weight: 700; line-height: 1; letter-spacing: -2px; }
-#clock-date { font-size: 19px; color: var(--text-mid); text-transform: uppercase;
-  letter-spacing: 1px; margin-top: 10px; }
-#now-wx { display: flex; align-items: center; gap: 10px; margin-top: 26px; font-size: 30px; }
-#now-wx svg { width: 34px; height: 34px; color: var(--text-mid); }
-#next-label { font-size: 15px; color: var(--text-dim); text-transform: uppercase;
-  letter-spacing: 1px; margin-top: 30px; }
-#next-title { font-size: 25px; font-weight: 600; margin-top: 6px; }
-#next-when { font-size: 19px; color: var(--blue); margin-top: 4px; }
 
-/* Setup hint: only visible while the board has no network. Sized to be read
-   from across a room, since that is the distance someone stands at when they
-   notice the panel is not working. */
-#setup-hint { margin-top: 26px; }
-.sh-lead { font-size: 15px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+/* flex: 0 0 auto pins this to its content height. Without it the box grew ~51px
+   past its text -- a column flex child with no flex property took a share of the
+   free space instead of shrink-wrapping, which opened a gap between the clock
+   and the weather that read as a layout mistake. Same for #wx-widget below. */
+/* Explicit height, not shrink-wrap. A flex row here measures ~108px for 37px of
+   ink: the flex line takes the font's full ascent+descent rather than the
+   declared line-height, and the declared 2px bottom padding rendered as 38.
+   Stating the height is the only thing that pins it, and it is safe because the
+   content is one line of a known size. Measured, not guessed -- see the ink
+   figures in docs/omnidoc-gaps.md #19. */
+#clock-row {
+  padding: 8px 18px 0;
+  display: flex; justify-content: space-between; align-items: baseline;
+  flex: 0 0 auto;
+  height: 62px;
+  line-height: 1;
+}
+#clock-time {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 46px; font-weight: 600; line-height: 1;
+}
+#clock-date {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; font-weight: 600; color: var(--text-mid);
+  letter-spacing: 0.04em;
+}
+
+/* Weather: icon, temp + condition, rain% */
+#wx-widget {
+  /* 2px bottom, not 8: the six that moved to #wx-desc's margin-bottom are what
+     lift the condition text off the rule below. The row height is fixed, so
+     that spacing has to come out of this padding rather than add to it. */
+  padding: 10px 18px 2px;
+  display: flex; align-items: center; gap: 12px;
+  /* --border (white at 0.055) composites to rgb(14,15,20) over this panel --
+     7/255 above the background, which measured as invisible on the panel even
+     though it is technically painted. --rule is the same hairline at a level
+     the display actually resolves. */
+  border-bottom: 1px solid var(--rule);
+  /* See #clock-row: an explicit height is what pins a flex row here. The temp
+     block governs: 44px temp + 4 + 18px desc + 6 margin = 72, plus 10/2
+     padding and the 1px rule. The 50px icon is not the tall child. */
+  flex: 0 0 auto;
+  height: 84px;
+  line-height: 1;
+}
+#wx-icon { width: 50px; height: 50px; flex-shrink: 0; }
+#wx-temp-block { flex: 1; }
+#wx-temp {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 44px; font-weight: 300; line-height: 1;
+}
+/* margin-bottom keeps the condition text off #wx-widget's border-bottom, which
+   it was sitting directly on.
+
+   The row's height is fixed and its content already filled it, so this space
+   is taken from margin-top rather than added: 4+0 became 0+6, a net gain of
+   2px absorbed by the padding-bottom this rule's block gave up. Adding height
+   here instead overflows #wx-widget, which pushes #now-content down and clips
+   the last line of .nb-next off the bottom of the panel -- the exact failure
+   #now-content and .nb-pad are commented against. */
+#wx-desc {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; color: var(--text-mid);
+  letter-spacing: 0.04em; text-transform: uppercase;
+  margin-bottom: 6px;
+}
+#wx-precip-col { text-align: right; }
+#wx-precip-pct {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 22px; font-weight: 600; color: var(--blue); line-height: 1;
+}
+#wx-precip-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; color: var(--text-dim);
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+
+/* Headline: free-for / next up.
+ *
+ * The panel is a fixed 480px column, so whatever the clock and weather do not
+ * use lands here. All of that slack goes to .nb-now, which grows to fill it and
+ * centres its own content; .nb-next keeps its natural height at the bottom.
+ *
+ * The alternative -- distributing the slack with justify-content -- was tried
+ * and is worse. `center` collapsed it into one gap above and below a single
+ * clump, leaving a hole under the weather rule; `space-between` split it
+ * between the two groups, which pushed them to opposite ends of the panel with
+ * a chasm in the middle. Growing one owner and centring inside it keeps the
+ * headline optically centred in the space it actually has, wherever the
+ * next-up block ends up.
+ *
+ * It also removes a special case: when there is no next-up preview (ModeDone,
+ * setup, loading) .nb-now simply grows further and stays centred, with no auto
+ * margins needed to re-centre a lone child.
+ *
+ * These MUST be plain class selectors. omnidoc does not apply declarations
+ * from a child-combinator selector -- `#now-content > .nb-now { ... }` parses
+ * and is silently ignored (docs/omnidoc-gaps.md #17). Verified against a
+ * control in the same document. Do not "tidy" these into descendant form. */
+/* padding-bottom is 0 here and the 20px lives on .nb-next's margin-bottom
+   instead. omnidoc does not reserve a column flex container's padding-bottom
+   when sizing flex children (docs/omnidoc-gaps.md #18): padding-top is honoured,
+   the bottom is not, so flex-grow hands out space that does not exist and the
+   last child runs past the edge. Here that clipped "at 10:52 AM" off the bottom
+   of the panel. Do not move this back into the shorthand. */
+#now-content {
+  flex: 1; min-height: 0; padding: 14px 20px 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+/* flex-basis 0, not auto: from a zero basis the grow factor distributes only
+   the genuinely free space, rather than adding to the content height. */
+.nb-now {
+  flex-grow: 1; flex-shrink: 1; flex-basis: 0; min-height: 0;
+  display: flex; flex-direction: column; justify-content: center;
+}
+/* An explicit spacer carries #now-content's bottom inset. Neither
+   padding-bottom on the container nor margin-bottom on the last child is
+   reserved by omnidoc when sizing column flex children (gaps #18) -- both are
+   silently ignored and the last line runs off the panel. A zero-flex box with a
+   height is honoured, so the inset is expressed as one. */
+.nb-pad { flex: 0 0 20px; height: 20px; }
+.nb-lead {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; line-height: 1.2; color: var(--text-dim);
+  letter-spacing: 0.14em; text-transform: uppercase;
+  margin-bottom: 4px;
+}
+/* An event title headline: Roboto 800 with the calendar colour as a left bar.
+   Two lines then an ellipsis; the box sizes itself to whichever it needs. */
+.nb-title {
+  font-family: 'Roboto', sans-serif;
+  font-size: 26px; font-weight: 800; line-height: 1.1;
+  color: var(--text); padding-left: 12px; margin-bottom: 4px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* A duration headline ("34 min"): monospace, not condensed -- the reference
+   uses Plex Mono here so the digits line up as the countdown ticks. */
+.nb-free {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 52px; font-weight: 600; line-height: 1;
+  letter-spacing: -0.02em; color: var(--green); margin-bottom: 4px;
+}
+.nb-countdown {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; line-height: 1.2; color: var(--text-mid);
+  padding-left: 12px;
+}
+.nb-countdown.urgent { color: var(--amber); }
+/* The next-up block recedes: the headline above it is what matters. No auto
+   margin -- .nb-now grows to take the slack, so this keeps its natural height
+   and sits directly beneath, separated by the 18px it asks for.
+   flex-shrink: 0 so it is never the thing that gives when the column is tight:
+   #now-content clips its overflow, and a squeezed .nb-next loses its last line
+   ("at 10:52 AM") silently. .nb-now yields instead -- it has slack to give. */
+/* The 18px separating this from the headline is a sibling spacer, not
+   margin-top here. Same reason as .nb-pad: omnidoc does not reserve a column
+   flex child's own margin when sizing it, so .nb-now grew into space this
+   block had already claimed and the last line ("at 10:00 AM") was clipped off
+   the bottom by #now-content's overflow. A zero-flex box with a height is
+   honoured; a margin is not. */
+.nb-next {
+  /* 0.85, not 0.7: this block still recedes, but two dimmers multiplied --
+     this opacity times --text-dim on the lead -- put "THEN" at roughly
+     rgb(46,56,76) over #07080d, which is not readable on the panel. The
+     per-element colours below carry the recession now. */
+  opacity: 0.85; padding-left: 12px;
+  flex: 0 0 auto;
+}
+.nb-next-gap { flex: 0 0 18px; height: 18px; }
+/* --text-mid, not --text-dim: the same lift .ad-lead needed. #3d4a62 is too
+   faint for a label on this display, and here it was additionally multiplied
+   by the block's opacity. */
+.nb-next-lead {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; line-height: 1.2; color: var(--text-mid);
+  letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 2px;
+}
+.nb-next-title {
+  font-family: 'Roboto', sans-serif;
+  font-size: 18px; line-height: 1.2; font-weight: 600; color: #a0aec0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nb-next-at {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; line-height: 1.2; color: var(--text-mid);
+  margin-top: 2px;
+}
+
+/* Setup hint replaces the headline when the board is not associated. */
+.sh-lead {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 22px; color: var(--amber);
+  letter-spacing: 0.14em; text-transform: uppercase;
+}
 .sh-step { font-size: 22px; margin-top: 8px; }
-.sh-mono { font-family: "DejaVu Sans Mono", monospace; color: var(--blue); }
+.sh-mono { font-family: 'IBM Plex Mono', monospace; color: var(--blue); }
+/* The "this takes a minute" line recedes: it is reassurance, not instruction. */
+.sh-wait {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; color: var(--text-dim);
+}
 
-/* Right: timeline track */
-#track { position: relative; width: 1540px; height: 480px; }
-.ad-ribbon { position: absolute; top: 0; left: 0; height: 30px;
-  display: flex; gap: 8px; padding: 5px 8px; }
-.ad-pill { font-size: 15px; padding: 2px 10px; border-radius: 9px; }
+/* ---- Right zone: agenda over weather ---- */
+/* overflow:hidden is load-bearing. #agenda-row is wider than this zone and is
+   pre-scrolled with transform: translateX(-Npx), so once the agenda scrolls at
+   all its background paints out past this zone's left edge and washes over the
+   whole left panel -- clock, weather, and headline included. Nothing else
+   clips it: the zone is the only ancestor between the row and <body>.
 
-.block { position: absolute; top: 118px; height: 54px; border-radius: 5px;
-  background: var(--panel); border-left: 3px solid var(--blue); }
-/* font-size here MUST stay 19px: model.estimateTextWidth (internal/model/model.go)
-   assumes 19px when it estimates label widths for PlaceLabels' collision
-   avoidance. Changing this without changing that constant will make labels
-   overlap or get dropped incorrectly. */
-.label { position: absolute; font-size: 19px; white-space: nowrap; }
-.label .lt { font-weight: 600; }
-.label .lm { color: var(--text-mid); font-size: 15px; margin-left: 7px; }
-.leader { position: absolute; top: 108px; width: 1px; height: 10px;
-  background: var(--text-dim); }
+   Found on the panel, not in a test: the golden fixture's agenda happens to
+   sit at offset 0, where there is nothing to overflow. Any capture taken when
+   an event has scrolled off the left shows it. */
+#timeline-zone {
+  flex: 1; height: 480px; position: relative;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
 
-/* top starts below the all-day ribbon band (0-30px) so the "NOW" tag (drawn
-   above the line via ::after) never overlaps an all-day pill sitting at a
-   similar X. */
-#now-line { position: absolute; top: 48px; width: 2px; height: 286px;
-  background: var(--blue); }
-#now-line::after { content: "NOW"; position: absolute; top: -16px; left: -13px;
-  font-size: 12px; color: var(--blue); letter-spacing: 1px; }
+/* The NOW bar spans the agenda and the weather strip, stopping above the
+   forecast row. It starts below the 40px all-day ribbon so that band can use
+   the full width. */
+#now-bar {
+  position: absolute; top: 40px; bottom: 72px; left: 0; width: 3px;
+  background: var(--now-cursor);
+  box-shadow: 0 0 8px var(--amber), 0 0 22px rgba(245,158,11,0.4);
+  z-index: 20;
+}
+/* The dot caps the cursor at the top of the band. */
+#now-bar-dot {
+  position: absolute; top: -4px; left: -4px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 6px var(--amber);
+}
+/* Vertical, as in the reference. 20px, not the reference's 13: this is read
+   from across a room, and beside a 3px glowing bar a 13px label disappeared.
 
-/* Sits directly above the forecast row (116px) with a 4px breathing gap.
-   Keep in sync with #forecast's height. */
-#wx { position: absolute; bottom: 120px; left: 0; }
+   text-orientation: upright keeps each letter facing the reader; the initial
+   `mixed` would lay Latin on its side, which is correct for CJK and wrong for
+   a three-letter English label.
+
+   The stated width is load-bearing, not decoration. A shrink-to-fit box in a
+   vertical writing-mode is still sized on the horizontal axis, so an auto
+   width comes out as wide as the text is long -- measured 51px against 18px
+   of ink, and the engine logs it.
+
+   20px is the em square at this font-size, so no glyph overflows the box; at
+   the 16px it was, W was wider than its box while O was much narrower, and
+   without text-align each letter sat against the block start -- which is what
+   made the three-letter stack read as ragged. text-align centres each glyph on
+   the inline axis, which is the horizontal one in this writing-mode. left is
+   7px rather than 9 so the wider box stays centred on the same axis. */
+#now-bar-label {
+  position: absolute; top: 14px; left: 7px;
+  writing-mode: vertical-rl; text-orientation: upright;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 20px; font-weight: 700; color: var(--amber);
+  letter-spacing: 0.04em; width: 20px; text-align: center;
+}
+
+/* All-day pills ride above the card row, starting at the left edge. The NOW
+   bar begins below this band, so the ribbon has the full width.
+
+   A block of inline-blocks rather than a flex row. The flex version truncated
+   the pill's text with an ellipsis in the full page, though an isolated probe
+   of the same rules does not reproduce it -- so the cause is something about
+   this document rather than the properties themselves. Nothing here needs
+   flex; the items just sit in a line. */
+.ad-ribbon {
+  padding: 6px 18px 0 18px;
+  height: 40px; flex-shrink: 0; overflow: hidden;
+  white-space: nowrap;
+}
+/* Without this the pill reads as a stray box floating above the cards -- it is
+   the only thing in the band and nothing says what it is.
+   --text-mid, not --text-dim: at #3d4a62 the label was too faint to read as a
+   caption, so the pill still looked unexplained. This is the same lift the
+   divider rule needed; dim greys that work on a monitor disappear here. */
+.ad-lead {
+  display: inline-block; margin-right: 10px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 16px; font-weight: 600;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-mid);
+}
+/* One line, always: the ribbon is 40px and has no room for a second. Long
+   titles are cut with an ellipsis. */
+.ad-pill {
+  display: inline-block; margin-right: 8px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 19px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 330px; padding: 3px 12px 4px; border-radius: 4px;
+}
+
+/* Card row fills the rest of the agenda band.
+   The vertical budget must sum to exactly 480 or the rows overlap (the panel
+   does not scroll): ribbon 40 + agenda 240 + wx-zone 128 + forecast 72 = 480.
+   wx-strip and forecast come from the reference (104 + 58); the extra 24px on
+   the strip is the hour axis, which the reference overlays inside the canvas
+   and this port renders as its own row. */
+/* gap matches model.CardGapPx -- the agenda's arithmetic assumes exactly this
+   spacing, so the two must change together.
+
+   The background lifts the band off the surround: the reference's blue tint
+   plus its vertical grain. Both are stronger than the reference's values
+   (0.05 / 0.015) -- over #07080d those composite to under 1/255 and this panel
+   renders them as flat black. These are the levels the display resolves. */
+#agenda-row {
+  background:
+    radial-gradient(120% 100% at 0% 0%, rgba(74,144,217,0.16), transparent 55%),
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0 1px, transparent 1px 4px),
+    #0a0d16;
+  height: 240px; flex-shrink: 0;
+  display: flex; align-items: stretch; gap: 14px;
+  padding: 10px 18px 12px;
+}
+
+/* ---- Event card ---- */
+.evt {
+  width: 196px; flex-shrink: 0;
+  position: relative; /* the badge pins to this box */
+  display: flex; flex-direction: column;
+  justify-content: center;
+  padding: 14px 18px;
+  border-radius: 10px;
+  background: linear-gradient(160deg, rgba(255,255,255,0.045), rgba(255,255,255,0.018));
+  border: 1px solid var(--border);
+  border-top: 3px solid rgba(74,144,217,0.8);
+  overflow: hidden;
+}
+/* Up to two lines, then an ellipsis. */
+.evt-title {
+  font-family: 'Roboto', sans-serif;
+  font-size: 25px; font-weight: 700; line-height: 1.1;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.evt-time {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 21px; font-weight: 600; line-height: 1.4;
+  color: rgba(221,227,239,0.8);
+}
+.evt-meta {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 16px; font-weight: 500; line-height: 1.4;
+  letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-mid);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Past events recede. */
+.evt.past {
+  background: rgba(255,255,255,0.012);
+  border-top-color: rgba(255,255,255,0.06);
+  opacity: 0.4;
+}
+.evt.past .evt-title { color: var(--text-mid); font-weight: 500; }
+.evt.past .evt-time { color: var(--text-mid); font-weight: 400; }
+
+/* The in-progress card is the one the NOW bar crosses. */
+.evt.current {
+  background: linear-gradient(160deg, rgba(74,144,217,0.24), rgba(74,144,217,0.07));
+  border-color: rgba(74,144,217,0.55);
+  box-shadow: 0 0 0 1px rgba(74,144,217,0.35);
+}
+.evt.current .evt-title { font-size: 27px; }
+
+/* Starting within 30 minutes. */
+.evt.soon {
+  border-top-color: var(--amber);
+  box-shadow: 0 0 0 1px rgba(245,158,11,0.3);
+}
+
+/* A tentative/unaccepted invite: hatched so it reads as "not yours yet". */
+.evt.ghost {
+  opacity: 0.5;
+  border-style: dashed;
+  background:
+    repeating-linear-gradient(-45deg,
+      rgba(255,255,255,0.06) 0 5px, transparent 5px 11px);
+}
+
+/* A tab flush to the card's right border: square right corners, rounded left,
+   breaking out of the card's 18px right padding. */
+.evt-badge {
+  position: absolute; right: -18px; bottom: 14px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 14px; font-weight: 700; white-space: nowrap;
+  letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 3px 10px 4px; border-radius: 999px 0 0 999px;
+}
+.evt-badge.live { color: #07080d; background: var(--blue); }
+.evt-badge.soon {
+  color: var(--amber); border: 1px solid var(--amber); border-right: 0;
+  padding-right: 11px;
+}
+
+/* ---- Current slot: in-progress events stacked vertically, sized to their
+   duration span so the single NOW bar bisects the whole stack. ---- */
+.evt-stack {
+  flex-shrink: 0; position: relative; align-self: stretch;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.evt-stack .evt.stacked {
+  flex: 1 1 0; min-height: 0; width: 100%;
+  justify-content: center;
+  /* Repeat the current-card treatment: .evt.current's selector does not reach
+     here through the stack wrapper, so the card would render unchromed. */
+  background: linear-gradient(160deg, rgba(74,144,217,0.24), rgba(74,144,217,0.07));
+  border: 1px solid rgba(74,144,217,0.55);
+  border-top-width: 3px;
+}
+.evt-stack .evt.stacked .evt-title { font-size: 21px; height: 56px; }
+/* Elapsed shade over the part of the slot already spent. No border: the single
+   NOW bar is the only vertical line over it. */
+.evt-elapsed {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  background: rgba(7, 8, 13, 0.4);
+  z-index: 3;
+}
+
+/* ---- Day separator (crossing into tomorrow) ---- */
+.day-sep {
+  flex-shrink: 0; align-self: stretch; display: flex; align-items: center;
+  margin: 0 20px 0 6px; padding-left: 18px;
+  border-left: 1px dashed rgba(255,255,255,0.12);
+}
+.day-sep span {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 20px; font-weight: 700; color: var(--text-mid);
+  letter-spacing: 0.16em; text-transform: uppercase;
+}
+
+/* Free time between events reads as open space, not a card. */
+.gap {
+  width: 86px; flex-shrink: 0; align-self: stretch;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  border-radius: 10px; color: var(--green);
+  background:
+    repeating-linear-gradient(-45deg,
+      rgba(106,210,138,0.07) 0 6px, transparent 6px 12px);
+  border: 1px dashed rgba(106,210,138,0.28);
+}
+.gap-dur {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 22px; font-weight: 600;
+}
+.gap-label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 14px; font-weight: 700; margin-top: 4px;
+  letter-spacing: 0.18em; text-transform: uppercase; opacity: 0.7;
+}
+
+.agenda-empty {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 26px; color: var(--text-dim);
+  letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 90px 0 0 40px;
+}
+
+/* ---- Weather strip: curve + hour axis ---- */
+#wx-zone {
+  height: 128px; position: relative; flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: linear-gradient(to bottom, rgba(10,14,28,0.75), rgba(7,8,13,0.9));
+}
+#wx-strip { height: 104px; }
+/* NOTE: CSS does not cascade into inline <svg> children on this engine, so the
+   curve's stroke and the temperature labels are emitted as presentation
+   attributes by internal/chart. Only the <svg> box itself is styled here. */
 .wx-chart { display: block; }
-.wx-temp { fill: none; stroke: #ffb454; stroke-width: 2; }
-.wx-precip { fill: rgba(79,156,255,0.35); }
+#wx-hours {
+  height: 24px; position: relative;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; color: var(--text-dim); letter-spacing: 0.05em;
+}
+.wx-hour { position: absolute; top: 0; padding-left: 3px; white-space: nowrap; }
 
-/* 116px, not 92px: the column's four rows (day / icon / temps / precip) plus
-   their gaps measure ~105px on the real engine, and the 24px icon box is not
-   yet counted because inline <svg> currently collapses to nothing (see
-   docs/doctaculous-gaps.md §0). At 92px the precip line overflowed past the
-   bottom of the panel and was clipped -- verified on hardware. */
-#forecast { position: absolute; bottom: 0; left: 0; width: 1540px; height: 116px;
-  display: flex; border-top: 1px solid var(--border); }
-.fc-col { flex: 1; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 3px; border-right: 1px solid #1b2230; }
-.fc-dow { font-size: 14px; color: var(--text-dim); text-transform: uppercase; }
-.fc-col svg { width: 24px; height: 24px; color: var(--text-mid); }
-.fc-hi { font-size: 21px; font-weight: 700; }
-.fc-lo { font-size: 17px; color: var(--text-mid); margin-left: 5px; }
-.fc-pp { font-size: 14px; color: var(--blue); }
+/* ---- 7-day forecast ---- */
+#forecast {
+  /* 72px, not the reference's 58: hi-over-lo at 18px Plex Mono measures ~64px
+     of content, and 58 clipped the low temperature. */
+  height: 72px; flex-shrink: 0; display: flex; align-items: stretch;
+  border-top: 1px solid var(--border); overflow: hidden;
+}
+/* gap is 14, not the reference's 10: its icons are emoji sitting in their own
+   glyph bearing, while ours are SVGs that fill their box edge to edge -- at 10
+   the sun's rays touched the "TODAY" label. */
+.fc-col {
+  flex: 1 1 0; display: flex; align-items: center; gap: 14px;
+  padding: 0 16px; border-right: 1px solid rgba(255,255,255,0.04);
+  min-width: 0;
+}
+.fc-dow {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; font-weight: 600; color: var(--text-mid);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  /* 58, not 42: "TODAY" is the longest label and measures 54px at this size
+     (plus letter-spacing), so a 42px box let it run into the icon. */
+  width: 58px; flex-shrink: 0;
+}
+.fc-icon { width: 40px; height: 40px; flex-shrink: 0; }
+/* Hi over lo, not side by side. */
+.fc-temps { display: flex; flex-direction: column; }
+.fc-hi {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; font-weight: 600; color: var(--text);
+}
+.fc-lo {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; color: var(--text-mid);
+}
+.fc-pp {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 18px; font-weight: 600; color: var(--blue);
+}
+.fc-pp.none { color: var(--text-dim); }
 
-/* Stale and Errors can render together (model.Build sets Stale whenever
-   Errors is non-empty), so #errors sits below #stale-flag rather than
-   sharing its top offset. max-width plus overflow-wrap keeps a long error
-   string (e.g. a full "ical(Name): GET ...: 401 Unauthorized" message) from
-   running off the right edge of the 1540px track. */
-#stale-flag { position: absolute; top: 4px; right: 8px; font-size: 13px; color: #ff7a59;
-  text-transform: uppercase; letter-spacing: 1px; }
-#errors { position: absolute; top: 22px; right: 8px; max-width: 460px;
-  font-size: 13px; color: #ff7a59; text-align: right; overflow-wrap: break-word; }
+/* ============================================================
+   Modal sheet
+   ============================================================
+
+   A generic overlay: eyebrow, title, labelled rows, prose, actions. Event
+   detail is the first thing to use it; forecast detail will supply different
+   rows and reuse the shell untouched, so nothing here names an event.
+
+   The sheet is anchored to x=380 -- the seam where #now-block ends and the
+   agenda begins -- rather than centred. Three reasons, in order of weight:
+
+     1. This panel is 1920x480, a 4:1 letterbox. A centred dialog on a 480px
+        canvas either fills the screen or floats in a thin strip; a full-height
+        sheet is the shape the display actually is.
+     2. It occupies the region the user just tapped and leaves the clock,
+        weather, and headline readable. The panel keeps doing its job while
+        the sheet is open, which matters for a display on a wall.
+     3. That seam is already in the design. Snapping to it reads as the agenda
+        opening into its own space rather than as a foreign layer.
+
+   Everything tappable is at least 64px tall. This is a fingertip on a wall,
+   not a cursor. */
+
+#dlg-scrim {
+  position: absolute; left: 0; top: 0; width: 1920px; height: 480px;
+  /* Dark enough to kill the agenda's card edges and gradient behind the
+     sheet, while the left panel stays legible through it. */
+  background: rgba(4,5,9,0.82);
+  z-index: 40;
+}
+
+#dlg {
+  position: absolute; left: 380px; top: 0; width: 1540px; height: 480px;
+  z-index: 41;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02)),
+    #0b0e17;
+  border-left: 1px solid rgba(255,255,255,0.10);
+  /* No padding and no flex column here. The sheet is position:absolute, and a
+     padded absolutely-positioned flex column does not keep its children inside
+     its own height in this engine -- the actions row fell off the bottom edge
+     and the last detail rows were lost. The three bands below are pinned
+     individually instead, which measured correct. Each band carries its own
+     insets, so the rail never overlaps their text. */
+  overflow: hidden;
+}
+
+/* The tapped card's own colour, carried into the sheet as a full-height rail.
+   This is the single detail tying dialog to card: same colour that identifies
+   the event in the row, at a scale you read from across the room. --accent is
+   set per-dialog on the element. */
+#dlg-rail {
+  position: absolute; left: 0; top: 0; width: 4px; height: 480px;
+  background: var(--accent);
+}
+
+#dlg-head {
+  position: absolute; left: 44px; right: 40px; top: 20px;
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 32px;
+}
+#dlg-heading { flex: 1; min-width: 0; }
+
+#dlg-eyebrow {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 17px; font-weight: 600; line-height: 1;
+  letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 7px;
+}
+
+/* Barlow Condensed at 54px: the title is the one thing read from a distance,
+   and a condensed face buys room for a long meeting name before clamping.
+   Two lines, then clip -- the sheet must not reflow its actions off-screen. */
+#dlg-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 46px; font-weight: 700; line-height: 1.18;
+  letter-spacing: 0.004em;
+  color: var(--text);
+  margin: 0;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Close sits top-right, where a dismiss control is looked for first. Sized as
+   a real touch target rather than an icon: a 24px glyph is a mouse affordance
+   and would be missed by a fingertip. */
+.dlg-close {
+  flex-shrink: 0;
+  width: 150px; height: 60px;
+  padding: 0;
+  /* line-height centring, not flex: this engine drops a bare text child of a
+     flex container entirely -- the button paints and its label vanishes. See
+     docs/omnidoc-gaps.md. line-height matches height for a single line. */
+  line-height: 60px; text-align: center;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 25px; font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--text-mid);
+  background: none;
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 8px;
+}
+
+/* The body absorbs whatever the head and actions leave. Everything in the
+   sheet is sized so five rows plus a three-line description fit in 480px --
+   the panel does not scroll, so anything that does not fit is simply lost. */
+/* Pinned between the head and the actions. top clears the tallest one-line
+   head (eyebrow 17 + 7 + title 46) and bottom clears the actions band. */
+#dlg-body {
+  position: absolute; left: 44px; right: 40px; top: 112px; height: 270px;
+  overflow: hidden;
+}
+
+/* The rows are the sheet's data. A two-column grid keeps every value on one
+   left edge so the eye reads down the column rather than tracking ragged
+   starts -- the labels are short and the values are what matter. */
+/* One flex row per line, rather than a grid with display:contents rows --
+   display:contents is unimplemented here and silently became a block, which
+   collapsed every row onto its neighbour. A fixed label column gives the same
+   aligned value edge a grid would. */
+#dlg-rows { margin: 0; }
+.dlg-row {
+  display: flex; align-items: baseline; gap: 24px;
+  margin-bottom: 7px;
+}
+
+.dlg-row-label {
+  width: 132px; flex-shrink: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 16px; font-weight: 600; line-height: 1.3;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.dlg-row-value {
+  margin: 0; flex: 1; min-width: 0;
+  font-family: 'Roboto', sans-serif;
+  font-size: 22px; font-weight: 500; line-height: 1.25;
+  color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Times and durations in the data face, so digits align down the column. */
+.dlg-row-value.mono {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 21px; font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* An event description. Quieter than the rows: it is context, not the answer
+   to "what is this". Three lines is what the sheet can hold above the
+   actions. */
+#dlg-prose {
+  margin: 12px 0 0;
+  font-family: 'Roboto', sans-serif;
+  font-size: 19px; line-height: 1.4;
+  color: var(--text-mid);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Actions sit on the bottom edge, the far side of the sheet from the title --
+   a deliberate distance, so the destructive-ish one is not adjacent to what
+   the eye lands on first. */
+/* top, not bottom: a bottom-anchored auto-height absolute box is positioned
+   against a provisional height in this engine (it warns), which put the button
+   half off the sheet's lower edge. The sheet is exactly 480px, so the top
+   offset is arithmetic: 480 - 22 inset - 64 button = 394. */
+#dlg-actions {
+  position: absolute; left: 44px; top: 394px;
+  display: flex; gap: 16px;
+}
+.dlg-btn {
+  /* width, not min-width: a shrink-to-fit box does not grow around its text
+     here, so a stated width is what keeps "Hide from panel" from clipping. */
+  width: 300px; height: 64px;
+  padding: 0;
+  /* line-height centring -- see .dlg-close. */
+  line-height: 64px; text-align: center;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 26px; font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--text);
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 10px;
+}
+/* The one action the sheet exists to offer. Amber is the panel's attention
+   colour (the NOW cursor); using it here says "this is the control" without
+   inventing a new hue for a one-button dialog. */
+.dlg-btn.primary {
+  color: #1a1204;
+  background: var(--amber);
+  border-color: var(--amber);
+}
 </style>
 </head>
 <body>
 <div id="app">
   <aside id="now-block">
-    <div id="clock-time">10:42</div>
-    <div id="clock-date">Tuesday, August 25</div>
-    
-    <div id="now-wx"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="7.5" r="3.5" fill="currentColor" stroke="none"/><path d="M8 2v1.6M3.3 7.5h1.6M4.4 3.9l1.1 1.1"/><path d="M8.5 19a4 4 0 0 1 .4-8 5.5 5.5 0 0 1 10.5 1.4A3.5 3.5 0 0 1 19 19z" fill="currentColor" stroke="none"/></svg>
-<span>72&deg;</span></div>
-    
-    
-    <div id="next-label">Next</div>
-    <div id="next-title">Standup</div>
-    <div id="next-when">10m</div>
-    
-    
-  </aside>
+    <div id="clock-row">
+      <span id="clock-time">10:42 AM</span>
+      <span id="clock-date">Tue, Aug 25</span>
+    </div>
 
-  <div id="track">
     
-    <div class="ad-ribbon">
-      <div class="ad-pill" style="background:#4f9cff22;color:#4f9cff">Company Holiday</div>
+    <div id="wx-widget">
+      <span id="wx-icon"><svg width="50" height="50" viewBox="0 0 24 24" fill="none"><circle cx="8" cy="7.5" r="3.5" fill="#f5a623"/><path d="M8 2v1.6M3.3 7.5h1.6M4.4 3.9l1.1 1.1" fill="none" stroke="#f5a623" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.5 19a4 4 0 0 1 .4-8 5.5 5.5 0 0 1 10.5 1.4A3.5 3.5 0 0 1 19 19z" fill="#8b98ad"/></svg>
+</span>
+      <div id="wx-temp-block">
+        <div id="wx-temp">72&deg;</div>
+        <div id="wx-desc">Partly cloudy</div>
+      </div>
+      <div id="wx-precip-col">
+        <div id="wx-precip-pct">20%</div>
+        <div id="wx-precip-label">Rain</div>
+      </div>
     </div>
     
 
     
-    <div class="block" style="left:192.5px;width:64.2px;border-left-color:#4f9cff"></div>
-    
-    <div class="block" style="left:231.0px;width:186.1px;border-left-color:#ff7a59"></div>
-    
+    <div id="now-content">
+      <div class="nb-now">
+        <div class="nb-lead">FREE FOR</div>
+        
+        <div class="nb-free">10 min</div>
+        
+        
+      </div><div class="nb-next-gap"></div>
+      <div class="nb-next">
+        <div class="nb-next-lead">NEXT</div>
+        <div class="nb-next-title">Standup</div>
+        <div class="nb-next-at">at 10:52 AM</div>
+      </div><div class="nb-pad"></div></div>
+  </aside>
 
-    
-    
-    <div class="label" style="left:192.5px;top:78.0px"><span class="lt">Standup</span></div>
-    
-    <div class="leader" style="left:231.0px"></div>
-    <div class="label" style="left:271.7px;top:78.0px"><span class="lt">Design Review Sync</span></div>
-    
+  <div id="timeline-zone">
+    <div id="now-bar" style="left:18.0px">
+      <span id="now-bar-dot"></span>
+      <span id="now-bar-label">NOW</span>
+    </div>
 
-    <div id="now-line" style="left:128.3px"></div>
+    <div class="ad-ribbon">
+      <div class="ad-lead">All day</div>
+      <div class="ad-pill" style="background:#4f9cff22;color:#4f9cff">Company Holiday</div>
+    </div>
 
-    <div id="wx" style="width:1540.0px"><svg viewBox="0 0 1540 104" width="1540" height="104" class="wx-chart"><rect x="513.3" y="78.0" width="231.0" height="2.0" class="wx-precip"/><rect x="898.3" y="76.0" width="231.0" height="4.0" class="wx-precip"/><rect x="1283.3" y="74.0" width="231.0" height="6.0" class="wx-precip"/><path class="wx-temp" d="M128.3 68.0 L513.3 49.3 L898.3 30.7 L1283.3 12.0 "/></svg></div>
+    <div id="agenda-row" style="transform:translateX(0.0px)">
+      
+        
+        <div class="evt soon"
+             style="width:196.0px;border-top-color:#4f9cff">
+          <div class="evt-title">Standup</div>
+          <div class="evt-time">10:52 AM</div>
+          <div class="evt-meta">10M</div>
+          <div class="evt-badge soon">IN 10m</div>
+        </div>
+        
+      
+        
+        <div class="evt"
+             style="width:196.0px;border-top-color:#ff7a59">
+          <div class="evt-title">Design Review Sync</div>
+          <div class="evt-time">10:58 AM</div>
+          <div class="evt-meta">29M</div>
+          
+        </div>
+        
+      
+    </div>
+
+    <div id="wx-zone">
+      <div id="wx-strip"><svg viewBox="0 0 1540 104" width="1540" height="104" class="wx-chart"><rect x="598.9" y="101.4" width="115.5" height="2.6" fill="rgba(74,144,217,0.55)"/><rect x="684.4" y="98.8" width="115.5" height="5.2" fill="rgba(74,144,217,0.55)"/><rect x="770.0" y="96.2" width="115.5" height="7.8" fill="rgba(74,144,217,0.55)"/><rect x="855.6" y="93.6" width="115.5" height="10.4" fill="rgba(74,144,217,0.55)"/><rect x="941.1" y="91.0" width="115.5" height="13.0" fill="rgba(74,144,217,0.55)"/><rect x="1026.7" y="88.4" width="115.5" height="15.6" fill="rgba(74,144,217,0.55)"/><rect x="1112.2" y="85.8" width="115.5" height="18.2" fill="rgba(74,144,217,0.55)"/><path fill="none" stroke="#7ec8f0" stroke-width="4.0" stroke-linecap="round" stroke-linejoin="round" d="M513.3 98.0 L598.9 88.6 L684.4 79.1 L770.0 69.7 L855.6 60.3 L941.1 50.9 L1026.7 41.4 L1112.2 32.0 "/><text x="598.9" y="78.6" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">71&#176;</text><text x="770.0" y="59.7" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">73&#176;</text><text x="941.1" y="40.9" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">75&#176;</text><text x="1112.2" y="22.0" fill="#dde3ef" font-family="IBM Plex Mono, monospace" font-size="26" font-weight="600">77&#176;</text></svg></div>
+      <div id="wx-hours">
+        <span class="wx-hour" style="left:111.2px">6 AM</span><span class="wx-hour" style="left:367.9px">9 AM</span><span class="wx-hour" style="left:624.6px">12 PM</span><span class="wx-hour" style="left:881.2px">3 PM</span><span class="wx-hour" style="left:1137.9px">6 PM</span><span class="wx-hour" style="left:1394.6px">9 PM</span>
+      </div>
+    </div>
 
     <div id="forecast">
       
       <div class="fc-col">
-        <div class="fc-dow">Today</div>
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="7.5" r="3.5" fill="currentColor" stroke="none"/><path d="M8 2v1.6M3.3 7.5h1.6M4.4 3.9l1.1 1.1"/><path d="M8.5 19a4 4 0 0 1 .4-8 5.5 5.5 0 0 1 10.5 1.4A3.5 3.5 0 0 1 19 19z" fill="currentColor" stroke="none"/></svg>
-
-        <div><span class="fc-hi">88&deg;</span><span class="fc-lo">64&deg;</span></div>
-        <div class="fc-pp">20%</div>
+        <span class="fc-dow">Today</span>
+        <span class="fc-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none"><circle cx="8" cy="7.5" r="3.5" fill="#f5a623"/><path d="M8 2v1.6M3.3 7.5h1.6M4.4 3.9l1.1 1.1" fill="none" stroke="#f5a623" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.5 19a4 4 0 0 1 .4-8 5.5 5.5 0 0 1 10.5 1.4A3.5 3.5 0 0 1 19 19z" fill="#8b98ad"/></svg>
+</span>
+        <span class="fc-temps"><span class="fc-hi">88&deg;</span><span class="fc-lo">64&deg;</span></span>
+        <span class="fc-pp">20%</span>
       </div>
       
       <div class="fc-col">
-        <div class="fc-dow">Wed</div>
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5" fill="currentColor" stroke="none"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>
-
-        <div><span class="fc-hi">90&deg;</span><span class="fc-lo">66&deg;</span></div>
-        <div class="fc-pp">—</div>
+        <span class="fc-dow">Wed</span>
+        <span class="fc-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="4.5" fill="#f5a623"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8" fill="none" stroke="#f5a623" stroke-width="2" stroke-linecap="round"/></svg>
+</span>
+        <span class="fc-temps"><span class="fc-hi">90&deg;</span><span class="fc-lo">66&deg;</span></span>
+        <span class="fc-pp none">—</span>
       </div>
       
     </div>
@@ -170,6 +904,9 @@ html, body {
     
     
   </div>
+
+  
+  
 </div>
 </body>
 </html>

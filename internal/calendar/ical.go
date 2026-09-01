@@ -21,9 +21,13 @@ import (
 
 // Event is one concrete calendar occurrence within the requested window.
 type Event struct {
-	Calendar    string
-	Color       string
-	Title       string
+	Calendar string
+	Color    string
+	Title    string
+	// UID is the iCal UID. A recurring series shares one UID across every
+	// occurrence, so this identifies the series, not the instance -- see
+	// Event.Key for the per-occurrence identity that muting uses.
+	UID         string
 	Location    string
 	Description string
 	Start       time.Time
@@ -33,6 +37,28 @@ type Event struct {
 	// "needs-action", "tentative", "declined", or "" when not an attendee
 	// (e.g. events you organize / personal calendars). Drives ghosting in the UI.
 	Status string
+}
+
+// Key is a stable identity for one occurrence, used to persist a mute across
+// calendar refetches and reboots.
+//
+// UID alone is not enough: every occurrence of a recurring series carries the
+// same UID, so keying on it would mute the entire series from a single tap on
+// one instance. Start disambiguates the occurrence.
+//
+// The start time is formatted in UTC so a key does not change when the
+// configured timezone does -- the same instant must always produce the same
+// key, or a timezone edit would silently unmute everything.
+//
+// Feeds that omit UID fall back to the title. That is weaker (two identically
+// named events at the same instant collide), but it degrades to "mutes both"
+// rather than "mutes nothing", and a feed without UIDs is malformed anyway.
+func (e Event) Key() string {
+	id := e.UID
+	if id == "" {
+		id = "title:" + e.Title
+	}
+	return id + "@" + e.Start.UTC().Format(time.RFC3339)
 }
 
 type icalProp struct {
@@ -277,7 +303,7 @@ func icalExpand(ve *icalVEvent, calName, color string, now, cutoff time.Time, ov
 	mkEvent := func(s time.Time) Event {
 		e := s.Add(dur)
 		return Event{
-			Calendar: calName, Color: color, Title: title,
+			Calendar: calName, Color: color, Title: title, UID: uid,
 			Location:    icalUnescape(ve.val("LOCATION")),
 			Description: icalUnescape(ve.val("DESCRIPTION")),
 			Start:       s, End: e, AllDay: allDay,

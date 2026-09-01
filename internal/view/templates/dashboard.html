@@ -8,52 +8,143 @@
 <body>
 <div id="app">
   <aside id="now-block">
-    <div id="clock-time">{{.VM.ClockTime}}</div>
-    <div id="clock-date">{{.VM.ClockDate}}</div>
+    <div id="clock-row">
+      <span id="clock-time">{{.VM.ClockTime}}</span>
+      <span id="clock-date">{{.VM.ClockDate}}</span>
+    </div>
+
     {{with .VM.Current}}
-    <div id="now-wx">{{icon .Code}}<span>{{printf "%.0f" .TempF}}&deg;</span></div>
-    {{end}}
-    {{with .VM.NextEvent}}
-    <div id="next-label">Next</div>
-    <div id="next-title">{{.Title}}</div>
-    <div id="next-when">{{$.VM.UntilNext}}{{if .Location}} &middot; {{.Location}}{{end}}</div>
-    {{end}}
-    {{with .VM.Setup}}
-    <div id="setup-hint">
-      <div class="sh-lead">Set me up</div>
-      <div class="sh-step">Join Wi-Fi <span class="sh-mono">{{.APName}}</span></div>
-      <div class="sh-step">Password <span class="sh-mono">{{if .Password}}{{.Password}}{{else}}unavailable{{end}}</span></div>
+    <div id="wx-widget">
+      <span id="wx-icon">{{icon .Code 50}}</span>
+      <div id="wx-temp-block">
+        <div id="wx-temp">{{printf "%.0f" .TempF}}&deg;</div>
+        <div id="wx-desc">{{wmoText .Code}}</div>
+      </div>
+      <div id="wx-precip-col">
+        <div id="wx-precip-pct">{{$.TodayPop}}</div>
+        <div id="wx-precip-label">Rain</div>
+      </div>
     </div>
     {{end}}
+
+    {{/* The action delimiters inside #now-content trim their surrounding
+         whitespace ({{- -}}) so the flex container's children are the two real
+         groups and nothing else -- omnidoc does not wrap a bare text child of a
+         flex container in an anonymous flex item (docs/omnidoc-gaps.md #15).
+         That is hygiene here rather than the fix for any specific bug: the
+         headline-pinned-to-top problem was a CSS selector issue, not this.
+         See the .nb-now note in style.css. */}}
+    <div id="now-content">{{- if .VM.Setup -}}
+      {{/* Wrapped like .nb-now so #now-content's space-between sees one group
+           and centres it, rather than scattering three lines down the panel. */}}
+      {{if .VM.Setup.Connecting}}
+      {{/* An association attempt is running. The browser that submitted the
+           form is losing its connection as the AP comes down, so the panel is
+           the only surface that can still report progress. */}}
+      <div class="nb-now">
+        <div class="sh-lead">Connecting</div>
+        <div class="sh-step">Joining <span class="sh-mono">{{.VM.Setup.Connecting}}</span></div>
+        <div class="sh-step sh-wait">This takes about a minute&hellip;</div>
+      </div>
+      {{else}}
+      <div class="nb-now">
+        <div class="sh-lead">Set me up</div>
+        <div class="sh-step">Join Wi-Fi <span class="sh-mono">{{.VM.Setup.APName}}</span></div>
+        {{if .VM.Setup.URL}}<div class="sh-step">Then go to <span class="sh-mono">{{.VM.Setup.URL}}</span></div>{{end}}
+        <div class="sh-step">Password <span class="sh-mono">{{if .VM.Setup.Password}}{{.VM.Setup.Password}}{{else}}unavailable{{end}}</span></div>
+      </div>
+      {{end}}
+      {{- else if .VM.Loading -}}
+      <div class="nb-now">
+        <div class="nb-lead">Starting up</div>
+        <div class="nb-title" style="border-left:3px solid #4a90d9">Fetching&hellip;</div>
+      </div>
+      {{- else -}}
+      {{- with .VM.NowBlock -}}
+      {{/* The headline and the next-up preview are wrapped as two groups so
+           #now-content can space them apart rather than centring one clump and
+           leaving the slack above and below. */}}
+      <div class="nb-now">
+        {{if .Lead}}<div class="nb-lead">{{.Lead}}</div>{{end}}
+        {{if .BigIsDuration}}
+        <div class="nb-free">{{.Big}}</div>
+        {{else}}
+        <div class="nb-title" style="border-left:3px solid {{if .Accent}}{{.Accent}}{{else}}#4a90d9{{end}}">{{.Big}}</div>
+        {{end}}
+        {{if .Sub}}<div class="nb-countdown{{if .SubUrgent}} urgent{{end}}">{{.Sub}}</div>{{end}}
+      </div>
+      {{- if .NextTitle -}}
+      <div class="nb-next-gap"></div>
+      <div class="nb-next">
+        <div class="nb-next-lead">{{.NextLead}}</div>
+        <div class="nb-next-title">{{.NextTitle}}</div>
+        <div class="nb-next-at">{{.NextAt}}</div>
+      </div>
+      {{- end -}}
+      {{- end -}}
+      {{- end -}}<div class="nb-pad"></div></div>
   </aside>
 
-  <div id="track">
-    {{if .VM.AllDay}}
-    <div class="ad-ribbon">
-      {{range .VM.AllDay}}<div class="ad-pill" style="background:{{.Color}}22;color:{{.Color}}">{{.Title}}</div>{{end}}
+  <div id="timeline-zone">
+    <div id="now-bar" style="left:{{px .VM.Agenda.NowBarXPx}}">
+      <span id="now-bar-dot"></span>
+      <span id="now-bar-label">NOW</span>
     </div>
-    {{end}}
 
-    {{range .VM.Blocks}}
-    <div class="block" style="left:{{px .X}};width:{{px .W}};border-left-color:{{.Event.Color}}"></div>
-    {{end}}
+    <div class="ad-ribbon">
+      {{if .VM.AllDay}}<div class="ad-lead">All day</div>{{end}}
+      {{range .VM.AllDay}}<div class="ad-pill" style="background:{{alpha .Color}};color:{{.Color}}">{{.Title}}</div>{{end}}
+    </div>
 
-    {{range .Labels}}
-    {{if .Drifted}}<div class="leader" style="left:{{px .Anchor}}"></div>{{end}}
-    <div class="label" style="left:{{px .X}};top:{{px .Top}}"><span class="lt">{{.Text}}</span></div>
-    {{end}}
+    <div id="agenda-row" style="transform:translateX({{px .VM.Agenda.OffsetPx}})">
+      {{range .VM.Agenda.Cards}}
+        {{if .IsGap}}
+        <div class="gap" style="width:{{px .WidthPx}}">
+          <div class="gap-dur">{{.GapText}}</div>
+          <div class="gap-label">Free</div>
+        </div>
+        {{else if .IsDaySep}}
+        <div class="day-sep"><span>{{.SepText}}</span></div>
+        {{else if .IsStack}}
+        <div class="evt-stack" style="width:{{px .WidthPx}}">
+          {{range .Stacked}}
+          <div class="evt current stacked{{if .Ghost}} ghost{{end}}"
+               style="border-top-color:{{.Event.Color}}">
+            <div class="evt-title">{{.Event.Title}}</div>
+            <div class="evt-time">{{.StartText}}</div>
+            {{if .Badge}}<div class="evt-badge live">{{.Badge}}</div>{{end}}
+          </div>
+          {{end}}
+          <div class="evt-elapsed" style="width:{{pct .ElapsedPct}}"></div>
+        </div>
+        {{else}}
+        <div class="evt{{.StateClass}}{{if .Ghost}} ghost{{end}}"
+             style="width:{{px .WidthPx}};border-top-color:{{.Event.Color}}">
+          <div class="evt-title">{{.Event.Title}}</div>
+          <div class="evt-time">{{.StartText}}</div>
+          <div class="evt-meta">{{.DurationText}}</div>
+          {{if .Badge}}<div class="evt-badge {{.BadgeClass}}">{{.Badge}}</div>{{end}}
+        </div>
+        {{end}}
+      {{else}}
+        <div class="agenda-empty">{{if .VM.Loading}}Fetching calendar&hellip;{{else}}No more events today{{end}}</div>
+      {{end}}
+    </div>
 
-    <div id="now-line" style="left:{{px .VM.NowX}}"></div>
-
-    <div id="wx" style="width:{{px .VM.Window.WidthPx}}">{{.Chart}}</div>
+    <div id="wx-zone">
+      <div id="wx-strip">{{.Chart}}</div>
+      <div id="wx-hours">
+        {{range .HourTicks}}<span class="wx-hour" style="left:{{px .XPx}}">{{.Label}}</span>{{end}}
+      </div>
+    </div>
 
     <div id="forecast">
       {{range .Forecast}}
       <div class="fc-col">
-        <div class="fc-dow">{{.Day}}</div>
-        {{icon .Code}}
-        <div><span class="fc-hi">{{.Hi}}&deg;</span><span class="fc-lo">{{.Lo}}&deg;</span></div>
-        <div class="fc-pp">{{.Pop}}</div>
+        <span class="fc-dow">{{.Day}}</span>
+        <span class="fc-icon">{{icon .Code 40}}</span>
+        <span class="fc-temps"><span class="fc-hi">{{.Hi}}&deg;</span><span class="fc-lo">{{.Lo}}&deg;</span></span>
+        <span class="fc-pp{{if not .HasPop}} none{{end}}">{{.Pop}}</span>
       </div>
       {{end}}
     </div>
@@ -61,6 +152,41 @@
     {{if .VM.Stale}}<div id="stale-flag">Stale</div>{{end}}
     {{if .VM.Errors}}<div id="errors">{{range .VM.Errors}}{{.}} {{end}}</div>{{end}}
   </div>
+
+  {{/* The modal sheet. Content-agnostic: eyebrow, title, rows, body, actions.
+       Event detail is its first use; forecast detail will supply different
+       rows and reuse everything else. */}}
+  {{with .VM.Dialog}}
+  <div id="dlg-scrim"></div>
+  <div id="dlg" style="--accent:{{accent .AccentColor}}">
+    <div id="dlg-rail"></div>
+    <div id="dlg-head">
+      <div id="dlg-heading">
+        <div id="dlg-eyebrow">{{.Eyebrow}}</div>
+        <h1 id="dlg-title">{{.Title}}</h1>
+      </div>
+      <div class="dlg-close">{{.DismissAction.Label}}</div>
+    </div>
+
+    <div id="dlg-body">
+      <dl id="dlg-rows">
+        {{range .Rows}}
+        <div class="dlg-row">
+          <dt class="dlg-row-label">{{.Label}}</dt>
+          <dd class="dlg-row-value{{if .Mono}} mono{{end}}">{{.Value}}</dd>
+        </div>
+        {{end}}
+      </dl>
+      {{if .Body}}<p id="dlg-prose">{{.Body}}</p>{{end}}
+    </div>
+
+    {{if .Actions}}
+    <div id="dlg-actions">
+      {{range .Actions}}<div class="dlg-btn{{if .Style}} {{.Style}}{{end}}">{{.Label}}</div>{{end}}
+    </div>
+    {{end}}
+  </div>
+  {{end}}
 </div>
 </body>
 </html>

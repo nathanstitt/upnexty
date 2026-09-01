@@ -1,10 +1,82 @@
 package fb
 
 import (
+	"context"
+	"errors"
 	"image"
 	"image/color"
+	"sync"
 	"testing"
 )
+
+// cancelAtErrCall reports cancelled on the nth Err() call and is live otherwise.
+//
+// A plainly-cancelled context cannot prove that layout is cancellable:
+// RasterizePage rejects one on its own, so such a test passes even when open
+// ignores ctx entirely. Measured against the current engine, open consults
+// Err() six times and rasterize twice, so cancelling call 1 or 2 lands on
+// rasterize under either API, while a call past open's own checks can only be
+// reached when open honors ctx. Done() is never consulted by either half.
+//
+// Six is therefore the first discriminating index rather than an arbitrary one.
+// If a future engine checks ctx a different number of times this test may go
+// green for the wrong reason; the paired assertion below (a live context still
+// renders) is what keeps that from passing silently.
+const cancelDuringLayout = 6
+
+type cancelAtErrCall struct {
+	context.Context
+	mu    sync.Mutex
+	calls int
+	at    int
+}
+
+func (c *cancelAtErrCall) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	if c.calls == c.at {
+		return context.Canceled
+	}
+	return nil
+}
+
+// RenderHTML must thread ctx through parse/layout, not just rasterize. The
+// non-context OpenHTMLBytes compiles and renders fine, so nothing else here
+// would notice a regression back to it.
+func TestRenderHTMLHonorsContextDuringLayout(t *testing.T) {
+	t.Parallel()
+	ctx := &cancelAtErrCall{Context: context.Background(), at: cancelDuringLayout}
+
+	_, err := RenderHTML(ctx, []byte("<html><body><p>hi</p></body></html>"), 1920, 480)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("RenderHTML: err = %v, want context.Canceled — open must honor ctx, "+
+			"not just RasterizePage", err)
+	}
+}
+
+func TestRenderHTMLHonorsCancelledContext(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := RenderHTML(ctx, []byte("<html><body><p>hi</p></body></html>"), 1920, 480)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("RenderHTML with cancelled ctx: err = %v, want context.Canceled", err)
+	}
+}
+
+func TestRenderHTMLRendersAtRequestedSize(t *testing.T) {
+	t.Parallel()
+	img, err := RenderHTML(context.Background(),
+		[]byte(`<html><body style="margin:0"><div>hi</div></body></html>`), 1920, 480)
+	if err != nil {
+		t.Fatalf("RenderHTML: %v", err)
+	}
+	if got := img.Bounds(); got.Dx() != 1920 || got.Dy() != 480 {
+		t.Errorf("bounds = %v, want 1920x480", got)
+	}
+}
 
 func TestPackProducesCorrectSize(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 1920, 480))

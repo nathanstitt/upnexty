@@ -1,9 +1,13 @@
 // Command dashboard renders the UpNext dashboard to the Luckfox framebuffer.
 //
-// Display-only: there is no HTTP server and no touch handling. A tick loop
-// wakes each minute and rebuilds/re-renders the view. The clock advances every
-// minute by construction, so the generated HTML always differs from the
-// previous frame — there is no "skip when unchanged" fast path.
+// A tick loop wakes each minute and rebuilds/re-renders the view. The clock
+// advances every minute by construction, so the generated HTML always differs
+// from the previous frame — there is no "skip when unchanged" fast path.
+//
+// Two other things drive a render: the configuration portal on :80 (a
+// goroutine in this process), and taps on the panel, which open the detail
+// sheet and can hide an event from the display. Both go through renderSafely
+// under renderMu so only one write to /dev/fb0 is ever in flight.
 package main
 
 import (
@@ -16,7 +20,10 @@ import (
 	"runtime/debug"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
+
+	"github.com/nathanstitt/omnidoc/pkg/omnidoc"
 
 	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
 	"github.com/nathanstitt/luckfox-dashboard/internal/config"
@@ -47,7 +54,14 @@ func main() {
 	fbDev := flag.String("fb", "/dev/fb0", "framebuffer device")
 	cfgPath := flag.String("config", "/root/config.json", "path to config.json")
 	htmlOut := flag.String("html-out", "", "also write the generated HTML here (debugging)")
-	portalAddr := flag.String("portal", ":8080", "address for the configuration portal")
+	// :80 so the captive-portal sheet lands directly on the settings page. A
+	// phone's connectivity probe is an HTTP GET on port 80; serving the portal
+	// anywhere else means the probe hits a closed port (no sheet at all) or, if
+	// something answers 80 and redirects, the sheet follows a hop that iOS
+	// renders as a bare error. Running as root, so binding a privileged port is
+	// not a problem here.
+	portalAddr := flag.String("portal", ":80", "address for the configuration portal")
+	touchDev := flag.String("touch", "/dev/input/event0", "touchscreen input device")
 	flag.Parse()
 
 	cfg, err := config.Load(*cfgPath)
@@ -83,7 +97,7 @@ func main() {
 
 	if *once {
 		fetchAll(context.Background(), cfg, store)
-		if err := renderOnce(store.Config(), store, wc, hintTracker, *fbDev, fbW, fbH, *htmlOut); err != nil {
+		if err := renderOnce(store.Config(), store, wc, hintTracker, nil, *fbDev, fbW, fbH, *htmlOut); err != nil {
 			log.Fatalf("render: %v", err)
 		}
 		return
@@ -114,14 +128,64 @@ func main() {
 		}
 	}()
 
-	go fetchLoop(store, calendarInterval, fetchCalendars)
-	go fetchLoop(store, weatherInterval, fetchWeather)
+	// render is the one entry point both the tick loop and the touch handler
+	// use, so framebuffer writes never overlap.
+	render := func() {
+		renderMu.Lock()
+		defer renderMu.Unlock()
+		if err := renderSafely(store.Config(), store, wc, hintTracker, ps, *fbDev, fbW, fbH, *htmlOut); err != nil {
+			log.Printf("render: %v", err)
+		}
+	}
+
+	// Paint once before fetching so the panel shows "Fetching..." rather than
+	// staying on the previous boot's frame (or black) for the duration. The
+	// store is empty here, so CalendarPending is true and the agenda renders
+	// its loading state instead of claiming there is nothing scheduled.
+	render()
+
+	// Then fetch synchronously, so the first data frame is real. The service
+	// used to start both loops as goroutines and enter the tick loop straight
+	// away, which meant the first minute or two rendered an empty store and the
+	// panel asserted "No more events today" before it had asked anything. A
+	// frame costs ~10s on this hardware and the fetch a few seconds more; that
+	// is a bounded, one-time delay in exchange for never publishing a claim the
+	// data does not support.
+	fetchAll(context.Background(), store.Config(), store)
+	render()
+
+	// fetchLoop fetches at the top of each iteration, so it would immediately
+	// repeat the fetch just done. Sleep one interval first to skip that
+	// duplicate; every later iteration is unchanged. fetchLoop itself keeps its
+	// fetch-first shape, which is what lets a failed boot retry in retryDelay
+	// rather than a full interval.
+	cfg0 := store.Config()
+	go delayThen(calendarInterval(cfg0), func() {
+		fetchLoop(store, calendarInterval, fetchCalendars)
+	})
+	go delayThen(weatherInterval(cfg0), func() {
+		fetchLoop(store, weatherInterval, fetchWeather)
+	})
+
+	// Taps open the event sheet. A missing or unreadable input device is
+	// logged and the dashboard runs on as a display -- see watchTaps.
+	st := &dialogState{}
+	go watchTaps(context.Background(), *touchDev, st, store,
+		func() model.ViewModel {
+			// Only the agenda geometry is needed for hit-testing, so the
+			// setup hint and error list are deliberately omitted -- they do
+			// not move a card.
+			evs, wx, _ := store.Snapshot()
+			return model.Build(time.Now(), store.Config(), evs, wx, nil, nil)
+		},
+		func() {
+			setOpenDialog(st.dlg)
+			render()
+		})
 
 	for {
 		time.Sleep(nextTick(time.Now()))
-		if err := renderSafely(store.Config(), store, wc, hintTracker, *fbDev, fbW, fbH, *htmlOut); err != nil {
-			log.Printf("render: %v", err)
-		}
+		render()
 	}
 }
 
@@ -155,16 +219,50 @@ func applyStartupBrightness(path string, v int) error {
 // failing fast at startup (see main): that is a misconfiguration, not a
 // transient bad frame, so refusing to start is the right response for it.
 // This recover is for everything else.
-func renderSafely(cfg *config.Config, store *Store, wc *wifi.Client, hintTracker *setupHintTracker, dev string, fbW, fbH int, htmlOut string) error {
+func renderSafely(cfg *config.Config, store *Store, wc *wifi.Client, hintTracker *setupHintTracker, ps *portal.Server, dev string, fbW, fbH int, htmlOut string) error {
 	return recoverRender(func() error {
-		return renderOnce(cfg, store, wc, hintTracker, dev, fbW, fbH, htmlOut)
+		return renderOnce(cfg, store, wc, hintTracker, ps, dev, fbW, fbH, htmlOut)
 	})
+}
+
+// renderMu serializes framebuffer writes. Two things trigger a render -- the
+// minute loop and a tap -- and they run on different goroutines. Without this
+// a tap landing mid-tick would interleave two Write calls into /dev/fb0 and
+// tear the frame.
+var renderMu sync.Mutex
+
+// openDialog is the modal sheet the next render should draw, or nil.
+//
+// It has its own mutex rather than sharing renderMu. Guarding it with renderMu
+// deadlocked the process on the very first tap: the touch callback published
+// the dialog and then called render, taking a non-reentrant sync.Mutex twice,
+// which wedged the tick loop along with it. The two locks protect different
+// things -- this one a pointer, renderMu the framebuffer -- and conflating them
+// is what created a lock ordering at all.
+var (
+	dialogMu   sync.Mutex
+	openDialog *model.Dialog
+)
+
+// setOpenDialog publishes the dialog for subsequent renders. It must not be
+// called while holding renderMu.
+func setOpenDialog(d *model.Dialog) {
+	dialogMu.Lock()
+	defer dialogMu.Unlock()
+	openDialog = d
+}
+
+// currentDialog returns the dialog to draw.
+func currentDialog() *model.Dialog {
+	dialogMu.Lock()
+	defer dialogMu.Unlock()
+	return openDialog
 }
 
 // recoverRender runs fn, converting any panic into an error instead of
 // letting it propagate and kill the process. Factored out from renderSafely
 // so the recover behavior itself can be exercised with a controllable
-// panicking stub in tests, without needing a real doctaculous render to
+// panicking stub in tests, without needing a real omnidoc render to
 // panic on demand.
 func recoverRender(fn func() error) (err error) {
 	defer func() {
@@ -243,11 +341,12 @@ func hint(mac string) *model.SetupHint {
 	return &model.SetupHint{
 		APName:   wifi.APName(mac),
 		Password: portal.DefaultPassword(mac),
+		URL:      portal.PortalURL,
 	}
 }
 
 // renderOnce builds the model, renders HTML, and blits it to the framebuffer.
-func renderOnce(cfg *config.Config, store *Store, wc *wifi.Client, hintTracker *setupHintTracker, dev string, fbW, fbH int, htmlOut string) error {
+func renderOnce(cfg *config.Config, store *Store, wc *wifi.Client, hintTracker *setupHintTracker, ps *portal.Server, dev string, fbW, fbH int, htmlOut string) error {
 	evs, wx, errs := store.Snapshot()
 
 	// One wpa_cli subprocess per render tick (once a minute; see nextTick),
@@ -256,7 +355,28 @@ func renderOnce(cfg *config.Config, store *Store, wc *wifi.Client, hintTracker *
 	status, statusErr := wc.Status()
 	setup := hintTracker.Update(status, statusErr, wc.MAC())
 
+	// An association attempt in flight overrides the hysteresis entirely. The
+	// tracker's job is deciding whether an unassociated board should nag; this
+	// is a different question -- the user just submitted credentials and the
+	// browser that submitted them is about to lose its connection, so the panel
+	// has to report progress even on the very first tick, and even in the
+	// window where status still says "connected" to the old network.
+	if ps != nil {
+		if ssid := ps.Connecting(); ssid != "" {
+			if setup == nil {
+				setup = hint(wc.MAC())
+			}
+			setup.Connecting = ssid
+		}
+	}
+
 	vm := model.Build(time.Now(), cfg, evs, wx, errs, setup)
+	// The dialog is interactive state, not derived data, so it is attached
+	// after Build rather than passed into it.
+	vm.Dialog = currentDialog()
+	// Likewise Loading: whether a fetch has happened is a fact about the
+	// process, not about the calendar, so Build cannot derive it.
+	vm.Loading = store.CalendarPending()
 
 	html, err := view.Render(vm)
 	if err != nil {
@@ -268,14 +388,17 @@ func renderOnce(cfg *config.Config, store *Store, wc *wifi.Client, hintTracker *
 		}
 	}
 
-	// doctaculous discards the context on the HTML render path (see
-	// docs/doctaculous-gaps.md §7), so this ctx cannot actually cancel a hung
+	// omnidoc discards the context on the HTML render path (see
+	// docs/omnidoc-gaps.md §7), so this ctx cannot actually cancel a hung
 	// render today. It is still passed through so the call becomes correctly
 	// cancellable for free once that's fixed upstream; a goroutine-based
 	// timeout wrapper to fake cancellation was deliberately ruled out.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	img, err := fb.RenderHTML(ctx, []byte(html), pageW, pageH)
+	// The font loader serves the embedded @font-face files; without it the
+	// panel silently falls back to DejaVu (see view.FontLoader).
+	img, err := fb.RenderHTML(ctx, []byte(html), pageW, pageH,
+		omnidoc.WithResourceLoader(view.FontLoader()))
 	if err != nil {
 		return err
 	}
@@ -309,6 +432,14 @@ func calendarInterval(c *config.Config) time.Duration {
 
 func weatherInterval(c *config.Config) time.Duration {
 	return time.Duration(c.Refresh.WeatherMinutes) * time.Minute
+}
+
+// delayThen sleeps then runs fn. Used to offset the periodic fetch loops past
+// the synchronous startup fetch so the first interval is not spent repeating
+// work already done.
+func delayThen(d time.Duration, fn func()) {
+	time.Sleep(d)
+	fn()
 }
 
 // fetchLoop runs one fetcher forever, retrying sooner after a failure so a boot

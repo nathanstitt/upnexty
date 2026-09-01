@@ -19,11 +19,13 @@ func testConfig() *config.Config {
 func TestBuildFormatsClock(t *testing.T) {
 	now := time.Date(2026, 8, 25, 14, 5, 0, 0, time.UTC)
 	vm := Build(now, testConfig(), nil, nil, nil, nil)
-	if vm.ClockTime != "2:05" {
-		t.Errorf("ClockTime = %q, want 2:05", vm.ClockTime)
+	// 12-hour must carry the meridiem: a bare "2:05" is ambiguous on a wall
+	// display and does not match the reference design.
+	if vm.ClockTime != "2:05 PM" {
+		t.Errorf("ClockTime = %q, want \"2:05 PM\"", vm.ClockTime)
 	}
-	if vm.ClockDate != "Tuesday, August 25" {
-		t.Errorf("ClockDate = %q", vm.ClockDate)
+	if vm.ClockDate != "Tue, Aug 25" {
+		t.Errorf("ClockDate = %q, want \"Tue, Aug 25\"", vm.ClockDate)
 	}
 }
 
@@ -94,22 +96,27 @@ func TestBuildSeparatesAllDayEvents(t *testing.T) {
 	if len(vm.AllDay) != 1 || vm.AllDay[0].Title != "holiday" {
 		t.Errorf("AllDay = %v, want [holiday]", vm.AllDay)
 	}
-	for _, b := range vm.Blocks {
-		if b.Event.AllDay {
-			t.Error("all-day event leaked into Blocks")
+	for _, c := range vm.Agenda.Cards {
+		if c.Kind == CardEvent && c.Event.AllDay {
+			t.Error("all-day event leaked into the agenda card row")
 		}
 	}
 }
 
-func TestBuildComputesNowX(t *testing.T) {
+func TestBuildPlacesNowBar(t *testing.T) {
 	now := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
 	evs := []calendar.Event{{Title: "e", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour)}}
 	vm := Build(now, testConfig(), evs, nil, nil, nil)
-	if vm.NowX <= 0 {
-		t.Errorf("NowX = %v, want > 0 (past context puts now inside the window)", vm.NowX)
+	// The only event is still ahead, so it is the anchor and the day's first
+	// entry: it sits flush left and the bar parks at its left edge, which is
+	// the row's own padding in.
+	if want := float64(CardPadPx); vm.Agenda.NowBarXPx != want {
+		t.Errorf("NowBarXPx = %v, want %v", vm.Agenda.NowBarXPx, want)
 	}
-	if vm.NowX != vm.Window.X(now) {
-		t.Errorf("NowX = %v, inconsistent with Window.X(now) = %v", vm.NowX, vm.Window.X(now))
+	// The row only ever shifts left; a positive offset would open a blank
+	// strip at the left edge of the agenda.
+	if vm.Agenda.OffsetPx > 0 {
+		t.Errorf("OffsetPx = %v, want <= 0", vm.Agenda.OffsetPx)
 	}
 }
 
@@ -212,5 +219,129 @@ func TestBuildUntilNextReadsNowInFinalMinute(t *testing.T) {
 	vm := Build(now, testConfig(), evs, nil, nil, nil)
 	if vm.UntilNext != "now" {
 		t.Errorf("UntilNext = %q, want %q for an event 30s away", vm.UntilNext, "now")
+	}
+}
+
+// zonedConfig is deliberately not UTC. Every other test here runs at UTC, which
+// is why a whole class of timezone bug rendered every event time five hours off
+// on the panel while the suite stayed green.
+func zonedConfig(t *testing.T) *config.Config {
+	t.Helper()
+	if _, err := time.LoadLocation("America/Chicago"); err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	c := &config.Config{}
+	c.Location.Timezone = "America/Chicago"
+	return c
+}
+
+// A feed states times in UTC (DTSTART ending in Z). The panel must show them on
+// its own wall clock, not the feed's.
+func TestBuildStatesEventTimesInConfiguredZone(t *testing.T) {
+	cfg := zonedConfig(t)
+	// 16:26 UTC is 11:26 CDT -- the case that surfaced this: an event starting
+	// at 16:07Z was labelled "4:07 PM" beside a clock reading 11:26 AM.
+	now := time.Date(2026, 8, 31, 16, 26, 0, 0, time.UTC)
+	evs := []calendar.Event{{
+		Title: "Design Review",
+		Start: time.Date(2026, 8, 31, 16, 7, 0, 0, time.UTC),
+		End:   time.Date(2026, 8, 31, 16, 57, 0, 0, time.UTC),
+	}}
+
+	vm := Build(now, cfg, evs, nil, nil, nil)
+
+	if len(vm.Agenda.Cards) == 0 {
+		t.Fatal("no agenda cards")
+	}
+	got := vm.Agenda.Cards[0]
+	if got.Kind == CardStack {
+		if len(got.Stacked) == 0 {
+			t.Fatal("stack slot has no events")
+		}
+		if s := got.Stacked[0].StartText(); s != "11:07 AM" {
+			t.Errorf("card start = %q, want %q (11:07 CDT, not 4:07 UTC)", s, "11:07 AM")
+		}
+	}
+	// The clock and the event must agree about what time zone the panel is in.
+	if vm.ClockTime != "11:26 AM" {
+		t.Errorf("ClockTime = %q, want %q", vm.ClockTime, "11:26 AM")
+	}
+}
+
+// Day separators and the FREE FOR same-day guard ask a wall-clock question, so
+// they must be resolved in the panel's zone. Late local evening is the case that
+// breaks: 8pm CDT is already the next calendar day in UTC.
+func TestBuildLabelsDayBoundaryInConfiguredZone(t *testing.T) {
+	cfg := zonedConfig(t)
+	// 01:30 UTC on Sep 1 is 20:30 CDT on Aug 31 -- still "today" locally.
+	now := time.Date(2026, 9, 1, 1, 30, 0, 0, time.UTC)
+	evs := []calendar.Event{{
+		Title: "Late Sync",
+		Start: time.Date(2026, 9, 1, 2, 0, 0, 0, time.UTC), // 21:00 CDT, same local day
+		End:   time.Date(2026, 9, 1, 2, 30, 0, 0, time.UTC),
+	}}
+
+	vm := Build(now, cfg, evs, nil, nil, nil)
+
+	// Same local day and >30min out, so this is FREE FOR rather than ModeDone.
+	// Under the UTC comparison the event looked like tomorrow and fell through.
+	if vm.NowBlock.Mode != ModeFree {
+		t.Errorf("Mode = %v, want ModeFree for an event later the same local day", vm.NowBlock.Mode)
+	}
+	if vm.NowBlock.NextAt != "at 9:00 PM" {
+		t.Errorf("NextAt = %q, want %q", vm.NowBlock.NextAt, "at 9:00 PM")
+	}
+	for _, c := range vm.Agenda.Cards {
+		if c.Kind == CardDaySep {
+			t.Errorf("day separator emitted within a single local day: %q", c.SepText)
+		}
+	}
+}
+
+// Converting event zones must not change Event.Key, or a timezone edit would
+// silently orphan every saved mute.
+func TestBuildKeepsMutesStableAcrossZoneConversion(t *testing.T) {
+	cfg := zonedConfig(t)
+	now := time.Date(2026, 8, 31, 16, 26, 0, 0, time.UTC)
+	e := calendar.Event{
+		UID:   "evt-1",
+		Title: "Design Review",
+		Start: time.Date(2026, 8, 31, 16, 7, 0, 0, time.UTC),
+		End:   time.Date(2026, 8, 31, 16, 57, 0, 0, time.UTC),
+	}
+	cfg.Muted = []config.MutedEvent{{Key: e.Key(), Title: e.Title}}
+
+	vm := Build(now, cfg, []calendar.Event{e}, nil, nil, nil)
+
+	for _, c := range vm.Agenda.Cards {
+		if c.Kind == CardEvent || c.Kind == CardStack {
+			t.Fatalf("muted event still rendered as %v", c.Kind)
+		}
+	}
+}
+
+// An all-day event is a date, not an instant. Shifting it by a zone offset would
+// move it onto the wrong day.
+func TestBuildKeepsAllDayEventsOnTheirDate(t *testing.T) {
+	cfg := zonedConfig(t)
+	loc, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	now := time.Date(2026, 8, 31, 16, 26, 0, 0, time.UTC)
+	// Midnight local, as calendar.Parse yields for a VALUE=DATE entry.
+	start := time.Date(2026, 8, 31, 0, 0, 0, 0, loc)
+	evs := []calendar.Event{{
+		Title: "Company Holiday", AllDay: true,
+		Start: start, End: start.AddDate(0, 0, 1),
+	}}
+
+	vm := Build(now, cfg, evs, nil, nil, nil)
+
+	if len(vm.AllDay) != 1 {
+		t.Fatalf("AllDay = %d events, want 1", len(vm.AllDay))
+	}
+	if y, m, d := vm.AllDay[0].Start.Date(); y != 2026 || m != time.August || d != 31 {
+		t.Errorf("all-day start = %v, want 2026-08-31", vm.AllDay[0].Start)
 	}
 }

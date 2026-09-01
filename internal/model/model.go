@@ -19,23 +19,14 @@ const (
 	TrackWidth  = PanelWidth - NowBlockW // 1540
 )
 
-// Timeline tuning. Starting values carried over from the Pi dashboard
-// (GAP_MIN/IMMINENT_MIN); adjust against real renders.
-var (
-	defaultWindow = WindowOpts{
-		FitEvents:   4,
-		PastContext: 20 * time.Minute,
-		MinSpan:     4 * time.Hour,
-		MaxSpan:     12 * time.Hour,
-	}
-	defaultLabels = LabelOpts{
-		MaxRows: 2, Gap: 10, MaxDrift: 80, TrackWidth: TrackWidth,
-		// A title running modestly past the right edge is still readable and
-		// better than dropping it, but a runaway is not: cap overflow at 120px.
-		MaxOverflow: 120,
-	}
-	minBlockPx = 4.0 // visibility floor, not a layout min-width
-)
+// defaultWindow is the weather chart's time axis. The agenda has no time scale
+// of its own -- cards are fixed-width and time-ordered (see agenda.go).
+var defaultWindow = WindowOpts{
+	FitEvents:   4,
+	PastContext: 20 * time.Minute,
+	MinSpan:     4 * time.Hour,
+	MaxSpan:     12 * time.Hour,
+}
 
 // SetupHint is shown on the panel while the board is not associated with a
 // network -- which covers a fresh board, but also wrong credentials, a router
@@ -45,6 +36,19 @@ var (
 type SetupHint struct {
 	APName   string
 	Password string
+
+	// URL is the portal address to type in, shown because the captive-portal
+	// sheet cannot be relied on: a device may probe an endpoint we do not
+	// answer, have the check disabled, or simply be a laptop that never shows
+	// one. The redirect handles the common case and this covers the rest.
+	URL string
+
+	// Connecting is the network an in-flight association attempt is joining,
+	// or "" when none is running. While it is set the panel reports progress
+	// instead of the join instructions: association tears down the AP the
+	// user's browser is on, so the panel is the only surface that can still
+	// tell them what is happening.
+	Connecting string
 }
 
 // ViewModel is everything the template needs. No method on it may consult the
@@ -61,15 +65,15 @@ type ViewModel struct {
 	NextEvent *calendar.Event
 	UntilNext string
 
+	// Agenda is the card row and its pre-scroll offset.
+	Agenda CardRow
+	// NowBlock is the left panel's resolved headline.
+	NowBlock NowBlock
+
+	// Window is the weather chart's time axis. The agenda no longer uses it:
+	// cards are fixed-width and time-ordered, not positioned by time.
 	Window Window
-	Blocks []Block
-	// Labels is NOT index-aligned with Blocks: PlaceLabels may omit labels
-	// that don't fit within TrackWidth+MaxOverflow on any row, so
-	// len(Labels) can be less than len(Blocks). Correlate via Label.Anchor
-	// (== the block's X), not by index.
-	Labels []Label
 	AllDay []calendar.Event
-	NowX   float64
 
 	// Stale reports that this refresh cycle had at least one failure, so some
 	// of what is displayed may be last-good data rather than current. A
@@ -78,12 +82,26 @@ type ViewModel struct {
 	Stale  bool
 	Errors []string
 
+	// Loading reports that no fetch has completed yet, so an empty agenda means
+	// "not known" rather than "nothing scheduled". Without it the first frames
+	// after boot claim "No more events today" with authority, which is a
+	// statement about the calendar the panel has not yet earned the right to
+	// make. Callers set it (see cmd/dashboard); Build cannot infer it, because
+	// no-events-yet and genuinely-no-events look identical from here.
+	Loading bool
+
 	// Setup is non-nil only while the board is not associated with a network,
 	// and carries the setup AP name and admin password so first-run needs no
 	// documentation. Callers must compute it themselves (see cmd/dashboard's
 	// setupHintTracker) -- Build must not reach into wifi/portal to derive it,
 	// so the template stays independent of whether those packages are reachable.
 	Setup *SetupHint
+
+	// Dialog is the modal sheet, non-nil only while one is open. It is set by
+	// the touch layer rather than derived from data, which is why Build leaves
+	// it alone: a dialog is a statement about what the user is looking at, not
+	// about what the calendar contains.
+	Dialog *Dialog
 }
 
 // Build assembles the view model. It tolerates nil weather and no events so a
@@ -93,7 +111,9 @@ func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Wea
 	loc := c.TimeLocation()
 	local := now.In(loc)
 
-	clockLayout := "3:04"
+	// 12-hour carries AM/PM: the panel is read at a glance from across a room,
+	// where a bare "4:33" is ambiguous.
+	clockLayout := "3:04 PM"
 	if c.Units.Clock24h {
 		clockLayout = "15:04"
 	}
@@ -101,7 +121,7 @@ func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Wea
 	vm := ViewModel{
 		Now:       now,
 		ClockTime: local.Format(clockLayout),
-		ClockDate: local.Format("Monday, January 2"),
+		ClockDate: local.Format("Mon, Jan 2"),
 		Errors:    errs,
 		// Stale means "something failed this fetch cycle, so what's on
 		// screen may be older than it looks" — derived from errs, not from
@@ -126,6 +146,43 @@ func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Wea
 	sorted := append([]calendar.Event(nil), evs...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Start.Before(sorted[j].Start) })
 
+	// Every event time is converted to the panel's timezone here, once, so no
+	// downstream formatter has to remember to do it. A feed states times in
+	// whatever zone it likes -- a DTSTART ending in Z parses as UTC -- and
+	// time.Format renders in whatever zone the value carries, so formatting an
+	// unconverted value printed UTC on the panel while the clock beside it read
+	// local. Comparisons (Start.After(now)) are instant-based and were correct
+	// throughout, which is why the layout was right and only the labels were
+	// wrong: an off-by-a-timezone that shows up in exactly one of the two.
+	//
+	// This is safe for muting: Event.Key formats its start in UTC explicitly, so
+	// a converted event yields the same key and existing mutes still match.
+	//
+	// All-day events are deliberately left alone. Their times are midnight
+	// boundaries parsed in the configured zone already, and shifting them would
+	// move an all-day entry onto the wrong date.
+	for i := range sorted {
+		if sorted[i].AllDay {
+			continue
+		}
+		sorted[i].Start = sorted[i].Start.In(loc)
+		sorted[i].End = sorted[i].End.In(loc)
+	}
+
+	// Muted events are dropped here, before the timed/all-day split, so a mute
+	// removes the event from every surface at once: the card row, the all-day
+	// ribbon, and the NOW/NEXT headline. Filtering later would hide the card
+	// while the left panel still counted down to it.
+	if c != nil && len(c.Muted) > 0 {
+		kept := sorted[:0]
+		for _, e := range sorted {
+			if !c.IsMuted(e.Key()) {
+				kept = append(kept, e)
+			}
+		}
+		sorted = kept
+	}
+
 	var timed []calendar.Event
 	for _, e := range sorted {
 		if e.AllDay {
@@ -144,10 +201,16 @@ func Build(now time.Time, c *config.Config, evs []calendar.Event, w *weather.Wea
 		}
 	}
 
+	clock24 := c != nil && c.Units.Clock24h
+	// local, not now: these derive calendar dates ("Today"/"Tomorrow" separators,
+	// the same-day guard on FREE FOR), and a date is a question about a wall
+	// clock. Passing the UTC value rolled the day over at 7pm local here.
+	vm.Agenda = BuildAgenda(timed, local, clock24)
+	vm.NowBlock = BuildNowBlock(timed, local, clock24)
+
+	// The weather chart keeps its own window: it spans hours, while the agenda
+	// is a card row with no time scale at all.
 	vm.Window = ComputeWindow(timed, now, TrackWidth, defaultWindow)
-	vm.Blocks = Blocks(timed, vm.Window, minBlockPx)
-	vm.Labels = PlaceLabels(vm.Blocks, estimateTextWidth, defaultLabels)
-	vm.NowX = vm.Window.X(now)
 	return vm
 }
 
@@ -170,15 +233,4 @@ func untilText(now, start time.Time) string {
 		return fmt.Sprintf("%dh", h)
 	}
 	return fmt.Sprintf("%dh%02dm", h, m)
-}
-
-// estimateTextWidth approximates rendered label width. Labels are 19px and the
-// UI font averages ~0.52em per character; exact metrics are not needed because
-// placement only has to avoid visible collisions. This is a guess, not a
-// measurement: it must stay consistent with whatever label font-size Task 9's
-// CSS actually specifies, and should be tuned against a real render on
-// hardware if labels overlap or drop too eagerly.
-func estimateTextWidth(s string) float64 {
-	const avgCharPx = 19 * 0.52
-	return float64(len([]rune(s))) * avgCharPx
 }

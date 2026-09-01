@@ -1,6 +1,7 @@
 package view
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -63,7 +64,7 @@ func TestRenderProducesCompleteDocument(t *testing.T) {
 		t.Error("output has a <link> tag; CSS must be inlined")
 	}
 	if strings.Contains(got, "<script") {
-		t.Error("output has a <script> tag; doctaculous discards scripts")
+		t.Error("output has a <script> tag; omnidoc discards scripts")
 	}
 }
 
@@ -79,39 +80,9 @@ func TestRenderIncludesEventTitlesAndClock(t *testing.T) {
 	}
 }
 
-// TestRenderDrawsLeaderForDriftedLabel exercises the {{if .Drifted}} template
-// branch. fixtureVM's Standup/Design Review Sync pair is deliberately close
-// enough together (see the comment there) that PlaceLabels pushes the second
-// label right of its own block's X — the exact clustered-events case Task 12
-// hits every minute against live calendar data. Without this, no fixture ever
-// set Drifted true and a regression in the leader-mark rendering would go
-// unnoticed.
-func TestRenderDrawsLeaderForDriftedLabel(t *testing.T) {
-	vm := fixtureVM(t)
-
-	// Mirrors the Drifted threshold Render applies (view.go: X-Anchor > 2).
-	var sawDrift bool
-	for _, l := range vm.Labels {
-		if l.X-l.Anchor > 2 {
-			sawDrift = true
-		}
-	}
-	if !sawDrift {
-		t.Fatal("fixture does not produce a drifted label; test no longer exercises the leader mark")
-	}
-
-	got, err := Render(vm)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(got, `class="leader"`) {
-		t.Error(`output missing class="leader" for a drifted label`)
-	}
-}
-
 func TestRenderEscapesTitles(t *testing.T) {
 	vm := fixtureVM(t)
-	vm.Labels[0].Text = `Tom & Jerry <script>`
+	vm.Agenda.Cards[0].Event.Title = `Tom & Jerry <script>`
 	got, err := Render(vm)
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +105,73 @@ func TestRenderHandlesEmptyModel(t *testing.T) {
 	}
 	if !strings.Contains(got, "10:42") {
 		t.Error("clock must render even with no data")
+	}
+}
+
+// Both directions of the Loading branch. An empty agenda is ambiguous on its
+// own -- "not fetched yet" and "nothing scheduled" produce the identical model
+// -- so the panel must not assert the second while the first is true.
+func TestRenderShowsFetchingWhileLoading(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+	vm := model.Build(now, c, nil, nil, nil, nil)
+	vm.Loading = true
+
+	got, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "Fetching") {
+		t.Error("agenda must read as loading before the first fetch completes")
+	}
+	if strings.Contains(got, "No more events today") {
+		t.Error("panel claimed the day is clear before any fetch happened")
+	}
+	if strings.Contains(got, "Done for the day") {
+		t.Error("now block claimed the day is done before any fetch happened")
+	}
+}
+
+func TestRenderShowsNoEventsOnceLoaded(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+	vm := model.Build(now, c, nil, nil, nil, nil)
+	vm.Loading = false
+
+	got, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "No more events today") {
+		t.Error("a genuinely empty day must still say so once fetched")
+	}
+	if strings.Contains(got, "Fetching") {
+		t.Error("loading text leaked into a loaded render")
+	}
+}
+
+// The setup hint outranks Loading: a board that cannot associate will never
+// fetch, so telling the user it is "Fetching..." would be a lie that hides the
+// only thing they can act on.
+func TestRenderSetupHintOutranksLoading(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+	vm := model.Build(now, c, nil, nil, nil,
+		&model.SetupHint{APName: "upnext-1bfd", Password: "4c1bfd"})
+	vm.Loading = true
+
+	got, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "upnext-1bfd") {
+		t.Error("setup hint must win over the loading state")
+	}
+	if strings.Contains(got, "Fetching&hellip;") {
+		t.Error("loading headline rendered over the setup hint")
 	}
 }
 
@@ -271,5 +309,120 @@ func TestRenderMatchesGolden(t *testing.T) {
 	}
 	if got != string(want) {
 		t.Error("HTML differs from golden; re-run with UPDATE_GOLDEN=1 if intended")
+	}
+}
+
+// The agenda's arithmetic lives in internal/model but the layout it predicts is
+// produced by style.css. Nothing makes the two agree: when the row's 18px
+// padding was missing from the model, the NOW bar rendered beside the current
+// card instead of through it and every test still passed.
+//
+// This asserts the stylesheet still declares what the model assumes. Each check
+// is scoped to the rule that owns the value -- a bare substring search matches
+// the same number in an unrelated rule and silently passes.
+func TestStylesheetMatchesModelGeometry(t *testing.T) {
+	css, err := assetFS.ReadFile("assets/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(css)
+
+	// ruleBody returns the declarations of the first rule with this selector.
+	ruleBody := func(selector string) string {
+		t.Helper()
+		i := strings.Index(s, selector+" {")
+		if i < 0 {
+			t.Fatalf("style.css has no %q rule", selector)
+		}
+		body := s[i+len(selector)+2:]
+		end := strings.Index(body, "}")
+		if end < 0 {
+			t.Fatalf("%q rule is unterminated", selector)
+		}
+		return body[:end]
+	}
+
+	for _, c := range []struct {
+		selector, decl, why string
+	}{
+		{"#agenda-row", fmt.Sprintf("gap: %dpx", model.CardGapPx),
+			"the row's gap is the spacing model.BuildAgenda advances x by"},
+		{"#agenda-row", fmt.Sprintf("padding: 10px %dpx 12px", model.CardPadPx),
+			"model.CardPadPx offsets the row against the unpadded NOW bar"},
+
+		// The dialog's hit rects are stated in cmd/dashboard/touch.go and must
+		// match what is painted. Nothing reads back the rasterized page, so a
+		// drift here is a button that looks right and does nothing when
+		// tapped -- silent, and only findable by hand on the hardware.
+		{"#dlg", "left: 380px", "actionRects anchors the sheet at the left-panel seam"},
+		{"#dlg", "width: 1540px", "actionRects computes the close button from the sheet width"},
+		{"#dlg-head", "top: 20px", "actionRects places the close button at this y"},
+		{"#dlg-actions", "left: 44px", "actionRects starts the button row at this x"},
+		{"#dlg-actions", "top: 394px", "actionRects places the buttons at this y"},
+		{".dlg-close", "width: 150px", "actionRects sizes the close hit target"},
+		{".dlg-close", "height: 60px", "actionRects sizes the close hit target"},
+		{".dlg-btn", "width: 300px", "actionRects sizes and steps the action buttons"},
+		{".dlg-btn", "height: 64px", "actionRects sizes the action buttons"},
+		{"#dlg-actions", "gap: 16px", "actionRects steps x by button width plus this gap"},
+
+		// The agenda band's vertical geometry is what CardRects hit-tests
+		// against.
+		{".ad-ribbon", fmt.Sprintf("height: %dpx", model.RibbonHeightPx),
+			"model.RibbonHeightPx is the top of the card band in CardRects"},
+		{"#agenda-row", fmt.Sprintf("height: %dpx", model.AgendaHeightPx),
+			"model.AgendaHeightPx is the card band's height in CardRects"},
+	} {
+		if body := ruleBody(c.selector); !strings.Contains(body, c.decl) {
+			t.Errorf("%s does not declare %q: %s", c.selector, c.decl, c.why)
+		}
+	}
+}
+
+// While an association attempt runs the panel must report progress rather than
+// the join instructions. The browser that submitted the credentials loses its
+// connection when the AP comes down, so this is the only surface left that can
+// tell the user anything.
+func TestRenderShowsConnectingInsteadOfJoinSteps(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+	vm := model.Build(now, c, nil, nil, nil, &model.SetupHint{
+		APName: "upnext-1bfd", Password: "4c1bfd",
+		URL: "http://192.168.4.1", Connecting: "HomeNet",
+	})
+
+	got, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "HomeNet") {
+		t.Error("panel does not name the network being joined")
+	}
+	// The join steps must be gone: telling the user to join the setup AP while
+	// that AP is being torn down sends them at a network about to vanish.
+	if strings.Contains(got, "Join Wi-Fi") {
+		t.Error("panel still shows the join instructions during an attempt")
+	}
+	if strings.Contains(got, "4c1bfd") {
+		t.Error("panel still shows the setup password during an attempt")
+	}
+}
+
+// Once the attempt finishes, the join steps come back -- a failed association
+// must leave the user able to retry.
+func TestRenderRestoresJoinStepsWhenNotConnecting(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+	vm := model.Build(now, c, nil, nil, nil, &model.SetupHint{
+		APName: "upnext-1bfd", Password: "4c1bfd", URL: "http://192.168.4.1",
+	})
+
+	got, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "Join Wi-Fi") {
+		t.Error("join instructions missing when no attempt is running")
 	}
 }

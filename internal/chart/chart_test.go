@@ -13,7 +13,7 @@ import (
 
 func TestIconReturnsSVGForKnownCodes(t *testing.T) {
 	for _, code := range []int{0, 1, 2, 3, 45, 51, 61, 71, 75, 82, 95} {
-		got := Icon(code)
+		got := Icon(code, 40)
 		if !strings.HasPrefix(strings.TrimSpace(got), "<svg") {
 			t.Errorf("Icon(%d) = %.40q, want inline <svg>", code, got)
 		}
@@ -21,16 +21,65 @@ func TestIconReturnsSVGForKnownCodes(t *testing.T) {
 }
 
 func TestIconFallsBackForUnknownCode(t *testing.T) {
-	got := Icon(9999)
+	got := Icon(9999, 40)
 	if !strings.HasPrefix(strings.TrimSpace(got), "<svg") {
 		t.Errorf("Icon(unknown) = %.40q, want a fallback <svg>", got)
+	}
+}
+
+// The icons ship at width="24"; those attributes override the CSS box on this
+// engine, so an unsized icon rendered as a dot in the middle of a 50px slot.
+// Nothing on screen flags it, hence the assertion.
+func TestIconIsSizedToTheRequestedBox(t *testing.T) {
+	for _, code := range []int{0, 2, 61, 9999} {
+		got := Icon(code, 50)
+		if !strings.Contains(got, `width="50"`) || !strings.Contains(got, `height="50"`) {
+			t.Errorf("Icon(%d, 50) = %.80q, want width/height of 50", code, got)
+		}
+		if strings.Contains(got, `"24"`) {
+			t.Errorf("Icon(%d, 50) still carries the authored 24px size: %.80q", code, got)
+		}
+		// Dropping viewBox would crop the art instead of scaling it.
+		if !strings.Contains(got, `viewBox="0 0 24 24"`) {
+			t.Errorf("Icon(%d, 50) lost its viewBox: %.80q", code, got)
+		}
+	}
+}
+
+// omnidoc does not inherit stroke properties from the root <svg> down to
+// its children: a path relying on an inherited stroke paints nothing at all.
+// The icons were authored that way, so every ray, raindrop and fog line was
+// invisible while the filled shapes rendered -- the "sun" was a bare dot.
+// Verified with a minimal probe (see docs/omnidoc-gaps.md). Each stroked
+// element must therefore carry its own stroke.
+func TestIconStrokesAreNotInheritedFromRoot(t *testing.T) {
+	entries, err := iconFS.ReadDir("icons")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		b, err := iconFS.ReadFile("icons/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		svg := string(b)
+		root := svg[:strings.Index(svg, ">")+1]
+		if strings.Contains(root, "stroke=") {
+			t.Errorf("%s: root <svg> carries stroke=; children do not inherit it "+
+				"on this engine, so the stroke must sit on each element", e.Name())
+		}
+		// A body that strokes must say so itself, not lean on the root.
+		body := svg[len(root):]
+		if strings.Contains(body, "stroke-width=") && !strings.Contains(body, "stroke=") {
+			t.Errorf("%s: has stroke-width but no stroke on any child", e.Name())
+		}
 	}
 }
 
 func TestIconNeverReturnsEmoji(t *testing.T) {
 	// The board cannot render these; a regression here is invisible on screen.
 	for _, code := range []int{0, 1, 2, 3, 45, 51, 61, 71, 75, 82, 95} {
-		for _, r := range Icon(code) {
+		for _, r := range Icon(code, 40) {
 			if r > 0x2000 {
 				t.Errorf("Icon(%d) contains non-ASCII rune %q", code, r)
 			}
@@ -91,11 +140,19 @@ func TestHourlyNilWeather(t *testing.T) {
 // attribute produced by Hourly.
 func pathYs(t *testing.T, svg string) []float64 {
 	t.Helper()
-	start := strings.Index(svg, `<path class="wx-temp" d="`)
-	if start < 0 {
+	// Located by the curve colour, not the whole attribute string: matching on
+	// stroke-width too made this fail whenever the curve was restyled, which
+	// says nothing about the geometry these tests actually check.
+	i := strings.Index(svg, `stroke="`+curveColor+`"`)
+	if i < 0 {
 		t.Fatalf("no temperature path found in %.200q", svg)
 	}
-	start += len(`<path class="wx-temp" d="`)
+	const dAttr = ` d="`
+	rel := strings.Index(svg[i:], dAttr)
+	if rel < 0 {
+		t.Fatalf("temperature path has no d attribute in %.200q", svg)
+	}
+	start := i + rel + len(dAttr)
 	end := strings.Index(svg[start:], `"`)
 	if end < 0 {
 		t.Fatalf("unterminated path d attribute in %.200q", svg)
@@ -156,7 +213,8 @@ func TestHourlyIgnoresOutOfWindowOutlierForScale(t *testing.T) {
 	spread := maxY - minY
 
 	const heightPx = 104
-	const chartH = heightPx - labelBandPx
+	// The hour axis is separate HTML now, so the whole SVG height is curve band.
+	const chartH = heightPx
 	// The drawing area reserves the top/bottom 15% as margin, so the usable
 	// band is chartH*0.7. A real 4.5F climb across 4 points should span a
 	// meaningful fraction of that, not be squashed to a few px by an

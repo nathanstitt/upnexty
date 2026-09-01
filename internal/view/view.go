@@ -1,52 +1,118 @@
 // Package view renders the view model to a complete HTML document. CSS is
 // inlined and SVG embedded: the board loads no external resources, and
-// doctaculous discards <script>, so all layout must be static.
+// omnidoc discards <script>, so all layout must be static.
 package view
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"html/template"
+	"path"
 	"strings"
+
+	"github.com/nathanstitt/omnidoc/pkg/resource"
 
 	"github.com/nathanstitt/luckfox-dashboard/internal/chart"
 	"github.com/nathanstitt/luckfox-dashboard/internal/model"
 	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
 )
 
-//go:embed templates/*.html assets/*.css
+//go:embed templates/*.html assets/*.css assets/fonts/*.ttf
 var assetFS embed.FS
 
-// labelRowTop is the y offset of each label row within the track.
-var labelRowTop = []float64{78, 52}
-
-type labelView struct {
-	Text    string
-	X       float64
-	Top     float64
-	Anchor  float64
-	Drifted bool
+// FontLoader serves the embedded font files to omnidoc, which resolves
+// @font-face url() refs through a resource loader.
+//
+// The fonts must arrive this way rather than by installing them on the board:
+// omnidoc's OS font lookup goes through adrg/sysfont, whose matcher only
+// recognizes families in its own hardcoded registry. That registry has 32
+// DejaVu entries and zero for Roboto, Barlow Condensed, or IBM Plex Mono, so an
+// installed-but-unregistered family silently resolves to DejaVu no matter which
+// directory it sits in. Verified on hardware: fonts in /usr/share/fonts (the
+// real xdg search path) still rendered as DejaVu; the same files loaded via
+// @font-face url() rendered correctly.
+//
+// Embedding also means the fonts ship inside the binary -- nothing extra to
+// deploy, and no way for the panel to lose its typefaces.
+func FontLoader() resource.ResourceLoader {
+	return fontLoader{}
 }
 
+type fontLoader struct{}
+
+func (fontLoader) Load(_ context.Context, ref string) ([]byte, string, error) {
+	// Only font refs are served; the stylesheet is inlined into the document.
+	name := path.Base(ref)
+	b, err := assetFS.ReadFile("assets/fonts/" + name)
+	if err != nil {
+		return nil, "", fmt.Errorf("view: font %q: %w", name, err)
+	}
+	return b, "font/ttf", nil
+}
+
+// chartHeightPx is the weather curve band's height and MUST match #wx-strip in
+// style.css. The hour axis (#wx-hours) is a separate row below it. The chart
+// insets its own top and bottom (topPadPx/bottomPadPx), so it takes the whole
+// strip.
+const chartHeightPx = 104
+
 type forecastView struct {
-	Day  string
-	Code int
-	Hi   string
-	Lo   string
-	Pop  string
+	Day    string
+	Code   int
+	Hi     string
+	Lo     string
+	Pop    string
+	HasPop bool
+}
+
+// hourTick is one label on the weather strip's time axis.
+type hourTick struct {
+	XPx   float64
+	Label string
 }
 
 type pageData struct {
-	VM       model.ViewModel
-	CSS      template.CSS
-	Chart    template.HTML
-	Labels   []labelView
-	Forecast []forecastView
+	VM        model.ViewModel
+	CSS       template.CSS
+	Chart     template.HTML
+	Forecast  []forecastView
+	HourTicks []hourTick
+	TodayPop  string
 }
 
 var funcs = template.FuncMap{
-	"px":   func(v float64) template.CSS { return template.CSS(fmt.Sprintf("%.1fpx", v)) },
-	"icon": func(code int) template.HTML { return template.HTML(chart.Icon(code)) },
+	"px": func(v float64) template.CSS { return template.CSS(fmt.Sprintf("%.1fpx", v)) },
+	// Sized at the call site so the markup states the box it occupies.
+	"icon": func(code, sizePx int) template.HTML { return template.HTML(chart.Icon(code, sizePx)) },
+	// alpha renders a calendar colour as a faint tint for all-day pills. The
+	// engine supports #RRGGBBAA, so the suffix is appended rather than
+	// converted to rgba().
+	"alpha":   func(hex string) template.CSS { return template.CSS(safeHexColor(hex, "#4a90d9") + "22") },
+	"wmoText": func(code int) string { return chart.Describe(code) },
+	"pct":     func(v float64) template.CSS { return template.CSS(fmt.Sprintf("%.1f%%", v)) },
+	// accent is a calendar colour used as the dialog's accent. Same validation
+	// as alpha: these values come from a remote iCal feed.
+	"accent": func(hex string) template.CSS { return template.CSS(safeHexColor(hex, "#4a90d9")) },
+}
+
+// safeHexColor returns hex if it is a literal #RGB/#RRGGBB colour, else def.
+//
+// These strings come from a remote calendar feed and are interpolated into a
+// style attribute, where template/html cannot sanitize them: it treats
+// template.CSS as already-trusted. A feed serving a COLOR of
+// "red;background:url(...)" would otherwise inject declarations. Validating
+// the shape is cheaper than escaping and leaves nothing to reason about.
+func safeHexColor(hex, def string) string {
+	if n := len(hex); (n != 4 && n != 7) || hex[0] != '#' {
+		return def
+	}
+	for _, r := range hex[1:] {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return def
+		}
+	}
+	return hex
 }
 
 var tmpl = template.Must(
@@ -54,27 +120,10 @@ var tmpl = template.Must(
 )
 
 // Render produces the full HTML document for a view model.
-//
-// vm.Labels is NOT index-aligned with vm.Blocks (model.PlaceLabels may omit
-// labels that don't fit), so blocks and labels are iterated independently
-// here and in the template — never zipped by index. Each label carries
-// Anchor (its block's own X) to draw a leader mark when it has drifted.
 func Render(vm model.ViewModel) (string, error) {
 	css, err := assetFS.ReadFile("assets/style.css")
 	if err != nil {
 		return "", err
-	}
-
-	labels := make([]labelView, 0, len(vm.Labels))
-	for _, l := range vm.Labels {
-		row := l.Row
-		if row >= len(labelRowTop) {
-			row = len(labelRowTop) - 1
-		}
-		labels = append(labels, labelView{
-			Text: l.Text, X: l.X, Top: labelRowTop[row],
-			Anchor: l.Anchor, Drifted: l.X-l.Anchor > 2,
-		})
 	}
 
 	forecast := make([]forecastView, 0, len(vm.Forecast))
@@ -83,15 +132,16 @@ func Render(vm model.ViewModel) (string, error) {
 		if i == 0 {
 			day = "Today"
 		}
-		pop := "—"
-		if d.PrecipProb > 0 {
+		pop, hasPop := "—", d.PrecipProb > 0
+		if hasPop {
 			pop = fmt.Sprintf("%d%%", d.PrecipProb)
 		}
 		forecast = append(forecast, forecastView{
 			Day: day, Code: d.Code,
-			Hi:  fmt.Sprintf("%.0f", d.HiF),
-			Lo:  fmt.Sprintf("%.0f", d.LoF),
-			Pop: pop,
+			Hi:     fmt.Sprintf("%.0f", d.HiF),
+			Lo:     fmt.Sprintf("%.0f", d.LoF),
+			Pop:    pop,
+			HasPop: hasPop,
 		})
 	}
 
@@ -101,12 +151,27 @@ func Render(vm model.ViewModel) (string, error) {
 	// satisfy that signature rather than widening Render's contract.
 	w := &weather.Weather{Hourly: vm.Hourly}
 
+	// The weather strip and its hour axis share one window so the labels line
+	// up with the curve.
+	wxWin := chart.SpanWindow(vm.Window, vm.Now)
+	ticks := make([]hourTick, 0, 16)
+	for _, t := range chart.HourTicks(wxWin) {
+		ticks = append(ticks, hourTick{XPx: t.XPx, Label: t.Label})
+	}
+
+	todayPop := "0%"
+	if len(vm.Forecast) > 0 {
+		todayPop = fmt.Sprintf("%d%%", vm.Forecast[0].PrecipProb)
+	}
+
 	data := pageData{
-		VM:       vm,
-		CSS:      template.CSS(css),
-		Chart:    template.HTML(chart.Hourly(w, vm.Window, 104)),
-		Labels:   labels,
-		Forecast: forecast,
+		VM:  vm,
+		CSS: template.CSS(css),
+		// chartHeightPx is the curve band only; the hour axis sits below it.
+		Chart:     template.HTML(chart.Hourly(w, wxWin, chartHeightPx)),
+		Forecast:  forecast,
+		HourTicks: ticks,
+		TodayPop:  todayPop,
 	}
 
 	var sb strings.Builder

@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nathanstitt/doctaculous/pkg/doctaculous"
+	"github.com/nathanstitt/omnidoc/pkg/omnidoc"
 )
 
 // Geometry reads the visible resolution from sysfs.
@@ -39,14 +39,21 @@ func Geometry(dev string) (int, int, error) {
 // RenderHTML lays out and rasterizes an HTML document at exactly pageW x pageH.
 //
 // WithPageSize is required: without it the layout viewport defaults to 1280px,
-// and doctaculous's fit-within sizing preserves aspect ratio, so the render
+// and omnidoc's fit-within sizing preserves aspect ratio, so the render
 // comes back 1280x480 and is pillarboxed with white on a 1920x480 panel.
-func RenderHTML(ctx context.Context, html []byte, pageW, pageH int) (image.Image, error) {
-	doc, err := doctaculous.OpenHTMLBytes(html, doctaculous.WithPageSize(float64(pageW), float64(pageH)))
+//
+// Both halves take ctx: parse/layout is the half that can run long on a
+// pathological document, so the non-context OpenHTMLBytes would leave a wedged
+// render burning one of the board's three cores with no way to stop it.
+func RenderHTML(ctx context.Context, html []byte, pageW, pageH int, opts ...omnidoc.HTMLOption) (image.Image, error) {
+	all := append([]omnidoc.HTMLOption{
+		omnidoc.WithPageSize(float64(pageW), float64(pageH)),
+	}, opts...)
+	doc, err := omnidoc.OpenHTMLBytesContext(ctx, html, all...)
 	if err != nil {
 		return nil, fmt.Errorf("layout: %w", err)
 	}
-	img, err := doc.RasterizePage(ctx, 0, doctaculous.RasterOptions{
+	img, err := doc.RasterizePage(ctx, 0, omnidoc.RasterOptions{
 		MaxWidthPx: pageW, MaxHeightPx: pageH, Background: color.White,
 	})
 	if err != nil {
