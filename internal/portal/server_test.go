@@ -540,3 +540,59 @@ func testSession(t *testing.T, hash, mac string) *http.Cookie {
 	t.Helper()
 	return &http.Cookie{Name: SessionCookie, Value: NewSessionToken(hash, mac)}
 }
+
+// refetchStore is a fakeStore that also records a refetch request, so the save
+// handler's call can be observed.
+type refetchStore struct {
+	fakeStore
+	refetched int
+}
+
+func (r *refetchStore) RefetchCalendars() { r.refetched++ }
+
+// Saving feeds asks the store to re-read them.
+//
+// Without this the panel keeps showing events from the URL that was just
+// replaced until the next fetch interval -- up to ten minutes by default --
+// which is indistinguishable from the save having failed.
+func TestSaveCalendarsTriggersARefetch(t *testing.T) {
+	c := &config.Config{}
+	c.Location.Timezone = "America/Chicago"
+	c.Calendars = []config.CalendarSource{{Name: "Work", Color: "#4f9cff", URL: "https://example.com/old.ics"}}
+	store := &refetchStore{fakeStore: fakeStore{c: c, configPath: t.TempDir() + "/config.json"}}
+	s := &Server{Store: store, MAC: "54:01:4a:4c:1b:fd"}
+
+	req := httptest.NewRequest("POST", "/save/calendars",
+		strings.NewReader("name=Work&url=https%3A%2F%2Fexample.com%2Fnew.ics"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", w.Code)
+	}
+	if got := s.Store.Config().Calendars; len(got) != 1 || got[0].URL != "https://example.com/new.ics" {
+		t.Fatalf("saved calendars = %+v, want the new URL", got)
+	}
+	if store.refetched != 1 {
+		t.Errorf("RefetchCalendars called %d times, want 1: the panel would keep "+
+			"showing the old feed until the next interval", store.refetched)
+	}
+}
+
+// A store that cannot refetch still saves. The interface is optional so test
+// fakes and any future store need not implement it.
+func TestSaveCalendarsWithoutARefetcher(t *testing.T) {
+	s := newTestServer(t)
+	req := httptest.NewRequest("POST", "/save/calendars",
+		strings.NewReader("name=Work&url=https%3A%2F%2Fexample.com%2Fnew.ics"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("status = %d, want 303", w.Code)
+	}
+}

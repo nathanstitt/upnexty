@@ -28,6 +28,14 @@ type ConfigStore interface {
 	Update(fn func(*config.Config) error) error
 }
 
+// CalendarRefetcher is implemented by a store that can re-read its calendar
+// feeds on demand. Optional rather than part of ConfigStore: only the real
+// store runs a fetch loop, and requiring it would make every test fake
+// implement a method it has nothing to do with.
+type CalendarRefetcher interface {
+	RefetchCalendars()
+}
+
 // Server serves the configuration UI.
 type Server struct {
 	Store ConfigStore

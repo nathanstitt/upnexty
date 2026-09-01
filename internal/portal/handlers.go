@@ -168,6 +168,17 @@ func (s *Server) handleSaveCalendars(w http.ResponseWriter, r *http.Request) {
 		s.page(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Re-read the feeds now. Without this the panel keeps showing events from
+	// the URL that was just replaced until the next interval comes round --
+	// up to CalendarMinutes, ten by default -- which reads as the save having
+	// done nothing. The store also drops back to "pending", so the panel says
+	// "Fetching..." rather than displaying the old feed's events in the
+	// meantime.
+	if rf, ok := s.Store.(CalendarRefetcher); ok {
+		rf.RefetchCalendars()
+	}
+
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 

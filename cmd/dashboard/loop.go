@@ -32,13 +32,32 @@ type Store struct {
 	// construction (see main); Update fails clearly if it is ever empty
 	// instead of silently skipping the disk write.
 	configPath string
+
+	// calWake carries a nudge to the calendar fetch loop, so a feed saved in
+	// the portal is read now rather than up to CalendarMinutes later.
+	//
+	// Buffered with room for one and sent non-blocking: the signal means
+	// "refetch soon", so two saves in quick succession collapsing into one
+	// wake-up is correct rather than a lost update. A nil channel (a Store
+	// built by a test that does not run the loop) makes RefetchCalendars a
+	// no-op instead of a panic.
+	calWake chan struct{}
+
+	// renderWake asks the render loop to draw now rather than at the next
+	// minute boundary. Same shape and rationale as calWake: buffered for one,
+	// sent non-blocking, nil-safe.
+	renderWake chan struct{}
 }
 
 // NewStore constructs a Store ready for Update, which persists to configPath.
 // cfg is installed directly (equivalent to a subsequent SetConfig) so callers
 // don't need a separate call before the first render tick.
 func NewStore(cfg *config.Config, configPath string) *Store {
-	s := &Store{configPath: configPath}
+	s := &Store{
+		configPath: configPath,
+		calWake:    make(chan struct{}, 1),
+		renderWake: make(chan struct{}, 1),
+	}
 	s.SetConfig(cfg)
 	return s
 }
@@ -98,6 +117,66 @@ func (s *Store) Update(fn func(*config.Config) error) error {
 	}
 	s.cfg = &next
 	return nil
+}
+
+// RefetchCalendars marks the calendar data stale and wakes the fetch loop.
+//
+// Called when the portal saves new feeds. It does both halves deliberately:
+// clearing evFetched puts the panel back into "Fetching..." immediately, so
+// the next render stops showing events from a feed the user has just replaced,
+// and the wake makes the new ones arrive in seconds rather than at the next
+// interval. Without the first, the panel would sit on stale events looking
+// like the save did nothing; without the second, it would sit on "Fetching..."
+// for up to ten minutes, which looks the same.
+func (s *Store) RefetchCalendars() {
+	s.mu.Lock()
+	s.evFetched = false
+	s.mu.Unlock()
+
+	select {
+	case s.calWake <- struct{}{}:
+	default: // already pending, or no loop listening
+	}
+
+	// Draw now, so the panel switches to "Fetching..." as the user saves
+	// rather than at the next minute boundary.
+	s.RequestRender()
+}
+
+// RequestRender asks the render loop to draw before its next tick.
+//
+// The panel otherwise redraws on the minute, which is right for a clock and
+// wrong for anything the user just did: a save would take up to a minute to
+// show "Fetching...", and the arriving events another minute after that. Both
+// would read as the board ignoring the change.
+func (s *Store) RequestRender() {
+	select {
+	case s.renderWake <- struct{}{}:
+	default: // a render is already pending
+	}
+}
+
+// WaitRenderWake blocks until a render is requested or d elapses.
+func (s *Store) WaitRenderWake(d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-s.renderWake:
+	case <-t.C:
+	}
+}
+
+// WaitCalendarWake blocks until a refetch is requested or d elapses, reporting
+// whether it was woken. The fetch loop uses this in place of a plain sleep.
+func (s *Store) WaitCalendarWake(d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-s.calWake:
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 // SetEvents records the result of a calendar fetch attempt. On failure (errs

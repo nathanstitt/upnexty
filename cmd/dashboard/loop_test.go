@@ -507,3 +507,96 @@ func TestRecoverRenderPassesThroughSuccess(t *testing.T) {
 		t.Errorf("recoverRender() = %v, want %v", err, wantErr)
 	}
 }
+
+// Saving new feeds puts the panel back into "Fetching..." and wakes the loop.
+//
+// Both halves matter. Without the pending reset the panel keeps showing events
+// from the feed that was just replaced, which reads as the save having failed;
+// without the wake it shows "Fetching..." for up to CalendarMinutes, which
+// reads the same way.
+func TestRefetchCalendarsResetsPendingAndWakes(t *testing.T) {
+	s := NewStore(&config.Config{}, t.TempDir()+"/config.json")
+	s.SetEvents(nil, nil)
+	if s.CalendarPending() {
+		t.Fatal("CalendarPending = true after a fetch, want false")
+	}
+
+	s.RefetchCalendars()
+
+	if !s.CalendarPending() {
+		t.Error("CalendarPending = false after RefetchCalendars; the panel would " +
+			"keep showing the old feed's events")
+	}
+	if !s.WaitCalendarWake(2 * time.Second) {
+		t.Error("the fetch loop was not woken; the new feed would not be read " +
+			"until the next interval")
+	}
+}
+
+// The wait returns on its own when nothing asks for a refetch, so the loop
+// still runs on its interval.
+func TestWaitCalendarWakeTimesOut(t *testing.T) {
+	s := NewStore(&config.Config{}, t.TempDir()+"/config.json")
+	start := time.Now()
+	if s.WaitCalendarWake(50 * time.Millisecond) {
+		t.Error("WaitCalendarWake reported a wake with nothing pending")
+	}
+	if d := time.Since(start); d < 40*time.Millisecond {
+		t.Errorf("returned after %v, well before the %v asked for", d, 50*time.Millisecond)
+	}
+}
+
+// Two saves in quick succession collapse into one wake-up rather than queueing.
+//
+// The signal means "refetch soon", so coalescing is correct: the loop re-reads
+// the config when it wakes, and a second pass would fetch the same feeds twice.
+func TestRefetchCalendarsCoalesces(t *testing.T) {
+	s := NewStore(&config.Config{}, t.TempDir()+"/config.json")
+	s.RefetchCalendars()
+	s.RefetchCalendars()
+	s.RefetchCalendars()
+
+	if !s.WaitCalendarWake(time.Second) {
+		t.Fatal("no wake delivered")
+	}
+	if s.WaitCalendarWake(50 * time.Millisecond) {
+		t.Error("a second wake was queued; three saves should collapse into one fetch")
+	}
+}
+
+// A store with no wake channel must not panic. Tests construct these.
+func TestRefetchCalendarsWithoutAChannelIsSafe(t *testing.T) {
+	s := &Store{configPath: t.TempDir() + "/config.json"}
+	s.SetConfig(&config.Config{})
+	s.SetEvents(nil, nil)
+	s.RefetchCalendars() // must not panic or block
+	if !s.CalendarPending() {
+		t.Error("CalendarPending = false; the reset should happen regardless of the channel")
+	}
+}
+
+// A save asks for a redraw, so the panel shows "Fetching..." at once rather
+// than at the next minute boundary.
+func TestRefetchCalendarsRequestsARender(t *testing.T) {
+	s := NewStore(&config.Config{}, t.TempDir()+"/config.json")
+	s.RefetchCalendars()
+
+	done := make(chan struct{})
+	go func() { s.WaitRenderWake(2 * time.Second); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Error("no render requested; the panel would keep the old frame for up to a minute")
+	}
+}
+
+// The render wait returns on its own, so the clock still ticks when nothing
+// has happened.
+func TestWaitRenderWakeTimesOut(t *testing.T) {
+	s := NewStore(&config.Config{}, t.TempDir()+"/config.json")
+	start := time.Now()
+	s.WaitRenderWake(50 * time.Millisecond)
+	if d := time.Since(start); d < 40*time.Millisecond {
+		t.Errorf("returned after %v, well before the %v asked for", d, 50*time.Millisecond)
+	}
+}

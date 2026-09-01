@@ -162,7 +162,10 @@ func main() {
 	// rather than a full interval.
 	cfg0 := store.Config()
 	go delayThen(calendarInterval(cfg0), func() {
-		fetchLoop(store, calendarInterval, fetchCalendars)
+		// The calendar loop is the wakeable one: saving a feed in the portal
+		// should show it now, not at the next interval.
+		fetchLoopWake(store, calendarInterval, fetchCalendars,
+			func(s *Store, d time.Duration) { s.WaitCalendarWake(d) })
 	})
 	go delayThen(weatherInterval(cfg0), func() {
 		fetchLoop(store, weatherInterval, fetchWeather)
@@ -200,7 +203,9 @@ func main() {
 		})
 
 	for {
-		time.Sleep(nextTick(time.Now()))
+		// Woken early by a save or an arriving fetch; otherwise this is the
+		// once-a-minute clock tick.
+		store.WaitRenderWake(nextTick(time.Now()))
 		render()
 	}
 }
@@ -489,6 +494,13 @@ func delayThen(d time.Duration, fn func()) {
 // fresh cfg each iteration, so a refresh interval changed in the portal also
 // takes effect on the next cycle instead of requiring a restart.
 func fetchLoop(store *Store, interval func(*config.Config) time.Duration, fn fetchFunc) {
+	fetchLoopWake(store, interval, fn, func(s *Store, d time.Duration) { time.Sleep(d) })
+}
+
+// fetchLoopWake is fetchLoop with its sleep injected, so the calendar loop can
+// be woken by a portal save while the weather loop keeps a plain sleep.
+func fetchLoopWake(store *Store, interval func(*config.Config) time.Duration, fn fetchFunc,
+	wake func(*Store, time.Duration)) {
 	for {
 		cfg := store.Config()
 		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
@@ -499,7 +511,10 @@ func fetchLoop(store *Store, interval func(*config.Config) time.Duration, fn fet
 		if !ok {
 			wait = retryDelay
 		}
-		time.Sleep(wait)
+		// Interruptible: a feed saved in the portal wakes this immediately
+		// rather than waiting out the interval. wake is ignored beyond ending
+		// the sleep -- the next iteration re-reads the config either way.
+		wake(store, wait)
 	}
 }
 
@@ -532,6 +547,11 @@ func fetchCalendars(ctx context.Context, cfg *config.Config, store *Store) bool 
 		all = all[:cfg.Agenda.MaxEvents]
 	}
 	store.SetEvents(all, errs)
+	// Draw as soon as the events land. Without this a refetch triggered by a
+	// save would finish in a second and sit unseen until the next minute
+	// boundary, so the panel would show "Fetching..." for most of a minute
+	// after the data had already arrived.
+	store.RequestRender()
 	return len(errs) == 0
 }
 
