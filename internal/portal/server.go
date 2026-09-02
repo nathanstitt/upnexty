@@ -42,6 +42,13 @@ type Server struct {
 	WiFi  *wifi.Client
 	MAC   string
 
+	// EtcHostname and ProcHostname override where the hostname is written.
+	// Empty means the real board paths; tests point them at a temp dir, since
+	// writing /etc and /proc needs root and would rename the machine running
+	// the tests. Same device as wifi.Client.ConfPath.
+	EtcHostname  string
+	ProcHostname string
+
 	// Now overrides the clock for the generated sample feed. Nil means
 	// time.Now; tests set it so the fixture's timestamps are predictable.
 	Now func() time.Time
@@ -139,6 +146,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /save/calendars", s.auth(http.HandlerFunc(s.handleSaveCalendars)))
 	mux.Handle("POST /save/place", s.auth(http.HandlerFunc(s.handleSavePlace)))
 	mux.Handle("POST /save/display", s.auth(http.HandlerFunc(s.handleSaveDisplay)))
+	mux.Handle("POST /save/hostname", s.auth(http.HandlerFunc(s.handleSaveHostname)))
 	mux.Handle("POST /save/password", s.auth(http.HandlerFunc(s.handleSavePassword)))
 	mux.Handle("POST /unmute", s.auth(http.HandlerFunc(s.handleUnmute)))
 

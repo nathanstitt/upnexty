@@ -50,7 +50,24 @@ start() {
 		i=$((i + 1))
 	done
 
-	udhcpc -i wlan0 -n -q >/dev/null 2>&1
+	# -x hostname: is what puts the board in the router's DNS. Without it udhcpc
+	# sends no hostname option, the lease is anonymous, and the board is only
+	# reachable at whatever address it happened to get -- which is why deploying
+	# to it meant hunting through arp. The board has no mDNS responder, so this
+	# DHCP option is the only thing that gives it a name on the network.
+	#
+	# Read from /etc/hostname rather than passed in: the dashboard writes that
+	# file when the name is changed from the settings page, so the two agree
+	# without this script knowing about config.json. Falls back to the running
+	# hostname, and the option is omitted entirely if both are empty -- udhcpc
+	# rejects an empty -x hostname:.
+	dhcp_name=$(cat /etc/hostname 2>/dev/null | tr -d '[:space:]')
+	[ -n "$dhcp_name" ] || dhcp_name=$(hostname 2>/dev/null | tr -d '[:space:]')
+	if [ -n "$dhcp_name" ]; then
+		udhcpc -i wlan0 -n -q -x "hostname:$dhcp_name" >/dev/null 2>&1
+	else
+		udhcpc -i wlan0 -n -q >/dev/null 2>&1
+	fi
 	if ip -o addr show wlan0 2>/dev/null | grep -q "inet "; then
 		echo "OK"
 	else

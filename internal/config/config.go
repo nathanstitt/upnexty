@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -54,8 +55,21 @@ type MutedEvent struct {
 	Muted time.Time `json:"muted_at"`
 }
 
+// DeviceConfig holds settings about the board itself rather than what it shows.
+type DeviceConfig struct {
+	// Hostname is the name the board answers to and, more usefully, the name it
+	// announces over DHCP -- which is what puts it in the router's DNS, so it
+	// can be reached at a stable name instead of a lease-dependent address.
+	//
+	// Empty means "whatever the image shipped with": the board already has a
+	// hostname from its rootfs, and overwriting it with a derived default on
+	// first boot would rename a device the user never asked to rename.
+	Hostname string `json:"hostname,omitempty"`
+}
+
 // Config mirrors config.json. Zero values are replaced by defaults in Load.
 type Config struct {
+	Device   DeviceConfig `json:"device"`
 	Location struct {
 		Latitude  float64 `json:"latitude"`
 		Longitude float64 `json:"longitude"`
@@ -80,6 +94,51 @@ type Config struct {
 	// Muted lists events hidden from the panel. Written by a tap on the panel,
 	// cleared from the settings page.
 	Muted []MutedEvent `json:"muted,omitempty"`
+}
+
+// HostnameMaxLen is the longest label DNS allows. The kernel would take more,
+// but a name that cannot be resolved is not useful for the thing this setting
+// exists to do.
+const HostnameMaxLen = 63
+
+// NormalizeHostname lower-cases and trims a hostname the way DNS treats it, so
+// "UpNext " and "upnext" are not two different settings.
+func NormalizeHostname(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// ValidateHostname checks that a name is a legal DNS label: letters, digits and
+// interior hyphens only, 1-63 characters, not starting or ending with a hyphen.
+//
+// This is stricter than what the kernel accepts for sethostname, deliberately.
+// The point of setting a hostname here is that the board announces it over DHCP
+// and the router puts it in DNS; a name that is legal to the kernel but illegal
+// as a label gets silently dropped or mangled by the DHCP server, which looks
+// like the setting simply not working. Rejecting it here means the error lands
+// on the person who can fix it, in the form they typed it.
+//
+// The returned error is phrased for that person -- it is rendered directly on
+// the settings page.
+func ValidateHostname(s string) error {
+	if s == "" {
+		return fmt.Errorf("hostname cannot be empty")
+	}
+	if len(s) > HostnameMaxLen {
+		return fmt.Errorf("hostname is %d characters; the limit is %d",
+			len(s), HostnameMaxLen)
+	}
+	if strings.HasPrefix(s, "-") || strings.HasSuffix(s, "-") {
+		return fmt.Errorf("hostname cannot start or end with a hyphen")
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+		default:
+			return fmt.Errorf("hostname may only contain letters, numbers and "+
+				"hyphens; %q is not allowed", string(r))
+		}
+	}
+	return nil
 }
 
 // IsMuted reports whether an event key is in the muted list.

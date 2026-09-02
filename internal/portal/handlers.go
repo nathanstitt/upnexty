@@ -22,6 +22,7 @@ func (s *Server) page(w http.ResponseWriter, errMsg string, code int) {
 		DefaultPassword: DefaultPassword(s.MAC),
 		Error:           errMsg,
 		WiFiError:       s.getWiFiErr(),
+		Hostname:        s.liveHostname(),
 	}
 	if s.WiFi != nil {
 		if st, err := s.WiFi.Status(); err == nil {
@@ -85,6 +86,86 @@ func (s *Server) handleSaveDisplay(w http.ResponseWriter, r *http.Request) {
 	}
 	applyBrightness(b)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// handleSaveHostname sets the name the board answers to and announces.
+//
+// The name is normalized before validation so the stored value is the one that
+// will actually be used -- "UpNext" and "upnext" are the same host, and saving
+// the former would show the user a name the network never sees.
+//
+// Unlike brightness, a failure to apply is surfaced rather than swallowed: see
+// ApplyHostname. The config is still saved in that case, so the name takes
+// effect at the next boot and the error explains why it has not yet.
+func (s *Server) handleSaveHostname(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.page(w, "That form could not be read. Try again.", http.StatusBadRequest)
+		return
+	}
+	name := config.NormalizeHostname(r.FormValue("hostname"))
+	if err := config.ValidateHostname(name); err != nil {
+		s.page(w, capitalize(err.Error())+".", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.save(func(c *config.Config) error {
+		c.Device.Hostname = name
+		return nil
+	}); err != nil {
+		s.page(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := ApplyHostname(s.etcHostname(), s.procHostname(), name); err != nil {
+		log.Printf("portal: hostname saved as %q but not applied: %v", name, err)
+		s.page(w, fmt.Sprintf("Saved %q, but it could not be applied right now. "+
+			"It will take effect after a reboot.", name), http.StatusInternalServerError)
+		return
+	}
+	// The DHCP lease carries the old name until it is renewed, so the router's
+	// DNS entry does not change until the board reassociates. Saying so is
+	// better than leaving the user to wonder why the new name does not resolve.
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// liveHostname is the name the kernel is using, read through the override path
+// so a test can set it. Falls back to os.Hostname, and to "" if even that
+// fails -- the placeholder is a convenience, not something worth an error page.
+func (s *Server) liveHostname() string {
+	if b, err := os.ReadFile(s.procHostname()); err == nil {
+		if n := strings.TrimSpace(string(b)); n != "" {
+			return n
+		}
+	}
+	n, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	return n
+}
+
+// etcHostname and procHostname resolve the override fields to real paths.
+func (s *Server) etcHostname() string {
+	if s.EtcHostname != "" {
+		return s.EtcHostname
+	}
+	return EtcHostnamePath
+}
+
+func (s *Server) procHostname() string {
+	if s.ProcHostname != "" {
+		return s.ProcHostname
+	}
+	return ProcHostnamePath
+}
+
+// capitalize upper-cases the first letter, so a lower-case error string reads
+// as a sentence on the settings page.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func (s *Server) handleSavePlace(w http.ResponseWriter, r *http.Request) {
@@ -345,6 +426,46 @@ func nextColor(taken map[string]bool) string {
 func applyBrightness(v int) {
 	_ = os.WriteFile("/sys/class/backlight/waveshare_bl/brightness",
 		[]byte(strconv.Itoa(v)), 0o644)
+}
+
+// Where the hostname lives on the board. Both are needed and they do different
+// jobs: /proc is the running kernel's name, which changes immediately and is
+// what os.Hostname reads; /etc is what the rootfs restores at boot.
+const (
+	ProcHostnamePath = "/proc/sys/kernel/hostname"
+	EtcHostnamePath  = "/etc/hostname"
+)
+
+// ApplyHostname sets the running hostname and records it for the next boot.
+//
+// The paths are parameters so this is testable without being root -- the same
+// reason applyStartupBrightness takes one. Callers on the board pass
+// ProcHostnamePath and EtcHostnamePath.
+//
+// Errors are returned rather than swallowed, unlike applyBrightness. Brightness
+// is cosmetic and self-evident -- if the screen does not dim you can see that.
+// A hostname that failed to apply is invisible: the settings page would show
+// the new name, the config would hold it, and the board would keep answering to
+// the old one with no indication anywhere. The caller decides what to do, but
+// it must at least be told.
+//
+// Writing /proc alone would be lost on reboot; writing /etc alone would leave
+// the running system on the old name until then. Neither half is worth having
+// without the other, so a failure on either is reported -- but /etc is written
+// first, because a name that survives a reboot is the more important of the two
+// and should not be skipped just because the running kernel refused.
+func ApplyHostname(etcPath, procPath, name string) error {
+	// Trailing newline: /etc/hostname is read by shell scripts at boot, and the
+	// image's own file has one.
+	if err := os.WriteFile(etcPath, []byte(name+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", etcPath, err)
+	}
+	// No newline here -- this is the kernel's value, not a text file, and a
+	// trailing newline becomes part of the hostname.
+	if err := os.WriteFile(procPath, []byte(name), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", procPath, err)
+	}
+	return nil
 }
 
 // handleUnmute restores an event hidden by a tap on the panel.

@@ -114,6 +114,17 @@ func main() {
 		log.Printf("brightness: %v", err)
 	}
 
+	// Re-apply the saved hostname at boot. /etc/hostname persists on its own, so
+	// this is usually a no-op -- but it is what makes the config the source of
+	// truth rather than a record of what someone once typed. A reflash restores
+	// the image's /etc/hostname while config.json survives on /root, and without
+	// this the board would quietly go back to answering as "luckfox".
+	if h := cfg.Device.Hostname; h != "" {
+		if err := portal.ApplyHostname(portal.EtcHostnamePath, portal.ProcHostnamePath, h); err != nil {
+			log.Printf("hostname: %v", err)
+		}
+	}
+
 	ps := &portal.Server{
 		Store: store,
 		WiFi:  wc,

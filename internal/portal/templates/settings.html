@@ -19,6 +19,20 @@
   <button type="submit">Save network</button>
 </form>
 
+<h1>Device name</h1>
+<form method="post" action="/save/hostname">
+  <div class="row">
+    <label for="hostname">Hostname</label><span class="rule"></span>
+    <div class="field">
+      <input id="hostname" name="hostname" type="text" value="{{.Config.Device.Hostname}}" class="mono" placeholder="{{.Hostname}}" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <p class="hint">The name this board announces to the router, so it can be
+        reached by name instead of by address. Letters, numbers and hyphens.
+        Takes effect on the network the next time the board joins Wi-Fi.</p>
+    </div>
+  </div>
+  <button type="submit">Save device name</button>
+</form>
+
 <h1>Calendars</h1>
 <form method="post" action="/save/calendars">
   {{if not .Config.Calendars}}

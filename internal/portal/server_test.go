@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -594,5 +596,159 @@ func TestSaveCalendarsWithoutARefetcher(t *testing.T) {
 
 	if w.Code != http.StatusSeeOther {
 		t.Errorf("status = %d, want 303", w.Code)
+	}
+}
+
+// hostnameServer is newTestServer with the hostname paths pointed at a temp
+// dir, since the real ones need root and would rename the machine running the
+// tests.
+func hostnameServer(t *testing.T) (*Server, string, string) {
+	t.Helper()
+	s := newTestServer(t)
+	dir := t.TempDir()
+	s.EtcHostname = dir + "/etc_hostname"
+	s.ProcHostname = dir + "/proc_hostname"
+	return s, s.EtcHostname, s.ProcHostname
+}
+
+func postHostname(t *testing.T, s *Server, value string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/save/hostname",
+		strings.NewReader("hostname="+url.QueryEscape(value)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	return w
+}
+
+// The name has to reach three places to be worth anything: the config (so it
+// survives a reflash), /etc/hostname (so it survives a reboot), and the running
+// kernel (so it is true now). Writing only some of them is the failure this
+// pins.
+func TestSaveHostnameWritesConfigAndSystem(t *testing.T) {
+	s, etc, proc := hostnameServer(t)
+
+	if w := postHostname(t, s, "upnext-panel"); w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303 (post-redirect-get)", w.Code)
+	}
+	if got := s.Store.Config().Device.Hostname; got != "upnext-panel" {
+		t.Errorf("config hostname = %q, want upnext-panel", got)
+	}
+	// It must reach disk, not just memory -- a reflash restores the image's
+	// /etc/hostname, and config.json on /root is what puts it back.
+	saved, err := config.Load(s.Store.(*fakeStore).configPath)
+	if err != nil {
+		t.Fatalf("config was not written: %v", err)
+	}
+	if saved.Device.Hostname != "upnext-panel" {
+		t.Errorf("saved hostname = %q, want upnext-panel", saved.Device.Hostname)
+	}
+
+	// /etc/hostname carries a trailing newline; the boot scripts read it as a
+	// text file and the image's own copy has one.
+	if b, err := os.ReadFile(etc); err != nil {
+		t.Errorf("reading %s: %v", etc, err)
+	} else if string(b) != "upnext-panel\n" {
+		t.Errorf("%s = %q, want %q", etc, string(b), "upnext-panel\n")
+	}
+	// /proc must NOT have one -- a trailing newline becomes part of the name.
+	if b, err := os.ReadFile(proc); err != nil {
+		t.Errorf("reading %s: %v", proc, err)
+	} else if string(b) != "upnext-panel" {
+		t.Errorf("%s = %q, want %q with no newline", proc, string(b), "upnext-panel")
+	}
+}
+
+// A name is stored as it will be used. Saving "UpNext" and then announcing
+// "upnext" would show the user a name the network never sees.
+func TestSaveHostnameNormalizes(t *testing.T) {
+	s, _, proc := hostnameServer(t)
+
+	if w := postHostname(t, s, "  UpNext-Panel  "); w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", w.Code)
+	}
+	if got := s.Store.Config().Device.Hostname; got != "upnext-panel" {
+		t.Errorf("config hostname = %q, want upnext-panel (lower-cased, trimmed)", got)
+	}
+	if b, _ := os.ReadFile(proc); string(b) != "upnext-panel" {
+		t.Errorf("applied hostname = %q, want upnext-panel", string(b))
+	}
+}
+
+// A name that is legal to the kernel but illegal as a DNS label is rejected
+// here, where the error can be shown to the person who typed it. Accepting it
+// would mean the DHCP server silently drops or mangles it and the setting
+// simply appears not to work.
+func TestSaveHostnameRejectsInvalid(t *testing.T) {
+	for _, tc := range []struct{ name, value, why string }{
+		{"empty", "", "an empty hostname is not a name"},
+		{"space", "up next", "spaces are not legal in a label"},
+		{"underscore", "up_next", "underscores are not legal in a label"},
+		{"dotted", "upnext.local", "a dot makes it more than one label"},
+		{"leading hyphen", "-upnext", "a label cannot start with a hyphen"},
+		{"trailing hyphen", "upnext-", "a label cannot end with a hyphen"},
+		{"too long", strings.Repeat("a", 64), "64 characters exceeds the 63-char limit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, etc, proc := hostnameServer(t)
+			w := postHostname(t, s, tc.value)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400 -- %s", w.Code, tc.why)
+			}
+			if got := s.Store.Config().Device.Hostname; got != "" {
+				t.Errorf("config hostname = %q, want unchanged", got)
+			}
+			// A rejected name must not have touched the system either.
+			if _, err := os.Stat(etc); err == nil {
+				t.Error("/etc/hostname was written for a rejected name")
+			}
+			if _, err := os.Stat(proc); err == nil {
+				t.Error("/proc hostname was written for a rejected name")
+			}
+		})
+	}
+}
+
+// A hostname that could not be applied is reported, not swallowed. Brightness
+// can be swallowed because a screen that fails to dim is visible; a hostname
+// that failed to apply looks exactly like one that worked.
+func TestSaveHostnameSurfacesApplyFailure(t *testing.T) {
+	s, _, _ := hostnameServer(t)
+	// A path under a file rather than a directory: the write cannot succeed.
+	blocked := t.TempDir() + "/notadir"
+	if err := os.WriteFile(blocked, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.EtcHostname = blocked + "/hostname"
+
+	w := postHostname(t, s, "upnext-panel")
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 -- an unapplied hostname is invisible "+
+			"unless it is reported", w.Code)
+	}
+	// The config still holds it, so a reboot picks it up.
+	if got := s.Store.Config().Device.Hostname; got != "upnext-panel" {
+		t.Errorf("config hostname = %q, want it saved anyway", got)
+	}
+	if body := w.Body.String(); !strings.Contains(body, "reboot") {
+		t.Error("the error does not tell the user the name takes effect after a reboot")
+	}
+}
+
+// The settings page shows the running hostname as a placeholder, so a board
+// whose name has never been set still tells you what it answers to.
+func TestSettingsPageShowsLiveHostname(t *testing.T) {
+	s, _, proc := hostnameServer(t)
+	if err := os.WriteFile(proc, []byte("luckfox"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	if !strings.Contains(w.Body.String(), `placeholder="luckfox"`) {
+		t.Error("settings page does not show the running hostname as a placeholder")
 	}
 }
