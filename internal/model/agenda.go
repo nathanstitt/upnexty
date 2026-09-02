@@ -41,7 +41,28 @@ const (
 	// tracks elapsed time. 6px/min makes a 1h meeting ~360px.
 	AgendaPxPerMin = 6.0
 	AgendaMinCurW  = 150.0 // floor so a 5-minute current event still reads
-	GapMinutes     = 10    // free time shorter than this is not worth a chip
+
+	// StackWidthPx is the width of a stack that does not contain now. Duration
+	// scaling exists so the NOW bar can map elapsed progress across the current
+	// slot; a future cluster has no bar to bisect, and scaling it would make a
+	// 4h conflict 1440px wide and swallow the rest of the row.
+	//
+	// It is wider than a single card because a stacked row carries a full time
+	// range rather than just a start ("10:30 - 11:00 AM"), and that line has to
+	// fit on one line beside a title set at 21px.
+	StackWidthPx = 300.0
+
+	// MaxStackRows is how many events a stack shows before the last row becomes
+	// a summary of the rest. Three is what fits: the band is 218px, and a
+	// fourth row would leave each card too short for a title and a time.
+	MaxStackRows = 3
+
+	// StackRowGapPx is the vertical gap between a stack's rows. It is subtracted
+	// when hit-testing, so a tap in the space between two rows misses both
+	// rather than landing on whichever one absorbed it.
+	StackRowGapPx = 8
+
+	GapMinutes = 10 // free time shorter than this is not worth a chip
 	// ImminentMinutes is the "soon" threshold, used for two things: the left
 	// panel switches from FREE FOR to a countdown inside it (nowblock.go), and a
 	// card gets the amber "IN 5M" badge. Lowering it widens the FREE FOR window
@@ -115,16 +136,26 @@ type Card struct {
 	Overnight bool
 	SepText   string // "Tomorrow", "Monday, Sep 1" on a day separator
 
-	// Stacked holds the in-progress events when Kind is CardStack. They share
+	// Stacked holds the overlapping events when Kind is CardStack. They share
 	// the slot's width and split its height, so one NOW bar bisects all of them
 	// at the same elapsed boundary.
 	Stacked []Card
 
+	// Overflow marks a stacked child that stands for the events beyond the row
+	// cap rather than for one event: its Event is zero and Title carries their
+	// joined titles. Tapping it opens a sheet listing them, so capping the rows
+	// hides the events from the row without making them unreachable.
+	Overflow []calendar.Event
+
 	// ElapsedPct is how much of a CardStack's span has passed, as a percentage
-	// width for the shade overlay.
+	// width for the shade overlay. Zero unless the stack contains now.
 	ElapsedPct float64
 
 	startText string // start time in the configured clock format
+	// rangeText is the row's own start and end, set only on a stacked child.
+	// The rows of a stack share one slot and one NOW bar, so without it two
+	// meetings of different lengths are indistinguishable.
+	rangeText string
 }
 
 // CardRow is the laid-out agenda.
@@ -171,10 +202,9 @@ func BuildAgenda(events []calendar.Event, now time.Time, clock24 bool) CardRow {
 	anchorIdx := -1
 	anchorSweepPx := 0.0
 
-	// Simultaneous in-progress events collapse into one stacked slot so the
-	// single NOW bar bisects them all at the same point.
-	current := currentEvents(events, now)
-	stackPlaced := false
+	// Overlapping events collapse into one stacked slot rather than sitting
+	// side by side, which would read as a sequence when it is a conflict.
+	clusters := clusterOverlapping(events)
 
 	// Seed the walk from the present rather than from the first event, so the
 	// span between now and whatever is next is an entry like any other.
@@ -200,8 +230,13 @@ func BuildAgenda(events []calendar.Event, now time.Time, clock24 bool) CardRow {
 	// today, and it must be emitted before the overnight chip rather than
 	// after it.
 	lastDay := now.Format("2006-01-02")
-	for _, e := range events {
-		isCurrent := !e.Start.After(now) && e.End.After(now)
+	for _, cluster := range clusters {
+		// The cluster's first event is its earliest -- input is sorted by start
+		// -- so it is what the gap and day-separator arithmetic reads. clusterEnd
+		// is the hull's end, which is what the boundary advances to.
+		e := cluster[0]
+		clusterEnd := clusterHullEnd(cluster)
+		isCurrent := !e.Start.After(now) && clusterEnd.After(now)
 
 		// Free-time chip between entries separated by more than GapMinutes.
 		if !isCurrent {
@@ -255,6 +290,7 @@ func BuildAgenda(events []calendar.Event, now time.Time, clock24 bool) CardRow {
 					} else {
 						chip.GapText = shortDuration(gap)
 					}
+					row.Cards = append(row.Cards, chip)
 					// The bar sweeps a chip it sits inside, in proportion to
 					// how much of the span has elapsed. Only reachable for a
 					// gap that does not straddle now -- the straddling case is
@@ -281,15 +317,31 @@ func BuildAgenda(events []calendar.Event, now time.Time, clock24 bool) CardRow {
 			x += DaySepWidthPx + CardGapPx
 		}
 		lastDay = day
-		prevEnd = e.End
+		// Advance to the hull's end, never backwards. Assigning e.End here let a
+		// short event nested inside a longer one rewind the boundary, so the next
+		// gap was measured from the wrong place and over-reported. Taking the
+		// cluster's end makes prevEnd monotonic by construction.
+		prevEnd = clusterEnd
+
+		// More than one event in the cluster means they overlap: stack them in
+		// one slot rather than laying them out as if they were consecutive.
+		if len(cluster) > 1 {
+			slot := buildStack(cluster, now, clock24)
+			slot.XPx = x
+			if isCurrent {
+				anchorIdx = len(row.Cards)
+				anchorSweepPx = slot.ElapsedPct / 100 * slot.WidthPx
+			} else if anchorIdx < 0 && e.Start.After(now) {
+				anchorIdx = len(row.Cards)
+				anchorSweepPx = 0
+			}
+			row.Cards = append(row.Cards, slot)
+			x += slot.WidthPx + CardGapPx
+			continue
+		}
 
 		if isCurrent {
-			// Emit the whole stack once, in place of the first current event.
-			if stackPlaced {
-				continue
-			}
-			stackPlaced = true
-			slot := buildStack(current, now, clock24)
+			slot := buildStack(cluster, now, clock24)
 			slot.XPx = x
 			anchorIdx = len(row.Cards)
 			anchorSweepPx = slot.ElapsedPct / 100 * slot.WidthPx
@@ -368,49 +420,124 @@ func clampBarX(x float64) float64 {
 	return min(max(x, 0), AgendaViewportPx-NowBarMarginPx)
 }
 
-// currentEvents returns every event in progress at now, in input order.
-func currentEvents(events []calendar.Event, now time.Time) []calendar.Event {
-	var out []calendar.Event
+// clusterOverlapping groups events whose spans intersect into runs, chaining
+// transitively: if A overlaps B and B overlaps C, all three land in one cluster
+// even when A and C do not touch. Events that overlap are a conflict, and a
+// conflict is one thing to show, not several.
+//
+// events must be sorted by start. The running end is the cluster's maximum, not
+// the previous event's -- a short event nested inside a long one must not close
+// the cluster, or the events after it would be split from the block they
+// actually collide with.
+func clusterOverlapping(events []calendar.Event) [][]calendar.Event {
+	var out [][]calendar.Event
 	for _, e := range events {
-		if !e.Start.After(now) && e.End.After(now) {
-			out = append(out, e)
+		if n := len(out); n > 0 && e.Start.Before(clusterHullEnd(out[n-1])) {
+			out[n-1] = append(out[n-1], e)
+			continue
 		}
+		out = append(out, []calendar.Event{e})
 	}
 	return out
 }
 
-// buildStack packs the in-progress events into one duration-scaled slot.
-//
-// The slot spans from the earliest current start to the latest current end, so
-// overlapping meetings share one elapsed boundary rather than each carrying
-// their own NOW bar.
-func buildStack(evs []calendar.Event, now time.Time, clock24 bool) Card {
-	slot := Card{Kind: CardStack, State: StateCurrent}
-	if len(evs) == 0 {
-		return slot
-	}
-	start, end := evs[0].Start, evs[0].End
-	for _, e := range evs[1:] {
-		if e.Start.Before(start) {
-			start = e.Start
-		}
+// clusterHullEnd is the latest end in the cluster. A cluster is sorted by start
+// but not by end, so the last event's end is not the hull's.
+func clusterHullEnd(cluster []calendar.Event) time.Time {
+	end := cluster[0].End
+	for _, e := range cluster[1:] {
 		if e.End.After(end) {
 			end = e.End
 		}
 	}
-	span := end.Sub(start)
-	slot.WidthPx = max(span.Minutes()*AgendaPxPerMin, AgendaMinCurW)
-	if span > 0 {
-		slot.ElapsedPct = min(100, max(0, now.Sub(start).Seconds()/span.Seconds()*100))
+	return end
+}
+
+// buildStack packs a cluster of overlapping events into one slot, stacked
+// vertically so the conflict is visible as a conflict.
+//
+// The slot spans from the earliest start to the latest end. When it contains
+// now, that hull is what the single NOW bar bisects -- overlapping meetings
+// share one elapsed boundary rather than each carrying their own bar -- and the
+// slot is duration-scaled so the bar's position across it means elapsed time.
+// A slot that does not contain now has no bar to place, so it takes a fixed
+// width instead; see StackWidthPx.
+//
+// Beyond MaxStackRows the last row becomes a summary of the remaining events
+// rather than one of them. They stay reachable by tapping it.
+func buildStack(evs []calendar.Event, now time.Time, clock24 bool) Card {
+	slot := Card{Kind: CardStack}
+	if len(evs) == 0 {
+		return slot
 	}
-	for _, e := range evs {
-		slot.Stacked = append(slot.Stacked, Card{
+	start := evs[0].Start
+	end := clusterHullEnd(evs)
+
+	span := end.Sub(start)
+	isCurrent := !start.After(now) && end.After(now)
+	switch {
+	case !end.After(now):
+		slot.State = StatePast
+	case isCurrent:
+		slot.State = StateCurrent
+	case start.Sub(now) <= ImminentMinutes*time.Minute:
+		slot.State = StateSoon
+	default:
+		slot.State = StateFuture
+	}
+
+	if isCurrent {
+		slot.WidthPx = max(span.Minutes()*AgendaPxPerMin, AgendaMinCurW)
+		if span > 0 {
+			slot.ElapsedPct = min(100, max(0, now.Sub(start).Seconds()/span.Seconds()*100))
+		}
+	} else {
+		slot.WidthPx = StackWidthPx
+	}
+
+	// With more events than rows, the last row is spent on the remainder, so
+	// only MaxStackRows-1 of them get a row of their own.
+	shown := evs
+	var rest []calendar.Event
+	if len(evs) > MaxStackRows {
+		shown, rest = evs[:MaxStackRows-1], evs[MaxStackRows-1:]
+	}
+
+	for _, e := range shown {
+		child := Card{
 			Kind:      CardEvent,
-			State:     StateCurrent,
+			State:     slot.State,
 			Event:     e,
 			Ghost:     isGhost(e),
-			Badge:     fmt.Sprintf("%s LEFT", shortDuration(e.End.Sub(now))),
 			startText: formatClock(e.Start, clock24),
+		}
+		// A stacked row states its own end, not just its start. The rows share
+		// one slot and one NOW bar, which sweeps the hull -- so a 30-minute
+		// meeting and the hour it overlaps look identical and the bar can only
+		// be telling the truth about one of them. Drawing each row to its own
+		// width was tried and is worse: at any slot width that keeps the
+		// proportion legible, the narrow row's title wraps and truncates. The
+		// times carry the duration instead, where they cannot be misread.
+		child.rangeText = formatRange(e.Start, e.End, clock24)
+		// The badge answers the question the card's state raises: how much is
+		// left of something running, how long until something imminent starts.
+		// A future or past row has neither question.
+		switch {
+		case isCurrent && e.End.After(now):
+			child.Badge = fmt.Sprintf("%s LEFT", shortDuration(e.End.Sub(now)))
+		case slot.State == StateSoon:
+			child.Badge = fmt.Sprintf("IN %s", shortDuration(e.Start.Sub(now)))
+		}
+		slot.Stacked = append(slot.Stacked, child)
+	}
+	if len(rest) > 0 {
+		// Full width: the summary stands for several events with several spans,
+		// so there is no one duration for it to be drawn to.
+		slot.Stacked = append(slot.Stacked, Card{
+			Kind:     CardEvent,
+			State:    slot.State,
+			Overflow: rest,
+			WidthPx:  100,
 		})
 	}
 	return slot
@@ -452,8 +579,31 @@ func shortDuration(d time.Duration) string {
 // IsGap reports whether this entry is a free-time chip.
 func (c Card) IsGap() bool { return c.Kind == CardGap }
 
-// IsStack reports whether this entry is the current-slot stack.
+// IsStack reports whether this entry is a stack of overlapping events.
 func (c Card) IsStack() bool { return c.Kind == CardStack }
+
+// IsOverflow reports whether this stacked child summarizes the events past the
+// row cap rather than standing for one event.
+func (c Card) IsOverflow() bool { return len(c.Overflow) > 0 }
+
+// OverflowText is the summary row's label: the hidden events' titles, joined.
+// The row is one line, so CSS clamps this -- the count is not spelled out
+// because a title the user recognizes says more than a number.
+func (c Card) OverflowText() string {
+	titles := make([]string, 0, len(c.Overflow))
+	for _, e := range c.Overflow {
+		titles = append(titles, e.Title)
+	}
+	return strings.Join(titles, " · ")
+}
+
+// RowsClass sizes the type inside a stack by how many rows share its height.
+// The engine has neither :has() nor container queries, and child combinators
+// parse but are silently ignored, so the count has to reach the stylesheet as a
+// class rather than being derived there.
+func (c Card) RowsClass() string {
+	return fmt.Sprintf(" n%d", len(c.Stacked))
+}
 
 // IsDaySep reports whether this entry is a day separator.
 func (c Card) IsDaySep() bool { return c.Kind == CardDaySep }
@@ -484,6 +634,10 @@ func (c Card) BadgeClass() string {
 
 // StartText is the card's start time in the panel's clock format.
 func (c Card) StartText() string { return c.startText }
+
+// RangeText is a stacked row's own start and end, e.g. "10:30 – 11:00 AM".
+// Empty on any card that is not a row of a stack.
+func (c Card) RangeText() string { return c.rangeText }
 
 // DurationText is the card's length, e.g. "30M".
 func (c Card) DurationText() string {

@@ -520,7 +520,11 @@ html, body {
    
    The horizontal inset stays on the row -- only the block axis is affected --
    so CardPadPx keeps its meaning and the agenda's x arithmetic is unchanged.
-   The values stay pinned to the model by TestStylesheetMatchesModelGeometry. */
+   The values stay pinned to the model by TestStylesheetMatchesModelGeometry.
+
+   .evt-stack takes the same inset from here, but it needs one more thing to
+   make it stick -- see the note on that rule. Its rows zero the margin again,
+   since the wrapper already carries it for all of them. */
 .evt, .gap, .day-sep, .evt-stack, .agenda-empty {
   margin-top: 10px; margin-bottom: 12px;
 }
@@ -606,20 +610,141 @@ html, body {
 
 /* ---- Current slot: in-progress events stacked vertically, sized to their
    duration span so the single NOW bar bisects the whole stack. ---- */
+/* Height is stated, not stretched. A stretched child is offset by the row's
+   inset and THEN sized to the row's full height -- the same engine behaviour the
+   margin rule above documents for .evt -- so the stack ran from 40 to ~291
+   against a band ending at 280, and its last row was drawn over the weather
+   chart. .evt does not hit this because its own height is content-driven; the
+   stack's rows divide whatever height the wrapper reports, so an overshoot here
+   is distributed into every row rather than clipped off one border.
+
+   218 is the band minus its inset (240 - 10 - 12), which is exactly the height
+   model.CardRects hit-tests against. Pinned to it by
+   TestStylesheetMatchesModelGeometry. */
+/* The inset is padding here, not margin.
+
+   .evt gets its 10/12 inset from the shared margin rule above, but that does
+   not work for this element: a stretched child is sized to the row's FULL
+   height whatever its margins say, so the wrapper spanned the whole 240px band
+   starting at y=40. Its rows then divided 240px instead of 218 and the last one
+   was drawn over the weather chart below. Verified by filling the wrapper and
+   measuring where the fill landed -- margin, height, and align-self all left it
+   at 40..279, so none of them is what bounds this box.
+
+   The stack is a column inside the row, and it hits gap #18b: a stretched child
+   is offset by the row's inset and then sized to the row's FULL height, so the
+   wrapper spanned the whole 240px band and its rows -- which divide the
+   wrapper -- ran past the bottom onto the weather chart.
+
+   The fix is to stop it stretching and state its height. align-self: flex-start
+   is what makes the height apply at all; with the default stretch the height is
+   ignored and the box is the full band. Both parts are required, and the
+   combination is the ONE that works: padding on the wrapper, a zero-flex
+   spacer, and a bare height each leave the rows at 0..239. Measured in an
+   isolated probe -- padding+spacer put the rows at 0..239, height+margin at
+   10..227, which is exactly the band's inset.
+
+   218 is AgendaHeightPx less AgendaRowPadTop/Bot, the same arithmetic
+   model.CardRects uses, and the values stay pinned by
+   TestStylesheetMatchesModelGeometry. */
 .evt-stack {
-  flex-shrink: 0; position: relative; align-self: stretch;
+  flex-shrink: 0; position: relative;
+  align-self: flex-start;
+  height: 218px;
   display: flex; flex-direction: column; gap: 8px;
 }
+/* Each row's height is STATED, per row count, not divided by flex.
+
+   flex: 1 1 0 is the correct way to split a parent's height and it is what this
+   rule used to say -- but this engine sizes a flex child from its content and
+   ignores the share, the same behaviour #clock-row and #wx-widget both work
+   around by declaring a height. The rows therefore grew to fit their text and
+   ran out of the wrapper, with the third row of a capped stack landing on the
+   weather chart. */
 .evt-stack .evt.stacked {
-  flex: 1 1 0; min-height: 0; width: 100%;
-  justify-content: center;
-  /* Repeat the current-card treatment: .evt.current's selector does not reach
-     here through the stack wrapper, so the card would render unchromed. */
+  min-height: 0; flex: 0 0 auto;
+  /* Content sits at the top, not centred. justify-content: center spread the
+     title and time to opposite ends of a row far taller than either needed,
+     which read as a hole in the middle of every stacked card. */
+  justify-content: flex-start;
+  padding: 8px 14px;
+  /* A stacked row is still an .evt, so it picks up the band inset from the
+     shared margin rule above -- 22px per row, which is what pushed a two-row
+     stack 44px past the band and put the third row of a capped stack on top of
+     the weather chart. The wrapper already carries that inset for all of them,
+     so the rows must not carry it again. */
+  margin-top: 0; margin-bottom: 0;
+}
+/* Type for a stacked row: the base, refined per row count below.
+
+   A stacked row must restate font-size. The cascade reaches it from .evt-title,
+   but that is the 25px card size, which at two rows to a 218px band wraps an
+   ordinary title onto two lines and pushes the time out of the box.
+
+   (An earlier comment here claimed the .n2/.n3 forms below match nothing on this
+   engine. That was wrong -- they work, and an isolated probe confirms all three
+   descendant forms do. The bug being chased at the time was a malformed comment
+   a few rules up, which the parser was discarding through.) */
+.evt-stack .evt.stacked .evt-title {
+  font-size: 19px; line-height: 1.15; -webkit-line-clamp: 2;
+  margin-bottom: 2px;
+}
+.evt-stack .evt.stacked .evt-time { font-size: 17px; line-height: 1.2; }
+/* Row heights. These are the band (218) less the 8px gaps, divided by the row
+   count, and they MUST match the arithmetic in model.CardRects -- a row painted
+   somewhere other than its rect is a tap that opens the neighbour's sheet.
+   Pinned by TestStackRectsMatchTheRender. */
+.evt-stack.n1 .evt.stacked { height: 218px; }
+.evt-stack.n2 .evt.stacked { height: 105px; }
+.evt-stack.n3 .evt.stacked { height: 67px; }
+/* Repeat the current-card treatment: .evt.current's selector does not reach
+   here through the stack wrapper, so the card would render unchromed. Scoped to
+   a current stack -- unscoped, every future conflict painted itself in the
+   in-progress blue and read as happening now. */
+.evt-stack.current .evt.stacked {
   background: linear-gradient(160deg, rgba(74,144,217,0.24), rgba(74,144,217,0.07));
   border: 1px solid rgba(74,144,217,0.55);
   border-top-width: 3px;
 }
-.evt-stack .evt.stacked .evt-title { font-size: 21px; height: 56px; }
+.evt-stack.soon .evt.stacked {
+  border-top-width: 3px;
+  box-shadow: 0 0 0 1px rgba(245,158,11,0.3);
+}
+
+/* Type scale by row count. Three rows share the same 218px two do, so the third
+   is bought out of the type: (218 - 2*8)/3 is ~67px a row, and once padding and
+   a border come off there is room for one line of title and one of time, not
+   two of either. The count arrives as a class from Go because this engine has
+   neither :has() nor container queries, and a child combinator would parse and
+   then be silently ignored.
+
+   No fixed height on a title anywhere here. It used to be 56px, which reserved
+   two lines whether or not the title needed them and left a visible hole above
+   the time on every one-line card. The clamp bounds the tall case instead, and
+   a short title now simply takes one line. */
+
+/* Three rows get ~67px each. Minus 16px of padding and the 3px accent border
+   that is ~46px of content: one line of title at 18px (21) and one of time at
+   15px (18), which fits with 7px to spare. Two lines of either does not fit,
+   hence the single-line clamp. */
+.evt-stack.n3 .evt.stacked .evt-title {
+  font-size: 18px; line-height: 1.15; -webkit-line-clamp: 1;
+  margin-bottom: 1px;
+}
+.evt-stack.n3 .evt.stacked .evt-time { font-size: 15px; line-height: 1.2; }
+
+/* The summary row stands for the events past the cap, so it is set as a note
+   rather than as a card: no accent along the top, and the titles run to one
+   line. Tapping it opens the sheet that lists them. */
+.evt-stack .evt.stacked.overflow {
+  background: rgba(255,255,255,0.03);
+  border: 1px dashed var(--border);
+  justify-content: center;
+}
+.evt-stack .evt.stacked.overflow .evt-title {
+  font-size: 16px; font-weight: 500; line-height: 1.2;
+  -webkit-line-clamp: 1; color: var(--text-mid);
+}
 /* Elapsed shade over the part of the slot already spent. No border: the single
    NOW bar is the only vertical line over it. */
 .evt-elapsed {
@@ -1000,21 +1125,47 @@ html, body {
         
       
         
-        <div class="evt soon"
-             style="width:196.0px;border-top-color:#4f9cff">
-          <div class="evt-title">Standup</div>
-          <div class="evt-time">10:52 AM</div>
-          <div class="evt-meta">10M</div>
-          <div class="evt-badge soon">IN 10m</div>
+        <div class="evt-stack soon n2" style="width:300.0px">
+          
+          
+          <div class="evt soon stacked"
+               style="border-top-color:#4f9cff">
+            <div class="evt-title">Standup</div>
+            
+            <div class="evt-time">10:52 – 11:02 AM</div>
+            <div class="evt-badge soon">IN 10m</div>
+          </div>
+          
+          
+          
+          <div class="evt soon stacked"
+               style="border-top-color:#ff7a59">
+            <div class="evt-title">Design Review Sync</div>
+            
+            <div class="evt-time">10:58 – 11:27 AM</div>
+            <div class="evt-badge soon">IN 16m</div>
+          </div>
+          
+          
+          
+        </div>
+        
+      
+        
+        <div class="gap" style="width:86.0px">
+          
+          <div class="gap-dur">45m</div>
+          <div class="gap-label">Free</div>
+          
         </div>
         
       
         
         <div class="evt"
-             style="width:196.0px;border-top-color:#ff7a59">
-          <div class="evt-title">Design Review Sync</div>
-          <div class="evt-time">10:58 AM</div>
-          <div class="evt-meta">29M</div>
+             style="width:196.0px;border-top-color:#6ad28a">
+          <div class="evt-title">Focus Block</div>
+          <div class="evt-time">12:12 PM</div>
+          <div class="evt-meta">1H</div>
           
         </div>
         

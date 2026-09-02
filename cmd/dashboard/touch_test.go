@@ -344,3 +344,50 @@ func TestCornerTapWithoutAGathererIsInert(t *testing.T) {
 		t.Error("corner tap opened a dialog with no info to show")
 	}
 }
+
+// A tap on a capped stack's summary row opens the list of what it hides, not a
+// blank event sheet. The cap makes those events invisible on the row; without
+// this they would be unreachable too.
+func TestTapOnTheOverflowRowOpensTheConflictList(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Hour)
+	cfg := &config.Config{}
+	cfg.Location.Timezone = "UTC"
+
+	start, end := now.Add(2*time.Hour), now.Add(3*time.Hour)
+	var evs []calendar.Event
+	for _, title := range []string{"One", "Two", "Three", "Four", "Five"} {
+		evs = append(evs, calendar.Event{
+			Title: title, UID: title, Color: "#4f9cff", Start: start, End: end,
+		})
+	}
+	store := NewStore(cfg, filepath.Join(t.TempDir(), "config.json"))
+	vm := model.Build(now, cfg, evs, nil, nil, nil)
+
+	rects := vm.Agenda.CardRects()
+	if len(rects) != model.MaxStackRows {
+		t.Fatalf("got %d rects, want %d", len(rects), model.MaxStackRows)
+	}
+	last := rects[model.MaxStackRows-1].Rect
+	st := &dialogState{}
+
+	if !handleTap(st, vm, cfg, store, last.X+last.W/2, last.Y+last.H/2) {
+		t.Fatal("tap on the summary row did not request a redraw")
+	}
+	if st.dlg == nil {
+		t.Fatal("tap on the summary row opened nothing")
+	}
+	if !strings.Contains(st.dlg.Title, "3") {
+		t.Errorf("dialog titled %q, want the count of hidden events", st.dlg.Title)
+	}
+	if len(st.dlg.Rows) != 3 {
+		t.Errorf("dialog lists %d events, want 3", len(st.dlg.Rows))
+	}
+	// No mute target and no mute action: the sheet describes several events, so
+	// there is nothing for the action to apply to.
+	if st.key != "" {
+		t.Errorf("mute key is %q, want empty", st.key)
+	}
+	if len(st.dlg.Actions) != 0 {
+		t.Errorf("sheet offers %d actions, want none", len(st.dlg.Actions))
+	}
+}

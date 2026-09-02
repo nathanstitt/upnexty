@@ -656,15 +656,22 @@ func TestCardBordersAreInsideTheBand(t *testing.T) {
 	wantTop := float64(model.RibbonHeightPx + model.AgendaRowPadTop)
 	wantBot := wantTop + float64(model.AgendaHeightPx-model.AgendaRowPadTop-model.AgendaRowPadBot) - 1
 
-	// Sample a column inside the first event card rather than in the 14px gap
-	// between two, which is band background and has no border to find.
+	// Sample a column inside an event card rather than in the 14px gap between
+	// two, which is band background and has no border to find.
+	//
+	// It must be a full-height card, not a stacked one: a stack's rows split the
+	// band between them, so the first one's borders sit a third of the way down
+	// and this would read that as a card drawn in the wrong place.
+	wantH := float64(model.AgendaHeightPx - model.AgendaRowPadTop - model.AgendaRowPadBot)
 	var rect model.Rect
 	for _, cr := range vm.Agenda.CardRects() {
-		rect = cr.Rect
-		break
+		if cr.Rect.H == wantH {
+			rect = cr.Rect
+			break
+		}
 	}
 	if rect.W == 0 {
-		t.Fatal("fixture has no card rects")
+		t.Fatal("fixture has no full-height card rect")
 	}
 	x := int(rect.X + rect.W/2)
 
@@ -688,5 +695,166 @@ func TestCardBordersAreInsideTheBand(t *testing.T) {
 	if float64(bot) < wantBot-2 || float64(bot) > wantBot+2 {
 		t.Errorf("card bottom border at y=%d, want ~%.0f -- it is being drawn "+
 			"outside the band and clipped", bot, wantBot)
+	}
+}
+
+// Three rows in a stack must all be drawn inside the band.
+//
+// The band is 218px and the type scale for three rows is what buys the space:
+// before it, .evt-stack .evt.stacked .evt-title reserved a fixed 56px whatever
+// the row count, which at three rows exceeds the ~37px of content box a row has
+// and pushes the last row's ink past the bottom of the band. Nothing clips at
+// the document level, so the golden HTML and a host-side raster of the row
+// alone both look right -- the overflow is only visible against the band, which
+// is what this samples.
+func TestThreeUpStackStaysInsideTheBand(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+
+	// Five events at one time: three rows, the last summarizing the rest.
+	start, end := now.Add(2*time.Hour), now.Add(3*time.Hour)
+	var evs []calendar.Event
+	for _, title := range []string{"One", "Two", "Three", "Four", "Five"} {
+		evs = append(evs, calendar.Event{
+			Title: title, Color: "#4f9cff", Start: start, End: end,
+		})
+	}
+	vm := model.Build(now, c, evs, nil, nil, nil)
+
+	var stack *model.Card
+	for i := range vm.Agenda.Cards {
+		if vm.Agenda.Cards[i].IsStack() {
+			stack = &vm.Agenda.Cards[i]
+			break
+		}
+	}
+	if stack == nil {
+		t.Fatal("fixture produced no stack")
+	}
+	if len(stack.Stacked) != model.MaxStackRows {
+		t.Fatalf("stack has %d rows, want %d", len(stack.Stacked), model.MaxStackRows)
+	}
+
+	html, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := fb.RenderHTML(context.Background(), []byte(html), 1920, 480,
+		omnidoc.WithResourceLoader(FontLoader()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Sample the stack's own columns, below the band. The weather zone starts
+	// here, so any ink from a row overrunning its box lands on top of it.
+	rects := vm.Agenda.CardRects()
+	if len(rects) == 0 {
+		t.Fatal("no card rects")
+	}
+	left := int(rects[0].Rect.X)
+	right := int(rects[0].Rect.X + rects[0].Rect.W)
+	bandBottom := model.RibbonHeightPx + model.AgendaHeightPx
+
+	// The card chrome is markedly brighter than the zone beneath it. A row
+	// drawn past the band lights a run of these; a stray antialiased pixel does
+	// not, hence the per-row count rather than an any-hit test.
+	for y := bandBottom + 2; y < bandBottom+14; y++ {
+		lit := 0
+		for x := left; x < right; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if int(r>>8)+int(g>>8)+int(b>>8) > 150 {
+				lit++
+			}
+		}
+		if lit > 40 {
+			t.Errorf("y=%d has %d lit pixels under the stack: a row is drawn "+
+				"past the band and is clipped on the panel", y, lit)
+		}
+	}
+}
+
+// A stack's tap targets must match the rows the engine actually paints.
+//
+// Nothing reads the rasterized page back, so a stack whose rows render 10px
+// above their rects is invisible: the cards look right and the taps land on the
+// neighbouring row. That is what happened -- .evt-stack is painted stretched
+// and its wrapper margin is ignored, so its rows start at the band's top edge
+// while every other entry is inset by AgendaRowPadTop. model.CardRects encodes
+// that exception; this is what proves it still holds.
+func TestStackRectsMatchTheRender(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 42, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+	start, end := now.Add(2*time.Hour), now.Add(3*time.Hour)
+	evs := []calendar.Event{
+		{Title: "JP office hours", Color: "#4f9cff", Start: start, End: end},
+		{Title: "Product leads", Color: "#ff7a59", Start: start, End: end},
+	}
+	vm := model.Build(now, c, evs, nil, nil, nil)
+
+	rects := vm.Agenda.CardRects()
+	if len(rects) != 2 {
+		t.Fatalf("got %d rects, want 2 stacked rows", len(rects))
+	}
+
+	html, err := Render(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := fb.RenderHTML(context.Background(), []byte(html), 1920, 480,
+		omnidoc.WithResourceLoader(FontLoader()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A row's top border is a 3px rule in the event's own accent colour, drawn
+	// edge to edge. Finding it is what locates the row: the fill varies with
+	// state (a future row is barely washed) and the glyphs inside break up any
+	// column scan, but the accent rule is always there and always saturated.
+	//
+	// The two events are given distinct, strongly separated colours by the
+	// fixture so each row's border is identifiable on its own.
+	left := int(rects[0].Rect.X) + 8
+	right := int(rects[0].Rect.X+rects[0].Rect.W) - 8
+	// borderRun reports the widest run of accent-coloured pixels on a scanline.
+	accentRun := func(y int) int {
+		n := 0
+		for x := left; x < right; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			r8, g8, b8 := int(r>>8), int(g>>8), int(b>>8)
+			// An accent is a saturated hue: one channel clearly dominant, and
+			// bright enough not to be the band or a border at 5% alpha.
+			maxc := max(r8, max(g8, b8))
+			minc := min(r8, min(g8, b8))
+			if maxc > 90 && maxc-minc > 40 {
+				n++
+			}
+		}
+		return n
+	}
+	nearAccent := func(want int) bool {
+		for dy := -4; dy <= 4; dy++ {
+			if accentRun(want+dy) > (right-left)/2 {
+				return true
+			}
+		}
+		return false
+	}
+	for i, rc := range rects {
+		if !nearAccent(int(rc.Rect.Y)) {
+			t.Errorf("row %d has no accent border at y=%.0f, where its rect "+
+				"starts -- the rect is not on the row it stands for", i, rc.Rect.Y)
+		}
+	}
+
+	// And nothing is drawn past the band, which is the failure that put a
+	// stacked row on top of the weather chart.
+	bandBottom := model.RibbonHeightPx + model.AgendaHeightPx
+	for y := bandBottom + 2; y < bandBottom+40; y++ {
+		if accentRun(y) > (right-left)/2 {
+			t.Errorf("the stack paints at y=%d, past the band at %d", y, bandBottom)
+			break
+		}
 	}
 }

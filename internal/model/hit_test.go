@@ -157,3 +157,81 @@ func TestKeyIsStableAcrossTimezones(t *testing.T) {
 		t.Errorf("same instant produced different keys: %q vs %q", a.Key(), b.Key())
 	}
 }
+
+// Each row of a stack is tappable on its own, so two conflicting meetings can
+// be told apart by touching the one you mean.
+func TestEventAtHitsIndividualStackRows(t *testing.T) {
+	now := time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		{Title: "JP office hours", UID: "a", Color: "#4f9cff",
+			Start: now.Add(2 * time.Hour), End: now.Add(3 * time.Hour)},
+		{Title: "Product leads", UID: "b", Color: "#ff7a59",
+			Start: now.Add(2 * time.Hour), End: now.Add(3 * time.Hour)},
+	}
+	row := BuildAgenda(evs, now, false)
+
+	rects := row.CardRects()
+	if len(rects) != 2 {
+		t.Fatalf("got %d rects, want 2 -- one per stacked row", len(rects))
+	}
+	// The rows must not overlap, or the upper one would swallow taps meant for
+	// the lower.
+	if rects[0].Rect.Y+rects[0].Rect.H > rects[1].Rect.Y {
+		t.Errorf("row 0 ends at y=%v but row 1 starts at y=%v",
+			rects[0].Rect.Y+rects[0].Rect.H, rects[1].Rect.Y)
+	}
+	for _, cr := range rects {
+		cx := cr.Rect.X + cr.Rect.W/2
+		cy := cr.Rect.Y + cr.Rect.H/2
+		got, ok := row.EventAt(cx, cy)
+		if !ok {
+			t.Fatalf("centre of the %q row hit nothing", cr.Event.Title)
+		}
+		if got.Title != cr.Event.Title {
+			t.Errorf("tap on the %q row returned %q", cr.Event.Title, got.Title)
+		}
+	}
+}
+
+// The summary row stands for several events, so it opens the conflict list
+// rather than any one event's sheet. Returning the zero event from EventAt
+// would raise a blank dialog, which is why the two lookups are separate.
+func TestOverflowRowIsTappableAsAGroup(t *testing.T) {
+	now := time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+	start, end := now.Add(2*time.Hour), now.Add(3*time.Hour)
+	var evs []calendar.Event
+	for _, title := range []string{"One", "Two", "Three", "Four", "Five"} {
+		evs = append(evs, calendar.Event{
+			Title: title, UID: title, Color: "#4f9cff", Start: start, End: end,
+		})
+	}
+	row := BuildAgenda(evs, now, false)
+
+	rects := row.CardRects()
+	if len(rects) != MaxStackRows {
+		t.Fatalf("got %d rects, want %d", len(rects), MaxStackRows)
+	}
+	last := rects[MaxStackRows-1]
+	if len(last.Overflow) != 3 {
+		t.Fatalf("the last rect stands for %d events, want 3", len(last.Overflow))
+	}
+
+	cx := last.Rect.X + last.Rect.W/2
+	cy := last.Rect.Y + last.Rect.H/2
+	if _, ok := row.EventAt(cx, cy); ok {
+		t.Error("EventAt claimed the summary row; it stands for several events")
+	}
+	got, ok := row.OverflowAt(cx, cy)
+	if !ok {
+		t.Fatal("OverflowAt missed the summary row")
+	}
+	if len(got) != 3 || got[0].Title != "Three" {
+		t.Errorf("summary row returned %d events starting %q, want 3 from \"Three\"",
+			len(got), got[0].Title)
+	}
+
+	// A tap on the rows above it still opens a single event.
+	if _, ok := row.OverflowAt(cx, rects[0].Rect.Y+rects[0].Rect.H/2); ok {
+		t.Error("OverflowAt claimed an ordinary event row")
+	}
+}

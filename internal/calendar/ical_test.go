@@ -404,3 +404,79 @@ func TestTrimPastAcrossMergedFeeds(t *testing.T) {
 		t.Errorf("kept %q, want the most recent past event across both feeds", got[0].Title)
 	}
 }
+
+// A finished conflict survives the trim whole.
+//
+// KeepPast counts slots, not events: two meetings that overlapped share one
+// card on the panel, and keeping only one of them makes the last thing that
+// happened look like a single ordinary meeting. Found on the real calendar --
+// "Product-leads" (11:00-12:00) and "JP office hours" (11:00-11:30) both ran
+// from 11:00, the trim dropped one, and the row showed no conflict.
+func TestTrimPastKeepsAWholePastConflict(t *testing.T) {
+	now := time.Date(2026, 9, 2, 14, 34, 0, 0, time.UTC)
+	merged := []Event{
+		// An earlier, separate slot -- this is what should be dropped.
+		{Title: "standup", Start: now.Add(-6 * time.Hour), End: now.Add(-5*time.Hour - 30*time.Minute)},
+		// The last past slot: two overlapping events.
+		{Title: "product-leads", Start: now.Add(-3 * time.Hour), End: now.Add(-2 * time.Hour)},
+		{Title: "jp-office-hours", Start: now.Add(-3 * time.Hour), End: now.Add(-2*time.Hour - 30*time.Minute)},
+		{Title: "upcoming", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour)},
+	}
+	got := TrimPast(merged, now, KeepPast)
+
+	var titles []string
+	for _, e := range got {
+		titles = append(titles, e.Title)
+	}
+	want := []string{"product-leads", "jp-office-hours", "upcoming"}
+	if len(got) != len(want) {
+		t.Fatalf("kept %v, want %v -- the past conflict must survive as a pair", titles, want)
+	}
+	for i := range want {
+		if titles[i] != want[i] {
+			t.Errorf("kept[%d] = %q, want %q", i, titles[i], want[i])
+		}
+	}
+}
+
+// A nested past event does not split the slot: the group's end is its maximum,
+// so a short meeting inside a long one stays in the same slot rather than
+// starting a new one and pushing the long one out.
+func TestTrimPastNestedPastEventStaysInItsSlot(t *testing.T) {
+	now := time.Date(2026, 9, 2, 14, 34, 0, 0, time.UTC)
+	merged := []Event{
+		{Title: "older", Start: now.Add(-8 * time.Hour), End: now.Add(-7 * time.Hour)},
+		{Title: "block", Start: now.Add(-4 * time.Hour), End: now.Add(-2 * time.Hour)},
+		{Title: "nested", Start: now.Add(-3 * time.Hour), End: now.Add(-150 * time.Minute)},
+		{Title: "upcoming", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour)},
+	}
+	got := TrimPast(merged, now, KeepPast)
+	if len(got) != 3 {
+		var titles []string
+		for _, e := range got {
+			titles = append(titles, e.Title)
+		}
+		t.Fatalf("kept %v, want block+nested+upcoming", titles)
+	}
+	if got[0].Title != "block" || got[1].Title != "nested" {
+		t.Errorf("kept %q,%q -- the nested event must stay with its block",
+			got[0].Title, got[1].Title)
+	}
+}
+
+// Non-overlapping past events are one slot each, so the original behaviour --
+// keep the single most recent finished event -- is unchanged.
+func TestTrimPastStillKeepsOneWhenNothingOverlaps(t *testing.T) {
+	now := time.Date(2026, 9, 2, 14, 34, 0, 0, time.UTC)
+	merged := []Event{
+		{Title: "first", Start: now.Add(-6 * time.Hour), End: now.Add(-5 * time.Hour)},
+		{Title: "second", Start: now.Add(-4 * time.Hour), End: now.Add(-3 * time.Hour)},
+		{Title: "third", Start: now.Add(-2 * time.Hour), End: now.Add(-1 * time.Hour)},
+		{Title: "upcoming", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour)},
+	}
+	got := TrimPast(merged, now, KeepPast)
+	if len(got) != 2 || got[0].Title != "third" {
+		t.Fatalf("kept %d events starting %q, want 2 starting \"third\"",
+			len(got), got[0].Title)
+	}
+}

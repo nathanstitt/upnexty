@@ -199,3 +199,19 @@ func formatClock(t time.Time, clock24 bool) string {
 	}
 	return t.Format("3:04 PM")
 }
+
+// formatRange renders a start and end as one span, e.g. "10:30 – 11:00 AM".
+//
+// The meridiem is dropped from the start when both ends share it, which is the
+// common case and what keeps the line short enough for a stacked row. In 24h
+// format there is no meridiem to elide.
+func formatRange(start, end time.Time, clock24 bool) string {
+	if clock24 {
+		return start.Format("15:04") + " – " + end.Format("15:04")
+	}
+	s := start.Format("3:04 PM")
+	if start.Format("PM") == end.Format("PM") {
+		s = start.Format("3:04")
+	}
+	return s + " – " + end.Format("3:04 PM")
+}

@@ -56,14 +56,20 @@ func TestSampleICalFillsTheTimeline(t *testing.T) {
 	vm := buildSample(t)
 
 	timed := len(sampleEvents) - 1 // all but the all-day entry
+	// Count events, not cards: Sprint Planning and Vendor Call overlap by
+	// design (see sampleEvents), so they share one stacked slot. Every timed
+	// event must still reach the row, which is what this asserts.
 	var events int
 	for _, c := range vm.Agenda.Cards {
-		if !c.IsGap() {
+		switch {
+		case c.IsStack():
+			events += len(c.Stacked)
+		case !c.IsGap() && !c.IsDaySep():
 			events++
 		}
 	}
 	if events != timed {
-		t.Errorf("agenda has %d event cards, want %d", events, timed)
+		t.Errorf("agenda holds %d events, want %d", events, timed)
 	}
 	if len(vm.AllDay) == 0 {
 		t.Error("AllDay is empty; the all-day pill row would not render")

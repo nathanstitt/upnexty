@@ -131,16 +131,25 @@
         {{else if .IsDaySep}}
         <div class="day-sep"><span>{{.SepText}}</span></div>
         {{else if .IsStack}}
-        <div class="evt-stack" style="width:{{px .WidthPx}}">
+        <div class="evt-stack{{.StateClass}}{{.RowsClass}}" style="width:{{px .WidthPx}}">
           {{range .Stacked}}
-          <div class="evt current stacked{{if .Ghost}} ghost{{end}}"
+          {{if .IsOverflow}}
+          <div class="evt stacked overflow">
+            <div class="evt-title">{{.OverflowText}}</div>
+          </div>
+          {{else}}
+          <div class="evt{{.StateClass}} stacked{{if .Ghost}} ghost{{end}}"
                style="border-top-color:{{.Event.Color}}">
             <div class="evt-title">{{.Event.Title}}</div>
-            <div class="evt-time">{{.StartText}}</div>
-            {{if .Badge}}<div class="evt-badge live">{{.Badge}}</div>{{end}}
+            {{/* The full range, not just the start: the rows share one slot and
+                 one NOW bar, so the end is the only thing distinguishing a
+                 half-hour row from the hour it overlaps. */}}
+            <div class="evt-time">{{.RangeText}}</div>
+            {{if .Badge}}<div class="evt-badge {{.BadgeClass}}">{{.Badge}}</div>{{end}}
           </div>
           {{end}}
-          <div class="evt-elapsed" style="width:{{pct .ElapsedPct}}"></div>
+          {{end}}
+          {{if .ElapsedPct}}<div class="evt-elapsed" style="width:{{pct .ElapsedPct}}"></div>{{end}}
         </div>
         {{else}}
         <div class="evt{{.StateClass}}{{if .Ghost}} ghost{{end}}"

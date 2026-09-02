@@ -28,9 +28,18 @@ func fixtureVM(t *testing.T) model.ViewModel {
 		// PlaceLabels marks it Drifted — this fixture exists specifically to
 		// exercise the leader-mark ({{if .Drifted}}) template branch, which
 		// two well-separated events would never trigger.
+		// These two also overlap (Standup runs to +20, the Sync starts at +16),
+		// so the row renders them as one stacked slot -- which is what covers
+		// the stack branch of the template.
 		{Title: "Standup", Color: "#4f9cff", Start: now.Add(10 * time.Minute), End: now.Add(20 * time.Minute)},
 		{Title: "Design Review Sync", Color: "#ff7a59", Location: "Room B",
 			Start: now.Add(16 * time.Minute), End: now.Add(45 * time.Minute)},
+		// Clear of the pair above, so the fixture still has a loose card. The
+		// stack and the single card are different template branches and the
+		// tests need both; with only the overlapping pair there was no ordinary
+		// .evt in the document at all.
+		{Title: "Focus Block", Color: "#6ad28a",
+			Start: now.Add(90 * time.Minute), End: now.Add(150 * time.Minute)},
 		{Title: "Company Holiday", AllDay: true, Color: "#4f9cff",
 			Start: now.Truncate(24 * time.Hour), End: now.Add(24 * time.Hour)},
 	}
@@ -385,6 +394,31 @@ func TestStylesheetMatchesModelGeometry(t *testing.T) {
 			"model.RibbonHeightPx is the top of the card band in CardRects"},
 		{"#agenda-row", fmt.Sprintf("height: %dpx", model.AgendaHeightPx),
 			"model.AgendaHeightPx is the card band's height in CardRects"},
+		// The band's vertical inset is on the children, not the row -- see the
+		// comment above the shared margin rule in style.css -- so this is where
+		// AgendaRowPadTop/Bot actually live. CardRects subtracts both.
+		{".evt, .gap, .day-sep, .evt-stack, .agenda-empty",
+			fmt.Sprintf("margin-top: %dpx", model.AgendaRowPadTop),
+			"model.AgendaRowPadTop is where the card band starts in CardRects"},
+		{".evt, .gap, .day-sep, .evt-stack, .agenda-empty",
+			fmt.Sprintf("margin-bottom: %dpx", model.AgendaRowPadBot),
+			"model.AgendaRowPadBot shortens the card band in CardRects"},
+		// A stack states its own height -- see the note on the rule. CardRects
+		// derives the rows from AgendaHeightPx, so this is what keeps the
+		// painted rows and the tap targets on the same grid.
+		{".evt-stack",
+			fmt.Sprintf("height: %dpx", model.AgendaHeightPx-model.AgendaRowPadTop-model.AgendaRowPadBot),
+			"a stack is stretched, so it must state the band height itself"},
+
+		// A stack's rows are hit-tested individually, so the gap between them
+		// has to be the gap CardRects excludes -- otherwise a tap near a row's
+		// edge opens the neighbour's sheet.
+		{".evt-stack", fmt.Sprintf("gap: %dpx", model.StackRowGapPx),
+			"model.StackRowGapPx is the row gap CardRects subtracts"},
+		{".evt", fmt.Sprintf("width: %dpx", model.CardWidthPx),
+			"model.CardWidthPx is the card width CardRects hit-tests"},
+		{".gap", fmt.Sprintf("width: %dpx", model.GapChipWidthPx),
+			"model.GapChipWidthPx is what BuildAgenda advances x by for a chip"},
 	} {
 		if body := ruleBody(c.selector); !strings.Contains(body, c.decl) {
 			t.Errorf("%s does not declare %q: %s", c.selector, c.decl, c.why)

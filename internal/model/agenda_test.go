@@ -517,3 +517,258 @@ func TestNoElapsedChipWithoutHistory(t *testing.T) {
 		t.Errorf("first card is %v, want the overnight chip", row.Cards[0].Kind)
 	}
 }
+
+// Ordinary gaps between upcoming events must produce chips.
+//
+// This is the plain case -- neither straddling now nor crossing midnight --
+// and it regressed silently: restructuring the gap block around a `split` flag
+// dropped the append, so the chip was constructed, its width added to the row's
+// x, and then discarded. Every break in the day vanished while the layout still
+// reserved space for them.
+//
+// The straddling and overnight cases had tests; this one did not, which is why
+// a whole day of missing free time reached the panel.
+func TestGapsBetweenUpcomingEventsAppear(t *testing.T) {
+	now := time.Date(2026, 9, 2, 10, 15, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		// In progress, so the row opens with a stack rather than a gap.
+		{Title: "Otter Team", Start: now.Add(-15 * time.Minute), End: now.Add(15 * time.Minute)},
+		{Title: "JP office hours", Start: now.Add(45 * time.Minute), End: now.Add(75 * time.Minute)},
+		{Title: "SafeInsights", Start: now.Add(4 * time.Hour), End: now.Add(5 * time.Hour)},
+	}
+	row := BuildAgenda(evs, now, false)
+
+	var gaps []string
+	for _, c := range row.Cards {
+		if c.Kind == CardGap {
+			gaps = append(gaps, c.GapText)
+		}
+	}
+	want := []string{"30m", "2h45m"}
+	if len(gaps) != len(want) {
+		t.Fatalf("got %d gap chips %v, want %v -- the breaks between events are missing",
+			len(gaps), gaps, want)
+	}
+	for i := range want {
+		if gaps[i] != want[i] {
+			t.Errorf("gap %d reads %q, want %q", i, gaps[i], want[i])
+		}
+	}
+
+	// And the chips are in the row, not merely accounted for in its width: a
+	// card's XPx must not overlap the one before it.
+	prevRight := -1.0
+	for _, c := range row.Cards {
+		if c.XPx < prevRight {
+			t.Errorf("card at XPx=%.0f overlaps the previous entry ending at %.0f",
+				c.XPx, prevRight)
+		}
+		prevRight = c.XPx + c.WidthPx
+	}
+}
+
+// The case this feature exists for: two meetings booked at the same hour, both
+// still ahead. Laid out side by side they read as one after the other, which is
+// exactly the thing the row must not say.
+func TestFutureConflictStacks(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		agEv("JP office hours", now.Add(2*time.Hour), now.Add(3*time.Hour)),
+		agEv("Product leads", now.Add(2*time.Hour), now.Add(3*time.Hour)),
+	}
+	row := BuildAgenda(evs, now, false)
+
+	var stacks, loose int
+	for _, c := range row.Cards {
+		switch c.Kind {
+		case CardStack:
+			stacks++
+			if len(c.Stacked) != 2 {
+				t.Errorf("stack holds %d events, want 2", len(c.Stacked))
+			}
+			if c.State == StateCurrent {
+				t.Error("a stack two hours out is painted as in-progress")
+			}
+			if c.ElapsedPct != 0 {
+				t.Errorf("ElapsedPct is %v, want 0 -- nothing has elapsed in a "+
+					"future conflict and the shade would be drawn over it",
+					c.ElapsedPct)
+			}
+			if c.WidthPx != StackWidthPx {
+				t.Errorf("stack is %vpx wide, want StackWidthPx (%v) -- only the "+
+					"current slot is duration-scaled", c.WidthPx, StackWidthPx)
+			}
+		case CardEvent:
+			loose++
+		}
+	}
+	if stacks != 1 {
+		t.Errorf("got %d stacks, want exactly 1", stacks)
+	}
+	if loose != 0 {
+		t.Errorf("got %d loose cards, want 0 -- both events belong to the stack", loose)
+	}
+}
+
+// A partial overlap is still a conflict: a short call inside a long block
+// collides with it just as surely as two events sharing a start time.
+func TestPartialOverlapStacks(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		agEv("Deep work", now.Add(1*time.Hour), now.Add(3*time.Hour)),
+		agEv("Quick sync", now.Add(90*time.Minute), now.Add(2*time.Hour)),
+	}
+	row := BuildAgenda(evs, now, false)
+
+	for _, c := range row.Cards {
+		if c.Kind == CardStack {
+			if len(c.Stacked) != 2 {
+				t.Errorf("stack holds %d events, want 2", len(c.Stacked))
+			}
+			return
+		}
+	}
+	t.Error("the nested event did not stack with the block containing it")
+}
+
+// Overlap chains: A and C never touch, but both touch B, so all three are one
+// conflict. Grouping only the pairs that overlap directly would put A and C in
+// separate slots and imply they are unrelated.
+func TestOverlapChainsTransitively(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		agEv("A", now.Add(60*time.Minute), now.Add(90*time.Minute)),
+		agEv("B", now.Add(75*time.Minute), now.Add(135*time.Minute)),
+		agEv("C", now.Add(120*time.Minute), now.Add(150*time.Minute)),
+	}
+	row := BuildAgenda(evs, now, false)
+
+	for _, c := range row.Cards {
+		if c.Kind == CardStack {
+			if len(c.Stacked) != 3 {
+				t.Errorf("stack holds %d events, want 3 (A-B-C chained)", len(c.Stacked))
+			}
+			return
+		}
+	}
+	t.Error("no stack: the chain was split into separate slots")
+}
+
+// Events that merely sit next to each other must NOT stack. Back-to-back is the
+// common case, and collapsing it would turn an ordinary day into a wall of
+// conflicts.
+func TestAdjacentEventsDoNotStack(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		agEv("First", now.Add(1*time.Hour), now.Add(2*time.Hour)),
+		// Starts exactly when the first ends: touching, not overlapping.
+		agEv("Second", now.Add(2*time.Hour), now.Add(3*time.Hour)),
+	}
+	row := BuildAgenda(evs, now, false)
+
+	var loose, stacks int
+	for _, c := range row.Cards {
+		switch c.Kind {
+		case CardEvent:
+			loose++
+		case CardStack:
+			stacks++
+		}
+	}
+	if stacks != 0 {
+		t.Errorf("got %d stacks, want 0 -- these events do not overlap", stacks)
+	}
+	if loose != 2 {
+		t.Errorf("got %d loose cards, want 2", loose)
+	}
+}
+
+// Past the cap the last row stops being an event and becomes a summary of the
+// rest, so five conflicting events still fit three rows without dropping two of
+// them silently.
+func TestStackCapsRowsAndSummarizesTheRest(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+	start, end := now.Add(2*time.Hour), now.Add(3*time.Hour)
+	evs := []calendar.Event{
+		agEv("One", start, end),
+		agEv("Two", start, end),
+		agEv("Three", start, end),
+		agEv("Four", start, end),
+		agEv("Five", start, end),
+	}
+	row := BuildAgenda(evs, now, false)
+
+	for _, c := range row.Cards {
+		if c.Kind != CardStack {
+			continue
+		}
+		if len(c.Stacked) != MaxStackRows {
+			t.Fatalf("stack has %d rows, want %d", len(c.Stacked), MaxStackRows)
+		}
+		// The first two rows are events in their own right.
+		for i, want := range []string{"One", "Two"} {
+			if got := c.Stacked[i].Event.Title; got != want {
+				t.Errorf("row %d is %q, want %q", i, got, want)
+			}
+			if c.Stacked[i].IsOverflow() {
+				t.Errorf("row %d is a summary, want an event", i)
+			}
+		}
+		last := c.Stacked[MaxStackRows-1]
+		if !last.IsOverflow() {
+			t.Fatal("the last row is an event, want the summary of the rest")
+		}
+		if len(last.Overflow) != 3 {
+			t.Errorf("summary stands for %d events, want 3", len(last.Overflow))
+		}
+		// The titles are what the row shows -- a count alone would not say
+		// which meetings were folded away.
+		if got := last.OverflowText(); got != "Three · Four · Five" {
+			t.Errorf("summary reads %q, want %q", got, "Three · Four · Five")
+		}
+		return
+	}
+	t.Error("no stack was produced")
+}
+
+// A short event nested inside a long one must not rewind the boundary the next
+// gap is measured from. It used to: prevEnd took each event's end unconditially,
+// so the nested event's earlier end became the start of the following gap and
+// the chip over-reported the free time by the remainder of the block.
+func TestNestedEventDoesNotRewindTheGap(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		// In progress, so the row opens with a stack rather than a gap.
+		agEv("Otter Team", now.Add(-15*time.Minute), now.Add(15*time.Minute)),
+		agEv("Deep work", now.Add(1*time.Hour), now.Add(3*time.Hour)),
+		// Ends 90 minutes before the block it sits inside does.
+		agEv("Quick sync", now.Add(90*time.Minute), now.Add(2*time.Hour)),
+		agEv("Retro", now.Add(4*time.Hour), now.Add(5*time.Hour)),
+	}
+	row := BuildAgenda(evs, now, false)
+
+	var gaps []string
+	for _, c := range row.Cards {
+		if c.Kind == CardGap && c.GapText != "" {
+			gaps = append(gaps, c.GapText)
+		}
+	}
+	// The gap after the cluster runs from the block's end (+3h) to the retro
+	// (+4h). Measured from the nested event's end it would read 2h.
+	want := []string{"45m", "1h"}
+	if len(gaps) != len(want) {
+		t.Fatalf("got gaps %v, want %v", gaps, want)
+	}
+	for i := range want {
+		if gaps[i] != want[i] {
+			t.Errorf("gap %d reads %q, want %q -- measured from the wrong boundary",
+				i, gaps[i], want[i])
+		}
+	}
+}

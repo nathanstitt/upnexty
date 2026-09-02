@@ -107,11 +107,16 @@ func httpGet(ctx context.Context, url string) ([]byte, error) {
 // discarded occurrences per feed rather than a longer row.
 const pastWindow = 24 * time.Hour
 
-// KeepPast is how many already-finished events survive the trim.
+// KeepPast is how many already-finished slots survive the trim.
 //
 // One: the agenda shows the last thing that happened for context and nothing
 // further back. The row is a departure board, and a column of dim finished
 // cards is history rather than what is next.
+//
+// Slots rather than events, so a finished conflict survives whole -- see
+// TrimPast. One slot can therefore be several cards, which is the point: the
+// last thing that happened was two overlapping meetings, and showing one of
+// them misstates it.
 const KeepPast = 1
 
 func Fetch(ctx context.Context, src config.CalendarSource, now time.Time, daysAhead int, loc *time.Location) ([]Event, error) {
@@ -221,26 +226,49 @@ func Parse(body []byte, calName, color string, now time.Time, daysAhead int, own
 	return events, nil
 }
 
-// TrimPast drops all but the last keep already-finished events, preserving
+// TrimPast drops all but the last keep already-finished *slots*, preserving
 // order. Events still running or yet to start are never dropped.
 //
-// Call it on the merged, sorted set: applied per feed it keeps one past event
-// per calendar rather than one overall.
+// A slot, not an event: overlapping events share one card on the panel, so
+// counting events lets the trim cut a conflict in half. It did -- "Product-leads"
+// and "JP office hours" both ran from 11:00, the trim kept one and dropped the
+// other, and the row showed a single ordinary card where two events had
+// actually collided. The last thing that happened was a conflict, and the panel
+// said it was not.
+//
+// Overlap is chained transitively here, the same rule model.BuildAgenda uses to
+// group them, so the two agree on what "one slot" means.
+//
+// Call it on the merged, sorted set: applied per feed it keeps one past slot
+// per calendar rather than one overall. events must be sorted by start.
 func TrimPast(events []Event, now time.Time, keep int) []Event {
-	past := 0
-	for _, e := range events {
-		if !e.End.After(now) {
-			past++
+	// Walk the past events, marking where each new slot begins. A slot ends
+	// when an event starts at or after the running maximum end -- the max, not
+	// the previous event's end, so an event nested inside a longer one does not
+	// split the group.
+	var slotStarts []int // index into events of each past slot's first event
+	var slotEnd time.Time
+	for i, e := range events {
+		if e.End.After(now) {
+			continue // not past; never dropped
+		}
+		if len(slotStarts) == 0 || !e.Start.Before(slotEnd) {
+			slotStarts = append(slotStarts, i)
+			slotEnd = e.End
+		} else if e.End.After(slotEnd) {
+			slotEnd = e.End
 		}
 	}
-	if past <= keep {
+	if len(slotStarts) <= keep {
 		return events
 	}
-	drop := past - keep
+
+	// Everything before the first kept slot goes. Future events cannot appear
+	// before a past one in a sorted slice, so a plain index cut is safe.
+	cut := slotStarts[len(slotStarts)-keep]
 	out := events[:0:0]
-	for _, e := range events {
-		if !e.End.After(now) && drop > 0 {
-			drop--
+	for i, e := range events {
+		if i < cut && !e.End.After(now) {
 			continue
 		}
 		out = append(out, e)

@@ -150,6 +150,23 @@ from the plan, so not an implementation defect — a product call.
 
 ---
 
+## Known gaps
+
+### The NOW headline names one of several simultaneous events
+
+`findCurrentAndNext` (`internal/model/nowblock.go:149-169`) takes the first
+in-progress event as `current` and ignores the rest. The card row stacks
+overlapping events into one slot, so during a live conflict the panel shows two
+or three meetings side by side while the headline to their left names only one
+of them.
+
+Deliberately out of scope when conflict stacking was built: the row is where the
+conflict is expressed, and the headline is a single-line summary with no obvious
+place to put a second title. Worth revisiting if a live conflict turns out to
+read as the headline being wrong rather than being brief.
+
+- [ ] Decide whether the headline should signal a conflict, e.g. "+1 more".
+
 ## Latent — no action unless the trigger happens
 
 ### Go/shell AP recursion, if `StopAP` ever gains a caller

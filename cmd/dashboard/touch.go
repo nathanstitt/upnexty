@@ -131,6 +131,20 @@ func handleTap(st *dialogState, vm model.ViewModel, cfg *config.Config, store *S
 		return true
 	}
 
+	// A capped stack's summary row stands for several events, so it opens a list
+	// rather than one event's detail. Tested before EventAt, which reports a
+	// miss there precisely so this can claim the tap.
+	if evs, ok := vm.Agenda.OverflowAt(x, y); ok {
+		d := model.ConflictDialog(evs, cfg.Units.Clock24h)
+		st.dlg = &d
+		// No key and no muted target: the mute action needs one event, and this
+		// sheet does not offer it. Same as the device sheet.
+		st.key = ""
+		st.openedAt = time.Now()
+		st.timeout = dialogTimeout
+		return true
+	}
+
 	e, ok := vm.Agenda.EventAt(x, y)
 	if !ok {
 		return false

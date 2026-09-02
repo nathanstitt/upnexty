@@ -135,6 +135,38 @@ func EventDialog(e calendar.Event, clock24 bool, muted bool) Dialog {
 	return d
 }
 
+// ConflictDialog lists the events a capped stack's summary row stands for.
+//
+// A stack shows three rows at most, so a fourth and fifth conflicting event
+// appear only as titles in the last one. Without this sheet the cap would make
+// them unreachable -- visible enough to notice, with no way to read them. The
+// row's tap opens this instead.
+//
+// There is no mute action: muting needs one target, and this sheet is several.
+// Tapping a row to drill into a single event would be the natural next step,
+// but a tap costs a full re-render on this hardware, so the sheet states the
+// events and stops there.
+func ConflictDialog(evs []calendar.Event, clock24 bool) Dialog {
+	d := Dialog{
+		Eyebrow: "Conflict",
+		Title:   fmt.Sprintf("%d overlapping events", len(evs)),
+		DismissAction: DialogAction{
+			ID: ActionClose, Label: "Close", Style: "close",
+		},
+	}
+	// The accent comes from the first event so the sheet carries a colour from
+	// the row it opened out of, the way EventDialog does.
+	if len(evs) > 0 {
+		d.AccentColor = evs[0].Color
+	}
+	for _, e := range evs {
+		d.Rows = append(d.Rows, DialogRow{
+			Label: formatClock(e.Start, clock24), Value: e.Title,
+		})
+	}
+	return d
+}
+
 // eventWhen renders the time range the way the panel states times elsewhere:
 // an all-day event has no clock, and an event ending on its start day shows
 // the day once.
