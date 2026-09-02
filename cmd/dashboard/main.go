@@ -550,6 +550,11 @@ func fetchCalendars(ctx context.Context, cfg *config.Config, store *Store) bool 
 	// MaxEvents cutoff drops the chronologically latest events across ALL
 	// feeds, not just whichever feed happened to be appended last.
 	sort.SliceStable(all, func(i, j int) bool { return all[i].Start.Before(all[j].Start) })
+	// Trim past events across the merged set, not per feed. Parse cannot do it:
+	// it sees one calendar at a time, so with several feeds each would keep its
+	// own last finished event and the row would show one past card per
+	// calendar, with a bare gap chip between each pair.
+	all = calendar.TrimPast(all, now, calendar.KeepPast)
 	if cfg.Agenda.MaxEvents > 0 && len(all) > cfg.Agenda.MaxEvents {
 		all = all[:cfg.Agenda.MaxEvents]
 	}

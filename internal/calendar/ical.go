@@ -98,6 +98,22 @@ func httpGet(ctx context.Context, url string) ([]byte, error) {
 // local timezone, used for any DTSTART/EXDATE/RECURRENCE-ID without an
 // explicit TZID (including every all-day VALUE=DATE event); pass nil to fall
 // back to UTC.
+// pastWindow is how far back occurrences are expanded.
+//
+// Wide enough to reach the start of any reasonable day, because the panel shows
+// the last thing that happened however long ago it was -- an event that ended
+// this morning is the context that makes "nothing until tomorrow" legible.
+// Parse trims to KeepPast entries after sorting, so widening this costs a few
+// discarded occurrences per feed rather than a longer row.
+const pastWindow = 24 * time.Hour
+
+// KeepPast is how many already-finished events survive the trim.
+//
+// One: the agenda shows the last thing that happened for context and nothing
+// further back. The row is a departure board, and a column of dim finished
+// cards is history rather than what is next.
+const KeepPast = 1
+
 func Fetch(ctx context.Context, src config.CalendarSource, now time.Time, daysAhead int, loc *time.Location) ([]Event, error) {
 	body, err := httpGet(ctx, src.URL)
 	if err != nil {
@@ -197,7 +213,39 @@ func Parse(body []byte, calName, color string, now time.Time, daysAhead int, own
 	// pre-serialization struct. Sort by time, not the formatted string — RFC3339
 	// lexicographic order breaks across mixed UTC offsets.
 	sort.SliceStable(events, func(i, j int) bool { return events[i].Start.Before(events[j].Start) })
+
+	// Deliberately NOT trimmed here. Parse sees one feed at a time, and the
+	// panel wants the last finished event across all of them -- trimming per
+	// feed would keep one past card per calendar. The caller merges, sorts,
+	// then calls TrimPast.
 	return events, nil
+}
+
+// TrimPast drops all but the last keep already-finished events, preserving
+// order. Events still running or yet to start are never dropped.
+//
+// Call it on the merged, sorted set: applied per feed it keeps one past event
+// per calendar rather than one overall.
+func TrimPast(events []Event, now time.Time, keep int) []Event {
+	past := 0
+	for _, e := range events {
+		if !e.End.After(now) {
+			past++
+		}
+	}
+	if past <= keep {
+		return events
+	}
+	drop := past - keep
+	out := events[:0:0]
+	for _, e := range events {
+		if !e.End.After(now) && drop > 0 {
+			drop--
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // icalOwnerFromURL extracts the calendar owner's email from a Google iCal URL of
@@ -311,7 +359,7 @@ func icalExpand(ve *icalVEvent, calName, color string, now, cutoff time.Time, ov
 		}
 	}
 	inWindow := func(s time.Time) bool {
-		return !s.Add(dur).Before(now.Add(-time.Hour)) && !s.After(cutoff)
+		return !s.Add(dur).Before(now.Add(-pastWindow)) && !s.After(cutoff)
 	}
 
 	rrule, recurring := ve.get("RRULE")
@@ -424,7 +472,7 @@ func icalRecur(rule string, dtstart, now, cutoff time.Time, dur time.Duration, l
 		if t.After(cutoff) {
 			return false
 		}
-		if !t.Add(dur).Before(now.Add(-time.Hour)) {
+		if !t.Add(dur).Before(now.Add(-pastWindow)) {
 			out = append(out, t)
 		}
 		return true

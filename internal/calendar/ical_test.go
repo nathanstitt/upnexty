@@ -333,3 +333,74 @@ func TestParseUnescapesText(t *testing.T) {
 	}
 	t.Fatalf("unescaped title not found; got %v", titles(evs))
 }
+
+// vevent builds a minimal timed VEVENT for the trim test.
+func vevent(title string, start, end time.Time) string {
+	f := func(t time.Time) string { return t.UTC().Format("20060102T150405Z") }
+	return "BEGIN:VEVENT\r\nUID:" + title + "@t\r\nDTSTART:" + f(start) +
+		"\r\nDTEND:" + f(end) + "\r\nSUMMARY:" + title + "\r\nEND:VEVENT\r\n"
+}
+
+// The last finished event survives however long ago it ended, and only that
+// one: the panel shows it for context, not the whole morning.
+//
+// Parse keeps every occurrence inside pastWindow -- it sees one feed at a time,
+// and trimming there would keep one past card per calendar. TrimPast is applied
+// by the caller to the merged set.
+func TestTrimPastKeepsOnlyTheLastPastEvent(t *testing.T) {
+	now := time.Date(2026, 9, 1, 16, 42, 0, 0, time.UTC)
+	ics := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" +
+		vevent("morning", now.Add(-8*time.Hour), now.Add(-7*time.Hour)) +
+		vevent("midday", now.Add(-5*time.Hour), now.Add(-4*time.Hour)) +
+		vevent("office hours", now.Add(-4*time.Hour), now.Add(-3*time.Hour-30*time.Minute)) +
+		vevent("tomorrow", now.Add(16*time.Hour), now.Add(17*time.Hour)) +
+		"END:VCALENDAR\r\n"
+
+	parsed, err := Parse([]byte(ics), "Cal", "#4f9cff", now, 7, "", time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// pastWindow is wide enough that the whole morning survives the parse --
+	// that is what lets the last one be found at all.
+	if len(parsed) != 4 {
+		t.Fatalf("Parse returned %d events, want all 4 (it must not trim)", len(parsed))
+	}
+
+	evs := TrimPast(parsed, now, KeepPast)
+	var past, future []string
+	for _, e := range evs {
+		if e.End.After(now) {
+			future = append(future, e.Title)
+		} else {
+			past = append(past, e.Title)
+		}
+	}
+	if len(past) != KeepPast {
+		t.Errorf("kept %d past events %v, want %d", len(past), past, KeepPast)
+	}
+	if len(past) == 1 && past[0] != "office hours" {
+		t.Errorf("kept %q, want the most recent past event", past[0])
+	}
+	if len(future) != 1 || future[0] != "tomorrow" {
+		t.Errorf("future events = %v, want [tomorrow]", future)
+	}
+}
+
+// Applied to a merged set, the trim keeps one past event overall -- not one per
+// calendar. Two feeds each ending with a meeting is the case that put two past
+// cards and a bare chip between them on the panel.
+func TestTrimPastAcrossMergedFeeds(t *testing.T) {
+	now := time.Date(2026, 9, 1, 16, 42, 0, 0, time.UTC)
+	merged := []Event{
+		{Title: "work-am", Start: now.Add(-6 * time.Hour), End: now.Add(-5 * time.Hour)},
+		{Title: "personal-pm", Start: now.Add(-4 * time.Hour), End: now.Add(-3 * time.Hour)},
+		{Title: "tomorrow", Start: now.Add(16 * time.Hour), End: now.Add(17 * time.Hour)},
+	}
+	got := TrimPast(merged, now, KeepPast)
+	if len(got) != 2 {
+		t.Fatalf("kept %d events, want the last past one plus the future one", len(got))
+	}
+	if got[0].Title != "personal-pm" {
+		t.Errorf("kept %q, want the most recent past event across both feeds", got[0].Title)
+	}
+}

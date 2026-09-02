@@ -122,10 +122,11 @@
         <div class="gap" style="width:{{px .WidthPx}}">
           {{if .Overnight}}
           <div class="gap-label gap-overnight"><div>O</div><div>V</div><div>E</div><div>R</div><div>N</div><div>I</div><div>G</div><div>H</div><div>T</div></div>
-          {{else}}
+          {{else if .GapText}}
           <div class="gap-dur">{{.GapText}}</div>
           <div class="gap-label">Free</div>
-          {{end}}
+          {{end}}{{/* No GapText: the elapsed half of a straddling gap, which is
+               left bare on purpose -- see BuildAgenda. */}}
         </div>
         {{else if .IsDaySep}}
         <div class="day-sep"><span>{{.SepText}}</span></div>

@@ -253,7 +253,7 @@ func TestNowBarSweepsTheAnchorEntry(t *testing.T) {
 func TestAgendaShowsOnePrecedingEntry(t *testing.T) {
 	now := time.Date(2026, 8, 28, 14, 30, 0, 0, time.UTC)
 
-	t.Run("with history the preceding entry is leftmost", func(t *testing.T) {
+	t.Run("with history the last event is leftmost", func(t *testing.T) {
 		evs := []calendar.Event{
 			{Title: "Older", Start: now.Add(-5 * time.Hour), End: now.Add(-4 * time.Hour)},
 			{Title: "Past", Start: now.Add(-3 * time.Hour), End: now.Add(-2 * time.Hour)},
@@ -261,25 +261,35 @@ func TestAgendaShowsOnePrecedingEntry(t *testing.T) {
 		}
 		row := BuildAgenda(evs, now, false)
 
-		// The anchor is the gap chip spanning now; the entry before it should
-		// be the leftmost thing on screen, at the row's padding.
-		anchor := -1
-		for i, c := range row.Cards {
-			if c.Kind == CardGap && row.NowBarXPx >= screenLeft(row, c) {
-				anchor = i
+		// The row scrolls back to the most recent event card, not to a fixed
+		// number of entries: the entries between it and now are free-time
+		// chips, and stopping at the nearest one scrolled the event itself off
+		// the left edge -- which is the context the row exists to show.
+		//
+		// The first VISIBLE event card, not the first in the slice: earlier
+		// ones are scrolled off to the left and are exactly what this rule is
+		// meant to hide. (The parser trims to one past event before the model
+		// sees it; this fixture passes several directly, which also proves the
+		// scroll does the right thing if that trim ever changes.)
+		var first *Card
+		for i := range row.Cards {
+			c := &row.Cards[i]
+			if (c.Kind == CardEvent || c.Kind == CardStack) && screenLeft(row, *c) >= 0 {
+				first = c
+				break
 			}
 		}
-		if anchor <= 0 {
-			t.Fatalf("expected a gap chip with a preceding entry, cards = %d", len(row.Cards))
+		if first == nil {
+			t.Fatal("no visible event card in the row")
 		}
-		if got := screenLeft(row, row.Cards[anchor-1]); got != CardPadPx {
-			t.Errorf("preceding entry starts at %.1f, want %d", got, CardPadPx)
+		if got := screenLeft(row, *first); got != CardPadPx {
+			t.Errorf("the last event starts at %.1f, want %d -- it should be the "+
+				"leftmost thing on screen", got, CardPadPx)
 		}
-		// Everything before it is scrolled off to the left.
-		for _, c := range row.Cards[:anchor-1] {
-			if screenLeft(row, c) >= CardPadPx {
-				t.Errorf("entry at %.1f was not scrolled off", screenLeft(row, c))
-			}
+		// And it is genuinely a past one, not the upcoming event.
+		if !first.Event.End.Before(now) {
+			t.Errorf("leftmost card is %q, which has not finished; want the last "+
+				"completed event", first.Event.Title)
 		}
 	})
 
@@ -390,25 +400,120 @@ func TestNoSpuriousGapWhenAnEventIsImminent(t *testing.T) {
 	}
 }
 
-// A gap inside one day still shows how long it is: the label is only dropped
-// when the span crosses midnight, where the number stops being useful.
+// The upcoming half of a gap shows how long it is; the elapsed half does not.
+//
+// Time still to come is something you act on. Time already spent is not -- and
+// printing "3h30m free" for it invites reading the number as upcoming, which is
+// exactly the confusion the split was meant to remove.
 func TestSameDayGapKeepsItsDuration(t *testing.T) {
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	evs := []calendar.Event{
-		{Title: "A", Start: now.Add(-2 * time.Hour), End: now.Add(-time.Hour)},
+		{Title: "A", Start: now.Add(-3 * time.Hour), End: now.Add(-time.Hour)},
 		{Title: "B", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour)},
 	}
-	for _, c := range BuildAgenda(evs, now, false).Cards {
-		if c.Kind != CardGap {
+	row := BuildAgenda(evs, now, false)
+
+	var gaps []Card
+	for _, c := range row.Cards {
+		if c.Kind == CardGap {
+			gaps = append(gaps, c)
+		}
+	}
+	if len(gaps) != 2 {
+		t.Fatalf("got %d gap chips, want the elapsed and upcoming halves", len(gaps))
+	}
+	if gaps[0].GapText != "" {
+		t.Errorf("the elapsed chip reads %q; it should carry no text", gaps[0].GapText)
+	}
+	if gaps[1].GapText != "1h" {
+		t.Errorf("the upcoming chip reads %q, want %q", gaps[1].GapText, "1h")
+	}
+	if gaps[1].Overnight {
+		t.Error("a gap inside one day was marked Overnight")
+	}
+}
+
+// The last finished event stays on the row however long ago it ended, with the
+// elapsed free time beside it.
+//
+// Without the past card the panel showed only what is next, so at 16:42 a row
+// reading "OVERNIGHT | Tomorrow | 08:30" gave no sense of when the day's work
+// actually stopped. The elapsed chip is what makes the past card read as
+// history rather than as something that just finished.
+func TestLastEventStaysWithElapsedFreeTime(t *testing.T) {
+	now := time.Date(2026, 9, 1, 16, 42, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		{Title: "Office hours", Start: now.Add(-4*time.Hour - 30*time.Minute), End: now.Add(-3*time.Hour - 30*time.Minute)},
+		{Title: "Exercise class", Start: now.Add(16 * time.Hour), End: now.Add(17 * time.Hour)},
+	}
+	row := BuildAgenda(evs, now, false)
+
+	if len(row.Cards) < 5 {
+		t.Fatalf("row has %d cards, want past / elapsed / overnight / sep / next", len(row.Cards))
+	}
+	if row.Cards[0].Kind != CardEvent || row.Cards[0].Event.Title != "Office hours" {
+		t.Errorf("first card is %v %q, want the last finished event",
+			row.Cards[0].Kind, row.Cards[0].Event.Title)
+	}
+	// Bare on purpose: how long ago the last event finished is true but not
+	// actionable, and a number there reads as something upcoming.
+	if row.Cards[1].Kind != CardGap {
+		t.Errorf("second card is %v, want the elapsed chip", row.Cards[1].Kind)
+	}
+	if row.Cards[1].GapText != "" {
+		t.Errorf("the elapsed chip reads %q; it should carry no text",
+			row.Cards[1].GapText)
+	}
+	if row.Cards[2].Kind != CardGap || !row.Cards[2].Overnight {
+		t.Errorf("third card is %v (overnight=%v), want the overnight chip",
+			row.Cards[2].Kind, row.Cards[2].Overnight)
+	}
+	if row.Cards[3].Kind != CardDaySep {
+		t.Errorf("fourth card is %v, want the Tomorrow separator", row.Cards[3].Kind)
+	}
+}
+
+// The NOW bar sits between the two halves of a straddling gap: the elapsed
+// part is behind it, the part still to come ahead.
+func TestNowBarSitsBetweenTheGapHalves(t *testing.T) {
+	now := time.Date(2026, 9, 1, 16, 42, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		{Title: "Past", Start: now.Add(-3 * time.Hour), End: now.Add(-2 * time.Hour)},
+		{Title: "Next", Start: now.Add(2 * time.Hour), End: now.Add(3 * time.Hour)},
+	}
+	row := BuildAgenda(evs, now, false)
+
+	var elapsed, ahead *Card
+	for i := range row.Cards {
+		if row.Cards[i].Kind != CardGap {
 			continue
 		}
-		if c.Overnight {
-			t.Error("a gap inside one day was marked Overnight")
+		if elapsed == nil {
+			elapsed = &row.Cards[i]
+		} else if ahead == nil {
+			ahead = &row.Cards[i]
 		}
-		if c.GapText == "" {
-			t.Error("a same-day gap lost its duration")
-		}
-		return
 	}
-	t.Fatal("no gap chip emitted")
+	if elapsed == nil || ahead == nil {
+		t.Fatalf("want two gap chips around now, got %d cards", len(row.Cards))
+	}
+	if got := row.NowBarXPx; got < screenLeft(row, *ahead)-1 || got > screenLeft(row, *ahead)+1 {
+		t.Errorf("NOW bar at %.1f, want the left edge of the second chip at %.1f",
+			got, screenLeft(row, *ahead))
+	}
+}
+
+// With no history there is nothing elapsed to show, so no chip for it.
+func TestNoElapsedChipWithoutHistory(t *testing.T) {
+	now := time.Date(2026, 9, 1, 16, 42, 0, 0, time.UTC)
+	evs := []calendar.Event{{Title: "Exercise", Start: now.Add(16 * time.Hour), End: now.Add(17 * time.Hour)}}
+	row := BuildAgenda(evs, now, false)
+
+	if row.Cards[0].Kind == CardGap && row.Cards[0].GapText != "" {
+		t.Errorf("a %q elapsed chip was emitted with no preceding event",
+			row.Cards[0].GapText)
+	}
+	if row.Cards[0].Kind != CardGap || !row.Cards[0].Overnight {
+		t.Errorf("first card is %v, want the overnight chip", row.Cards[0].Kind)
+	}
 }

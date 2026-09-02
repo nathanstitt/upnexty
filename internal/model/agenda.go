@@ -188,7 +188,17 @@ func BuildAgenda(events []calendar.Event, now time.Time, clock24 bool) CardRow {
 	//
 	// lastDay is seeded the same way, so the crossing into tomorrow is marked
 	// even when nothing today survived.
+	// prevEnd walks the boundary between entries. It starts at the first
+	// event's end when that event is already finished -- the parser keeps the
+	// last one however long ago it ended -- and at now otherwise, so a day with
+	// no history still gets a chip for the span in front of it.
 	prevEnd := now
+	if len(events) > 0 && !events[0].End.After(now) {
+		prevEnd = events[0].End
+	}
+	// Seeded from now, not prevEnd: the separator marks the crossing out of
+	// today, and it must be emitted before the overnight chip rather than
+	// after it.
 	lastDay := now.Format("2006-01-02")
 	for _, e := range events {
 		isCurrent := !e.Start.After(now) && e.End.After(now)
@@ -196,28 +206,72 @@ func BuildAgenda(events []calendar.Event, now time.Time, clock24 bool) CardRow {
 		// Free-time chip between entries separated by more than GapMinutes.
 		if !isCurrent {
 			gap := e.Start.Sub(prevEnd)
+			split := false
 			if gap >= GapMinutes*time.Minute {
-				chip := Card{Kind: CardGap, XPx: x, WidthPx: GapChipWidthPx}
-				// A gap that crosses into another day reads as "overnight"
-				// rather than as a duration: the span is long enough that its
-				// exact length is not information anyone acts on.
-				if !sameDay(prevEnd, e.Start) {
-					chip.Overnight = true
-				} else {
-					chip.GapText = shortDuration(gap)
-				}
-				// Free time is an entry like any other: the bar sweeps the chip
-				// in proportion to how much of the gap has elapsed.
+				// A gap straddling the present is two entries, not one: the
+				// part already spent and the part still to come. Rendering it
+				// as a single chip put the whole span on one side of the NOW
+				// bar, so an event that finished hours ago appeared to have
+				// just ended.
 				if !now.Before(prevEnd) && now.Before(e.Start) {
+					// The elapsed half only when there is something elapsed to
+					// show. With no history prevEnd is now, and emitting it
+					// anyway produced a "1m free" chip for a span of zero.
+					//
+					// Deliberately unlabelled. How long ago the last event
+					// finished is true but not useful -- nobody acts on "3h30m
+					// free" for time already spent, and printing it invites
+					// reading the number as something upcoming. The striped box
+					// alone says "nothing here", which is the whole message.
+					if now.Sub(prevEnd) >= GapMinutes*time.Minute {
+						row.Cards = append(row.Cards, Card{
+							Kind: CardGap, XPx: x, WidthPx: GapChipWidthPx,
+						})
+						x += GapChipWidthPx + CardGapPx
+					}
+
+					// The bar sits between the two halves.
 					anchorIdx = len(row.Cards)
-					anchorSweepPx = (now.Sub(prevEnd).Seconds() / gap.Seconds()) * GapChipWidthPx
+					anchorSweepPx = 0
+
+					ahead := Card{Kind: CardGap, XPx: x, WidthPx: GapChipWidthPx}
+					if !sameDay(now, e.Start) {
+						ahead.Overnight = true
+					} else {
+						ahead.GapText = shortDuration(e.Start.Sub(now))
+					}
+					row.Cards = append(row.Cards, ahead)
+					x += GapChipWidthPx + CardGapPx
+					split = true
 				}
-				row.Cards = append(row.Cards, chip)
-				x += GapChipWidthPx + CardGapPx
+
+				if !split {
+					chip := Card{Kind: CardGap, XPx: x, WidthPx: GapChipWidthPx}
+					// A gap that crosses into another day reads as "overnight"
+					// rather than as a duration: the span is long enough that
+					// its exact length is not information anyone acts on.
+					if !sameDay(prevEnd, e.Start) {
+						chip.Overnight = true
+					} else {
+						chip.GapText = shortDuration(gap)
+					}
+					// The bar sweeps a chip it sits inside, in proportion to
+					// how much of the span has elapsed. Only reachable for a
+					// gap that does not straddle now -- the straddling case is
+					// split above and anchors between the two halves.
+					if !now.Before(prevEnd) && now.Before(e.Start) {
+						anchorIdx = len(row.Cards) - 1
+						anchorSweepPx = (now.Sub(prevEnd).Seconds() / gap.Seconds()) * GapChipWidthPx
+					}
+					x += GapChipWidthPx + CardGapPx
+				}
 			}
 		}
 
-		// Day separator when this event crosses into a new day.
+		// Day separator when this event crosses into a new day. Emitted after
+		// the free time leading up to it: the elapsed half of a straddling gap
+		// belongs to today, so a label placed before it would put "Tomorrow"
+		// ahead of hours that are still today's.
 		day := e.Start.Format("2006-01-02")
 		if day != lastDay {
 			row.Cards = append(row.Cards, Card{
@@ -281,9 +335,17 @@ func BuildAgenda(events []calendar.Event, now time.Time, clock24 bool) CardRow {
 	// flush left when it is the day's first. Quantizing to an entry boundary
 	// rather than tracking now continuously is what makes the row hold still
 	// while the bar sweeps, then shift once when the entry ends.
+	// Walk back to the last event card rather than a fixed one entry: the
+	// entries before the anchor may be chips rather than cards, and keeping
+	// only the nearest one scrolls the event itself off the left edge -- which
+	// is the context the row is reaching back for. Stops at the first card
+	// found, so at most one past event is shown.
 	leftmost := row.Cards[anchorIdx]
-	if anchorIdx > 0 {
-		leftmost = row.Cards[anchorIdx-1]
+	for i := anchorIdx - 1; i >= 0; i-- {
+		leftmost = row.Cards[i]
+		if row.Cards[i].Kind == CardEvent || row.Cards[i].Kind == CardStack {
+			break
+		}
 	}
 	// Never shift right: that would open a blank strip at the left edge.
 	// The + 0 normalizes negative zero, which -0.0 formats as "-0.0px" in the

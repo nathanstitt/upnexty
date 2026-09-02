@@ -48,8 +48,12 @@ func Geometry(dev string) (int, int, error) {
 func RenderHTML(ctx context.Context, html []byte, pageW, pageH int, opts ...omnidoc.HTMLOption) (image.Image, error) {
 	all := append([]omnidoc.HTMLOption{
 		omnidoc.WithPageSize(float64(pageW), float64(pageH)),
+		// omnidoc's v1 surface (PR #173) dropped the *Context constructors and
+		// carries the context as an option instead. Cancellation is unchanged;
+		// only the spelling moved.
+		omnidoc.WithContext(ctx),
 	}, opts...)
-	doc, err := omnidoc.OpenHTMLBytesContext(ctx, html, all...)
+	doc, err := omnidoc.OpenHTMLBytes(html, all...)
 	if err != nil {
 		return nil, fmt.Errorf("layout: %w", err)
 	}
