@@ -33,17 +33,17 @@ type fakeLinker struct {
 	disconnErr   error
 }
 
-func (f *fakeLinker) StartDeviceFlow(context.Context) (PairingCode, string, error) {
+func (f *fakeLinker) StartDeviceFlow(context.Context) (PairingCode, any, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.starts++
 	if f.startErr != nil {
-		return PairingCode{}, "", f.startErr
+		return PairingCode{}, nil, f.startErr
 	}
 	return f.code, f.deviceCode, nil
 }
 
-func (f *fakeLinker) AwaitToken(ctx context.Context, deviceCode string) (string, error) {
+func (f *fakeLinker) AwaitToken(ctx context.Context, handle any) (string, error) {
 	if f.release != nil {
 		select {
 		case <-f.release:

@@ -132,14 +132,23 @@ type PairingCode struct {
 // package testable without a temp directory and an httptest token endpoint,
 // and it is the seam that lets a board built without credentials pass nil.
 type GoogleLinker interface {
-	// StartDeviceFlow asks Google for a code. The returned code is shown on
-	// the panel.
-	StartDeviceFlow(ctx context.Context) (PairingCode, string, error)
+	// StartDeviceFlow asks Google for a code. The PairingCode is shown on the
+	// panel; the opaque handle is passed straight back to AwaitToken and must
+	// not be displayed -- it is the bearer of the eventual token.
+	StartDeviceFlow(ctx context.Context) (code PairingCode, handle any, err error)
+
 	// AwaitToken polls until the user authorises, the code expires, or ctx
 	// ends, then stores the token. It returns the account that was connected.
-	AwaitToken(ctx context.Context, deviceCode string) (account string, err error)
+	//
+	// handle is whatever StartDeviceFlow returned. Opaque rather than a device
+	// code string because the poll also needs the interval Google asked for and
+	// the code's expiry; passing only the code would make this method
+	// reconstruct state it was already told.
+	AwaitToken(ctx context.Context, handle any) (account string, err error)
+
 	// Accounts lists the connected accounts, for the settings page.
 	Accounts() ([]string, error)
+
 	// Disconnect deletes an account's token.
 	Disconnect(account string) error
 }

@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nathanstitt/omnidoc/pkg/omnidoc"
 	"github.com/nathanstitt/upnexty/internal/calendar"
 	"github.com/nathanstitt/upnexty/internal/config"
 	"github.com/nathanstitt/upnexty/internal/fb"
 	"github.com/nathanstitt/upnexty/internal/model"
 	"github.com/nathanstitt/upnexty/internal/weather"
-	"github.com/nathanstitt/omnidoc/pkg/omnidoc"
 )
 
 // leftZoneWidthPx is the width of the left panel (clock, weather, headline).

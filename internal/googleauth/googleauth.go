@@ -8,10 +8,10 @@
 // calendars from updating. Separate files make both properties structural
 // rather than something every caller has to remember.
 //
-// Scope note: this package does storage, refresh and failure classification
-// only. Obtaining the first token (the RFC 8628 device flow) is a separate
-// concern; StoredToken is shaped so that code can write one here and this
-// package will keep it refreshed from then on.
+// The package covers the whole credential lifecycle: the RFC 8628 device flow
+// that obtains the first token (deviceflow.go), storage, refresh, and the
+// classification that tells a caller whether to retry soon or ask the user to
+// reconnect.
 package googleauth
 
 import (
@@ -43,9 +43,12 @@ const DefaultDir = "/root/google-tokens"
 //
 // A frame takes ~10s on this hardware and the calendar fetch sits inside it, so
 // a token with 5 seconds left will have expired by the time the request lands.
-// A minute is Google's own suggested margin and is far shorter than the ~1h
-// token lifetime, so this costs at most one extra refresh per hour.
-const refreshSkew = 60 * time.Second
+// Two minutes rather than Google's suggested one: a fetch cycle walks every
+// configured calendar behind the same token, and on a 1.2GHz Cortex-A7 with a
+// slow link those requests are serialised behind each other. A 60s margin is
+// only six frames of headroom, and the cost of widening it is at most one extra
+// refresh per hour against a ~1h token lifetime.
+const refreshSkew = 120 * time.Second
 
 // Sentinel errors. Callers classify with errors.Is rather than by string, and
 // the distinction drives retry policy: ErrNeedsReauth must not be retried on
@@ -147,6 +150,17 @@ type Config struct {
 	// Now overrides time.Now, for tests that need to sit either side of an
 	// expiry boundary without sleeping.
 	Now func() time.Time
+
+	// DeviceCodeURL and UserInfoURL override their defaults, for the same
+	// reason TokenURL does: the pending, slow_down and expiry branches of the
+	// device flow cannot be reached against the real endpoint without waiting
+	// out a 30-minute window by hand.
+	DeviceCodeURL string
+	UserInfoURL   string
+
+	// After overrides time.After, so a poll test does not spend real seconds
+	// waiting out Google's requested 5s interval.
+	After func(time.Duration) <-chan time.Time
 }
 
 // Store is the per-account token store. Safe for concurrent use: the dashboard

@@ -302,7 +302,9 @@ func TestAccessTokenRefreshesInsideSkewWindow(t *testing.T) {
 	s := newStore(t, ts.URL)
 	tok := expiredToken("nas@stitt.org")
 	tok.AccessToken = "about-to-die"
-	tok.Expiry = fixedNow.Add(30 * time.Second) // inside the 60s skew
+	// Derived from the constant, not a literal: a hardcoded margin silently
+	// stops testing the boundary the moment refreshSkew is retuned.
+	tok.Expiry = fixedNow.Add(refreshSkew / 2)
 	if err := s.Save(tok); err != nil {
 		t.Fatalf("Save: %v", err)
 	}

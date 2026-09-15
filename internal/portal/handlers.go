@@ -526,7 +526,7 @@ func (s *Server) handleGoogleConnect(w http.ResponseWriter, r *http.Request) {
 	// Ask for the code synchronously. It is one fast request, and doing it here
 	// means a failure (no network, bad credentials) is reported on the page the
 	// user is looking at rather than only on the panel.
-	code, deviceCode, err := s.Google.StartDeviceFlow(r.Context())
+	code, handle, err := s.Google.StartDeviceFlow(r.Context())
 	if err != nil {
 		s.pairing.Store(false)
 		s.setGoogleErr(err)
@@ -551,7 +551,7 @@ func (s *Server) handleGoogleConnect(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), deviceFlowWindow)
 		defer cancel()
 
-		account, err := s.Google.AwaitToken(ctx, deviceCode)
+		account, err := s.Google.AwaitToken(ctx, handle)
 		s.setGoogleErr(err)
 		if err != nil {
 			return

@@ -62,6 +62,8 @@ func main() {
 	// renders as a bare error. Running as root, so binding a privileged port is
 	// not a problem here.
 	portalAddr := flag.String("portal", ":80", "address for the configuration portal")
+	googleClientPath := flag.String("google-client", googleClientFile,
+		"path to the Google OAuth client credentials; absent disables Google calendars")
 	touchDev := flag.String("touch", "/dev/input/event0", "touchscreen input device")
 	flag.Parse()
 
@@ -125,10 +127,29 @@ func main() {
 		}
 	}
 
+	// The Google linker is shared: the fetch loop uses it as a token source and
+	// the portal uses it to run the device flow. One instance, because the
+	// re-auth backoff it holds is only meaningful if both see the same state --
+	// a reconnect through the portal has to clear the block the fetch loop set.
+	//
+	// nil is the normal case for an iCal-only board and is not an error; only a
+	// credentials file that exists and is unreadable is worth reporting.
+	if gl, err := loadGoogleLinker(*googleClientPath); err != nil {
+		log.Printf("google: %v", err)
+	} else if gl != nil {
+		googleLink = gl
+	}
+
 	ps := &portal.Server{
 		Store: store,
 		WiFi:  wc,
 		MAC:   wc.MAC(),
+	}
+	// Assigned separately rather than in the literal: a typed nil in an
+	// interface field is not nil, so `Google: googleLink` on a board without
+	// credentials would make the portal offer a button backed by nothing.
+	if googleLink != nil {
+		ps.Google = googleLink
 	}
 	go func() {
 		// The portal is a goroutine in this process, not a second binary, so a
@@ -548,6 +569,11 @@ func fetchLoopWake(store *Store, interval func(*config.Config) time.Duration, fn
 	}
 }
 
+// googleLink is the shared Google token source and device-flow runner, or nil
+// on a board with no OAuth credentials. Package level because fetchCalendars
+// is a free function reached from the fetch loop and has no other route to it.
+var googleLink *googleLinker
+
 func fetchAll(ctx context.Context, cfg *config.Config, store *Store) {
 	fetchCalendars(ctx, cfg, store)
 	fetchWeather(ctx, cfg, store)
@@ -558,14 +584,18 @@ func fetchCalendars(ctx context.Context, cfg *config.Config, store *Store) bool 
 	var errs []string
 	now := time.Now()
 	for _, src := range cfg.Calendars {
-		if src.URL == "" || len(src.URL) > 6 && src.URL[:6] == "PASTE_" {
+		if skipCalendar(src, now) {
 			continue
 		}
 		// An entry goes into results whether the fetch worked or not: results
 		// is the list of feeds that are still live, and a feed missing from it
 		// has its cache discarded. Skipping the failures here would restore
 		// exactly the bug this shape exists to fix, one level up.
-		evs, err := calendar.Fetch(ctx, src, now, cfg.Agenda.DaysAhead, cfg.TimeLocation())
+		// FetchWith rather than Fetch: a Google source needs the token
+		// source, and passing it explicitly keeps an iCal-only board from
+		// depending on whether googleLink happens to be set.
+		evs, err := calendar.FetchWith(ctx, src, now, cfg.Agenda.DaysAhead,
+			cfg.TimeLocation(), googleTokenSource())
 		if err != nil {
 			errs = append(errs, "ical("+src.Name+"): "+err.Error())
 			results = append(results, feedResult{Key: src.URL})
