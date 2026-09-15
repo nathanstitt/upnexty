@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/calendar"
 )
 
 func agEv(title string, start, end time.Time) calendar.Event {
@@ -771,4 +771,60 @@ func TestNestedEventDoesNotRewindTheGap(t *testing.T) {
 				i, gaps[i], want[i])
 		}
 	}
+}
+
+// A short current conflict is floored, not duration-scaled. Found on the panel:
+// a 10:00-10:30 meeting with a 10:20-10:30 one inside it spans 30 minutes, which
+// at AgendaPxPerMin is 180px -- narrower than a single card, and too narrow for
+// two stacked rows, whose titles wrapped and whose badges overhung into the
+// neighbouring card.
+func TestShortCurrentStackIsFloored(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 14, 10, 26, 0, 0, time.UTC)
+	start := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 14, 10, 30, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		agEv("Otter Team Weekly Kick-Off", start, end),
+		agEv("Post weekly checkin", start.Add(20*time.Minute), end),
+	}
+	row := BuildAgenda(evs, now, false)
+
+	var stack *Card
+	for i := range row.Cards {
+		if row.Cards[i].Kind == CardStack {
+			stack = &row.Cards[i]
+		}
+	}
+	if stack == nil {
+		t.Fatal("no stack built for the overlapping pair")
+	}
+	if stack.WidthPx < StackMinCurW {
+		t.Errorf("stack is %.0fpx, want at least StackMinCurW (%.0f)", stack.WidthPx, StackMinCurW)
+	}
+	if stack.WidthPx < CardWidthPx {
+		t.Errorf("stack is %.0fpx, narrower than a single card (%d)", stack.WidthPx, CardWidthPx)
+	}
+}
+
+// The wider floor is for stacks only. A single current event routes through
+// buildStack as a one-event cluster, and must keep the ordinary card floor.
+func TestSingleCurrentEventKeepsTheNarrowFloor(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 14, 10, 2, 0, 0, time.UTC)
+	start := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	evs := []calendar.Event{
+		agEv("Standup", start, start.Add(5*time.Minute)),
+	}
+	row := BuildAgenda(evs, now, false)
+
+	for _, c := range row.Cards {
+		if c.State != StateCurrent {
+			continue
+		}
+		if c.WidthPx != AgendaMinCurW {
+			t.Errorf("current card is %.0fpx, want AgendaMinCurW (%.0f)", c.WidthPx, AgendaMinCurW)
+		}
+		return
+	}
+	t.Fatal("no current card in the row")
 }

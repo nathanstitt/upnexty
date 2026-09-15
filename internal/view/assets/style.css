@@ -434,6 +434,37 @@ html, body {
   font-size: 20px; font-weight: 700; line-height: 1.05;
   color: var(--amber);
 }
+/* A scrim, so the label stays readable where the cursor bisects a card. The
+   letters ride over whatever is behind the bar, and amber on a white title
+   measures 0.60:1 -- which is what made NOW unreadable whenever it crossed one.
+
+   Per LETTER, not on #now-bar-label. The three letters are separate blocks (see
+   the note above) laid out down a 20px strip with leading between them, so a
+   background on the parent leaves the card showing through the gaps around each
+   glyph. A background here paints the line box the glyph actually sits in.
+
+   Translucent, and 3px wider each side. Fully opaque reads as three black slabs
+   laid on the timeline; the alpha lets the card's own texture through so the
+   tiles sit in the design rather than on it. 0.72 is as light as it goes while
+   the letters still hold over a title -- compared against 1.0, 0.85 and 0.6 in
+   the full panel render, and at 0.6 the title behind reads through the glyphs.
+   The glyphs slightly exceed their 20px box, so the negative margins are what
+   keep their edges off the card.
+
+   text-shadow is the usual way to do this and is NOT available: this engine
+   parses and ignores it. Probed on white, where a black shadow cannot be
+   missed -- the darkest pixel was identical with and without it, and the full
+   render was byte-for-byte unchanged. Do not reach for it here.
+
+   A descendant selector, not `#now-bar-label > div`: the child combinator
+   parses and is then silently ignored here (gap 17, the same reason the agenda
+   row and the stack type scale avoid it). With `>` this rule matched nothing
+   and the full render came back byte-identical. */
+.now-letter {
+  background: rgba(7, 8, 13, 0.72);
+  border-radius: 4px;
+  margin: 0 -3px;
+}
 
 /* All-day pills ride above the card row, starting at the left edge. The NOW
    bar begins below this band, so the ribbon has the full width.
@@ -658,6 +689,25 @@ html, body {
    weather chart. */
 .evt-stack .evt.stacked {
   min-height: 0; flex: 0 0 auto;
+  /* Width comes from the wrapper, not from .evt.
+
+     A stacked row is an .evt, so without this it keeps that rule's
+     `width: 196px; flex-shrink: 0` whatever the slot is actually sized to. A
+     current slot narrower than 196 -- a single event under ~33 minutes floors
+     to AgendaMinCurW, 150px -- therefore rendered a 196px row inside a 150px
+     box, overflowing 46px to the right and drawing under the next card. It
+     reads as two conflicting events when nothing conflicts, which is exactly
+     the thing the stack layout exists to communicate honestly.
+
+     Observed on the panel at 13:02 on 2026-09-14: a 13:00-13:25 meeting
+     overlapping the 13:30 card. The model was correct throughout (slot x=210
+     w=150, next card x=374) -- this is purely the row overflowing its box, so
+     no amount of reading the agenda arithmetic finds it.
+
+     width:auto rather than 100%: the row is a flex child in a column, so auto
+     already fills the cross axis, and 100% would be 100% of the content box
+     and fight the padding. Pinned by TestStackedRowFitsNarrowSlot. */
+  width: auto; align-self: stretch;
   /* Content sits at the top, not centred. justify-content: center spread the
      title and time to opposite ends of a row far taller than either needed,
      which read as a hole in the middle of every stacked card. */

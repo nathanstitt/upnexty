@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/calendar"
 )
 
 // Agenda geometry, ported from the pi-dashboard reference (app.js/style.css).
@@ -51,6 +51,22 @@ const (
 	// range rather than just a start ("10:30 - 11:00 AM"), and that line has to
 	// fit on one line beside a title set at 21px.
 	StackWidthPx = 300.0
+
+	// StackMinCurW is the floor for a *stacked* current slot, where AgendaMinCurW
+	// is too narrow to be the floor it is for a single card. A stack packs its
+	// events vertically into the slot, so every row has to hold a two-line title,
+	// a full time range, and a badge that overhangs the box by design
+	// (.evt-badge, right: -18px) within whatever width the slot gets. Duration
+	// scaling does not know that: a 30-minute conflict scales to 180px, under
+	// even CardWidthPx, and the rows collide with each other and with the
+	// neighbouring card. Observed on the panel with a 10:00-10:30 meeting and the
+	// 10:20-10:30 one inside it.
+	//
+	// It matches StackWidthPx because the content is the same content, and a
+	// current stack should not be narrower than the future stack it becomes the
+	// past of. The cost is that the NOW bar inside a floored slot no longer maps
+	// elapsed time to horizontal position -- see buildStack.
+	StackMinCurW = StackWidthPx
 
 	// MaxStackRows is how many events a stack shows before the last row becomes
 	// a summary of the rest. Three is what fits: the band is 218px, and a
@@ -463,6 +479,13 @@ func clusterHullEnd(cluster []calendar.Event) time.Time {
 // A slot that does not contain now has no bar to place, so it takes a fixed
 // width instead; see StackWidthPx.
 //
+// Duration scaling holds only above StackMinCurW. Below it the slot is floored
+// and the bar's position is no longer proportional to elapsed time -- a short
+// conflict scales to a width its own rows do not fit in, and rows that collide
+// are a worse lie than a bar that is approximate. ElapsedPct is computed from
+// the clock either way, so the bar stays correct *within* the slot; it is the
+// slot-to-minutes ratio that stops being constant across the row.
+//
 // Beyond MaxStackRows the last row becomes a summary of the remaining events
 // rather than one of them. They stay reachable by tapping it.
 func buildStack(evs []calendar.Event, now time.Time, clock24 bool) Card {
@@ -487,7 +510,16 @@ func buildStack(evs []calendar.Event, now time.Time, clock24 bool) Card {
 	}
 
 	if isCurrent {
-		slot.WidthPx = max(span.Minutes()*AgendaPxPerMin, AgendaMinCurW)
+		// The floor depends on how many rows share the slot. A single current
+		// event is an ordinary card and AgendaMinCurW is the right floor for it;
+		// only a real stack needs the wider one. buildStack serves both -- a
+		// one-event cluster comes through here too -- so keying the floor off
+		// isCurrent alone would widen every current card to 300px.
+		floor := AgendaMinCurW
+		if len(evs) > 1 {
+			floor = StackMinCurW
+		}
+		slot.WidthPx = max(span.Minutes()*AgendaPxPerMin, floor)
 		if span > 0 {
 			slot.ElapsedPct = min(100, max(0, now.Sub(start).Seconds()/span.Seconds()*100))
 		}

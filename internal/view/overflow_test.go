@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
-	"github.com/nathanstitt/luckfox-dashboard/internal/fb"
-	"github.com/nathanstitt/luckfox-dashboard/internal/model"
-	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
+	"github.com/nathanstitt/upnexty/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/config"
+	"github.com/nathanstitt/upnexty/internal/fb"
+	"github.com/nathanstitt/upnexty/internal/model"
+	"github.com/nathanstitt/upnexty/internal/weather"
 	"github.com/nathanstitt/omnidoc/pkg/omnidoc"
 )
 
@@ -856,5 +856,93 @@ func TestStackRectsMatchTheRender(t *testing.T) {
 			t.Errorf("the stack paints at y=%d, past the band at %d", y, bandBottom)
 			break
 		}
+	}
+}
+
+// A stacked row must not be wider than the slot that holds it.
+//
+// A stacked row is an .evt, so it inherits `width: 196px; flex-shrink: 0` from
+// that rule. A current slot narrower than 196 -- a single event shorter than
+// ~33 minutes floors to AgendaMinCurW (150px) -- then rendered a 196px row in a
+// 150px box, spilling 46px to the right and painting under the next card. On
+// the panel that reads as two conflicting events when nothing conflicts.
+//
+// Found on hardware 2026-09-14 (a 13:00-13:25 meeting drawn over the 13:30
+// card). The model is right throughout -- the slot and the next card do not
+// overlap in CardRects -- so the assertion has to be about the stylesheet, not
+// the agenda arithmetic.
+//
+// Asserted against the CSS rather than pixels: the current card's fill is a
+// wash only a few levels above the band (measured rgb(12,11,12) against
+// rgb(11,10,12)), so a colour probe in the gap cannot separate the row from the
+// background reliably. The rule below is what bounds the row, and its absence
+// is the whole bug.
+func TestStackedRowFitsNarrowSlot(t *testing.T) {
+	css, err := assetFS.ReadFile("assets/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := stripCSSComments(stackedRowRule(t, string(css)))
+	if !strings.Contains(rule, "width:") {
+		t.Errorf(".evt-stack .evt.stacked does not set a width, so it keeps "+
+			".evt's 196px and overflows any slot narrower than that "+
+			"(a current event under ~33min floors to %.0fpx).\nrule:\n%s",
+			model.AgendaMinCurW, rule)
+	}
+
+	// And the narrow slot this guards really is reachable from the model.
+	now := time.Date(2026, 9, 14, 13, 2, 0, 0, time.UTC)
+	c := &config.Config{}
+	c.Location.Timezone = "UTC"
+	d := func(h, m int) time.Time { return time.Date(2026, 9, 14, h, m, 0, 0, time.UTC) }
+	vm := model.Build(now, c, []calendar.Event{
+		{Title: "Nathan / Scott Weekly 1:1", Color: "#4f9cff", Start: d(13, 0), End: d(13, 25)},
+		{Title: "Nathan/Stella 1:1", Color: "#ff7a59", Start: d(13, 30), End: d(14, 0)},
+	}, nil, nil, nil)
+	for _, cd := range vm.Agenda.Cards {
+		if cd.Kind == model.CardStack {
+			if cd.WidthPx >= model.CardWidthPx {
+				t.Fatalf("slot is %.0fpx; the narrow case this test guards is unreachable", cd.WidthPx)
+			}
+			return
+		}
+	}
+	t.Fatal("no current stack built")
+}
+
+// stackedRowRule returns the body of the `.evt-stack .evt.stacked` rule,
+// skipping the more specific `.evt-stack .evt.stacked .evt-title` forms.
+func stackedRowRule(t *testing.T, css string) string {
+	t.Helper()
+	const sel = ".evt-stack .evt.stacked {"
+	i := strings.Index(css, sel)
+	if i < 0 {
+		t.Fatalf("selector %q not found in stylesheet", sel)
+	}
+	j := strings.Index(css[i:], "}")
+	if j < 0 {
+		t.Fatal("unterminated rule")
+	}
+	return css[i : i+j+1]
+}
+
+// stripCSSComments removes /* ... */ blocks. Without this the assertion below
+// matches the word "width:" inside the rule's own explanatory comment, which
+// quotes the very declaration it is warning about -- the test then passes with
+// the fix removed, which is how it was first written and caught.
+func stripCSSComments(s string) string {
+	var b strings.Builder
+	for {
+		i := strings.Index(s, "/*")
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		b.WriteString(s[:i])
+		j := strings.Index(s[i:], "*/")
+		if j < 0 {
+			return b.String()
+		}
+		s = s[i+j+2:]
 	}
 }
