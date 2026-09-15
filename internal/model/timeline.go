@@ -5,7 +5,7 @@ package model
 import (
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/calendar"
 )
 
 // Window is the visible time span mapped onto a pixel width.

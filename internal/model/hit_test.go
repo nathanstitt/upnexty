@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
+	"github.com/nathanstitt/upnexty/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/config"
 )
 
 func hitEvents(now time.Time) []calendar.Event {

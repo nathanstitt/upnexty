@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
+	"github.com/nathanstitt/upnexty/internal/config"
 )
 
 const openMeteoURL = "https://api.open-meteo.com/v1/forecast"

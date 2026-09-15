@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/calendar"
 )
 
 // A Dialog is the panel's one modal surface: a full-height sheet anchored to

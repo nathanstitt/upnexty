@@ -4,8 +4,8 @@ import (
 	"embed"
 	"html/template"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
-	"github.com/nathanstitt/luckfox-dashboard/internal/wifi"
+	"github.com/nathanstitt/upnexty/internal/config"
+	"github.com/nathanstitt/upnexty/internal/wifi"
 )
 
 //go:embed templates/*.html assets/*.css

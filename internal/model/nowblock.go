@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/calendar"
 )
 
 // NowBlockMode selects which headline the left panel leads with.

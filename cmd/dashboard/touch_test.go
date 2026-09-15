@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
-	"github.com/nathanstitt/luckfox-dashboard/internal/model"
+	"github.com/nathanstitt/upnexty/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/config"
+	"github.com/nathanstitt/upnexty/internal/model"
 )
 
 func tapFixture(t *testing.T) (*Store, model.ViewModel, *config.Config) {

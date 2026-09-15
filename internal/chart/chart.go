@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/model"
-	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
+	"github.com/nathanstitt/upnexty/internal/model"
+	"github.com/nathanstitt/upnexty/internal/weather"
 )
 
 // The chart covers a window around the present rather than one starting at the

@@ -1,4 +1,4 @@
-module github.com/nathanstitt/luckfox-dashboard
+module github.com/nathanstitt/upnexty
 
 go 1.26.0
 

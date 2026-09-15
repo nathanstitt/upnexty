@@ -1,6 +1,6 @@
 package model
 
-import "github.com/nathanstitt/luckfox-dashboard/internal/calendar"
+import "github.com/nathanstitt/upnexty/internal/calendar"
 
 // CardRect is where a card lands on the panel, in landscape coordinates, along
 // with the event it stands for.

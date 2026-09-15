@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/calendar"
 )
 
 // An imminent event leads with the countdown, not the title.

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/wifi"
+	"github.com/nathanstitt/upnexty/internal/wifi"
 )
 
 func TestApplyStartupBrightnessWritesValue(t *testing.T) {

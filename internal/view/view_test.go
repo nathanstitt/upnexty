@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
-	"github.com/nathanstitt/luckfox-dashboard/internal/model"
-	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
+	"github.com/nathanstitt/upnexty/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/config"
+	"github.com/nathanstitt/upnexty/internal/model"
+	"github.com/nathanstitt/upnexty/internal/weather"
 )
 
 // fixtureVM returns a populated view model. ViewModel now carries Hourly

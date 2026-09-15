@@ -13,9 +13,9 @@ import (
 
 	"github.com/nathanstitt/omnidoc/pkg/resource"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/chart"
-	"github.com/nathanstitt/luckfox-dashboard/internal/model"
-	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
+	"github.com/nathanstitt/upnexty/internal/chart"
+	"github.com/nathanstitt/upnexty/internal/model"
+	"github.com/nathanstitt/upnexty/internal/weather"
 )
 
 //go:embed templates/*.html assets/*.css assets/fonts/*.ttf assets/img/*.svg

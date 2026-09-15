@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/calendar"
 )
 
 var base = time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)

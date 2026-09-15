@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
-	"github.com/nathanstitt/luckfox-dashboard/internal/model"
+	"github.com/nathanstitt/upnexty/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/config"
+	"github.com/nathanstitt/upnexty/internal/model"
 )
 
 // fixedNow is an arbitrary but stable instant; the fixture is relative to it.

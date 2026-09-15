@@ -5,9 +5,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
-	"github.com/nathanstitt/luckfox-dashboard/internal/model"
-	"github.com/nathanstitt/luckfox-dashboard/internal/touch"
+	"github.com/nathanstitt/upnexty/internal/config"
+	"github.com/nathanstitt/upnexty/internal/model"
+	"github.com/nathanstitt/upnexty/internal/touch"
 )
 
 // dialogState is the panel's interactive state: which dialog is open, and what
