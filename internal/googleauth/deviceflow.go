@@ -327,16 +327,31 @@ func (s *Store) storeTokenResponse(body []byte) (StoredToken, error) {
 	return tok, nil
 }
 
-// DefaultUserInfoURL identifies the account a token belongs to. calendarList
-// would also work and needs no extra scope either, but userinfo answers in a
-// few hundred bytes and says the address directly.
-const DefaultUserInfoURL = "https://www.googleapis.com/oauth2/v2/userinfo"
+// DefaultUserInfoURL identifies the account a token belongs to.
+//
+// calendarList, NOT oauth2/v2/userinfo. userinfo is the obvious endpoint and
+// does not work here: it requires the email or openid scope, and this app asks
+// only for calendar.readonly. A token that reads calendars perfectly well gets
+// a bare 401 from it -- verified against a live token, and it is what made the
+// first real device-flow authorisation discard its own token after a
+// successful sign-in.
+//
+// calendarList needs no scope beyond the one already granted, and the primary
+// calendar's id IS the account's address, which is exactly what is wanted.
+// Adding openid purely to learn an email would widen the consent screen for
+// something the calendar API already says.
+const DefaultUserInfoURL = "https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=owner"
 
 // lookupAccount asks Google which account an access token belongs to.
 //
 // Needed because the board stores tokens per account and the user never types
 // their address: they pick it at Google's consent screen, so the board only
 // learns it by asking.
+//
+// The answer is the primary calendar's id. Google names a user's own calendar
+// after their address, so the calendar list identifies the account without any
+// identity scope -- see DefaultUserInfoURL for why the identity endpoint is
+// not usable here.
 func (s *Store) lookupAccount(ctx context.Context, accessToken string) (string, error) {
 	endpoint := s.cfg.UserInfoURL
 	if endpoint == "" {
@@ -361,11 +376,19 @@ func (s *Store) lookupAccount(ctx context.Context, accessToken string) (string, 
 		return "", fmt.Errorf("%w: identifying the account: %s",
 			ErrTransient, oauthErrorMessage(body, resp.StatusCode))
 	}
-	var ui struct {
-		Email string `json:"email"`
+	var list struct {
+		Items []struct {
+			ID      string `json:"id"`
+			Primary bool   `json:"primary"`
+		} `json:"items"`
 	}
-	if err := json.Unmarshal(body, &ui); err != nil || ui.Email == "" {
+	if err := json.Unmarshal(body, &list); err != nil {
 		return "", fmt.Errorf("%w: Google did not say which account was connected", ErrTransient)
 	}
-	return ui.Email, nil
+	for _, it := range list.Items {
+		if it.Primary && it.ID != "" {
+			return it.ID, nil
+		}
+	}
+	return "", fmt.Errorf("%w: Google did not say which account was connected", ErrTransient)
 }

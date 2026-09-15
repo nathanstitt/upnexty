@@ -477,6 +477,29 @@ Next cut, if the repeat agrees: run the dashboard with `calendars` set to `[]`
 validation forces any value ≤ 0 back to 15), which separates iCal fetching from
 rendering.
 
+**A transfer can corrupt the binary silently.** On 2026-09-15 a dashboard
+arrived at exactly the right size with a different checksum:
+
+```
+board:  03de1a99d0715f563df3da850ef76cb8
+local:  09db2ace36f3de8daa0411353ec49fe2
+```
+
+The flipped bytes landed in the Go runtime's startup path, so it died in
+`runtime.osinit` before `main` -- `fatal error: index out of range`, `panic
+before malloc heap initialized`. Nothing wrote to `/dev/fb0`, the console was
+never unbound, and the panel showed boot logs. It looked exactly like a board
+that had failed to boot; adb, WiFi and the kernel were all fine.
+
+`scripts/deploy.sh` now md5s every file after pushing it and refuses a
+mismatch. **Check the checksum after any hand-rolled deploy too** -- a failed
+transfer is loud, a corrupted one is not, and the symptom points at the kernel
+rather than at the copy.
+
+This also casts doubt on some of the "lockups" below: several happened
+immediately after a deploy, and a binary crashing at startup presents much like
+a hang from the outside.
+
 **Deploy over SSH, not `adb push`.** A push that dies mid-transfer takes the
 binary with it, and adb is implicated in both freezes. Stage and swap so an
 interrupted copy cannot leave the board with no binary:

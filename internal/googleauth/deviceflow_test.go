@@ -16,10 +16,11 @@ import (
 // token endpoint driven by a script of successive replies.
 type deviceFlowServer struct {
 	*httptest.Server
-	tokenCalls int
-	tokenReply []func(w http.ResponseWriter)
-	userEmail  string
-	deviceCode map[string]any
+	tokenCalls    int
+	tokenReply    []func(w http.ResponseWriter)
+	userEmail     string
+	accountStatus int
+	deviceCode    map[string]any
 }
 
 func newDeviceFlowServer(t *testing.T, s *deviceFlowServer) *deviceFlowServer {
@@ -48,15 +49,27 @@ func newDeviceFlowServer(t *testing.T, s *deviceFlowServer) *deviceFlowServer {
 			"scope": CalendarReadonlyScope, "token_type": "Bearer",
 		})
 	})
+	// The account comes from calendarList, whose primary entry's id is the
+	// address. See DefaultUserInfoURL for why the identity endpoint is not
+	// usable with a calendar-only scope.
 	mux.HandleFunc("/userinfo", func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); !strings.HasPrefix(got, "Bearer ") {
-			t.Errorf("userinfo Authorization = %q, want a bearer token", got)
+			t.Errorf("account lookup Authorization = %q, want a bearer token", got)
+		}
+		if s.accountStatus != 0 {
+			writeJSON(w, s.accountStatus, map[string]any{
+				"error": map[string]any{"code": s.accountStatus, "message": "Unauthorized"},
+			})
+			return
 		}
 		email := s.userEmail
 		if email == "" {
 			email = "nas@stitt.org"
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"email": email})
+		writeJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{
+			{"id": "en.usa#holiday@group.v.calendar.google.com", "primary": false},
+			{"id": email, "primary": true},
+		}})
 	})
 	s.Server = httptest.NewServer(mux)
 	t.Cleanup(s.Server.Close)
@@ -352,5 +365,53 @@ func TestDeviceFlowErrorsCarryNoSecrets(t *testing.T) {
 		if strings.Contains(err.Error(), secret) {
 			t.Errorf("error leaks %q: %v", secret, err)
 		}
+	}
+}
+
+// A token that cannot be attributed to an account must fail loudly, not be
+// stored under an empty name.
+//
+// This is the failure the first real authorisation hit: the flow succeeded,
+// Google issued a token, and the account lookup 401'd -- so the token was
+// discarded after a successful sign-in, with the user told only "temporary
+// google authorization failure". The lookup endpoint has since changed to one
+// the granted scope can actually reach.
+//
+// Note what this test does NOT cover: the fake server answers whatever path it
+// is given, so pointing DefaultUserInfoURL back at the identity endpoint still
+// passes here. Only a live token proves which endpoint the granted scope can
+// reach, and that check was done by hand -- userinfo 401s while calendarList
+// returns 200 for the same token.
+func TestPollDeviceFlowFailsWhenTheAccountCannotBeIdentified(t *testing.T) {
+	srv := newDeviceFlowServer(t, &deviceFlowServer{accountStatus: http.StatusUnauthorized})
+	s := newFlowStore(t, srv)
+	auth, _ := s.StartDeviceFlow(context.Background())
+
+	_, err := s.PollDeviceFlow(context.Background(), auth)
+	if err == nil {
+		t.Fatal("a token with no identifiable account was accepted")
+	}
+	if !strings.Contains(err.Error(), "account") {
+		t.Errorf("err = %v, want it to name the account lookup", err)
+	}
+	// And nothing may be left on disk under a blank name.
+	if accounts, _ := s.Accounts(); len(accounts) != 0 {
+		t.Errorf("accounts = %v, want none stored", accounts)
+	}
+}
+
+// The account is the primary calendar's id; a non-primary entry must not be
+// mistaken for it. A shared holiday calendar appearing first in the list is
+// the normal case, not a contrived one.
+func TestAccountLookupUsesThePrimaryCalendar(t *testing.T) {
+	srv := newDeviceFlowServer(t, &deviceFlowServer{userEmail: "nas@stitt.org"})
+	s := newFlowStore(t, srv)
+	auth, _ := s.StartDeviceFlow(context.Background())
+	tok, err := s.PollDeviceFlow(context.Background(), auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.Account != "nas@stitt.org" {
+		t.Errorf("Account = %q, want the primary calendar's id", tok.Account)
 	}
 }
