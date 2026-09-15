@@ -1,0 +1,47 @@
+#!/bin/sh
+# Starts the health sampler and records a boot marker.
+#
+# Sorts before S99wlan0 and S99zdashboard so the first samples cover the
+# network coming up and the dashboard's first (most expensive) render.
+#
+# The boot marker is the point of this: a lockup leaves no evidence because
+# RAM is cleared by the power cycle. Writing "booted" to a persistent file on
+# every start means the NEXT boot can see whether the previous run ended
+# cleanly (stop() ran) or was cut off -- which distinguishes a hang/power loss
+# from an orderly reboot.
+DAEMON=/root/health.sh
+STATE=/root/health.state
+LOG=/root/health.log
+
+start() {
+  if [ -f "$STATE" ] && [ "$(cat "$STATE" 2>/dev/null)" = "running" ]; then
+    echo "!!! UNCLEAN SHUTDOWN: previous run did not stop cleanly (hang, crash or power loss) at $(cat /root/health.lastseen 2>/dev/null || echo 'unknown')" >> "$LOG"
+  fi
+  echo running > "$STATE"
+  printf "Starting health sampler: "
+  start-stop-daemon -S -q -b -m -p /var/run/health.pid --exec /bin/sh -- "$DAEMON"
+  echo "OK"
+}
+
+stop() {
+  printf "Stopping health sampler: "
+  start-stop-daemon -K -q -p /var/run/health.pid
+  echo stopped > "$STATE"
+  echo "=== clean stop $(date '+%Y-%m-%dT%H:%M:%S') ===" >> "$LOG"
+  echo "OK"
+}
+
+case "$1" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; sleep 1; start ;;
+  status)
+    if [ -f /var/run/health.pid ] && kill -0 "$(cat /var/run/health.pid)" 2>/dev/null; then
+      echo "health sampler running (pid $(cat /var/run/health.pid))"
+    else
+      echo "health sampler not running"
+    fi
+    tail -3 "$LOG" 2>/dev/null
+    ;;
+  *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac

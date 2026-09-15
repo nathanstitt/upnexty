@@ -29,6 +29,16 @@ install_init_scripts() {
 		adb shell "chmod +x '/etc/init.d/$(basename "$s")'"
 		printf '    %s -> /etc/init.d/\n' "$(basename "$s")"
 	done
+	# Board-side helper scripts that belong in /root alongside the binaries.
+	# These are shell, not build output, so they are not in build/ and would
+	# otherwise be lost on a reflash -- which is how the health sampler (the
+	# only record of a lockup) would go missing exactly when it is needed.
+	for s in "$REPO_ROOT"/board/root/*; do
+		adb push "$s" "$BOARD_BIN_DIR/$(basename "$s")" >/dev/null ||
+			die "push failed: $s"
+		adb shell "chmod +x '$BOARD_BIN_DIR/$(basename "$s")'"
+		printf '    %s -> %s/\n' "$(basename "$s")" "$BOARD_BIN_DIR"
+	done
 	shopt -u nullglob
 }
 
