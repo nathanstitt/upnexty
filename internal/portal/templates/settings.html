@@ -35,10 +35,13 @@
 
 <h1>Calendars</h1>
 <form method="post" action="/save/calendars">
-  {{if not .Config.Calendars}}
-    <p class="empty">No calendars yet — add a feed to see your agenda.</p>
+  {{if not .ICalFeeds}}
+    <p class="empty">No calendar feeds yet — add one, or connect a Google account below.</p>
   {{end}}
-  {{range $i, $c := .Config.Calendars}}
+  {{/* iCal sources only. A Google calendar has no URL to show and is not
+       editable here: it arrives by connecting an account, and rendering it as
+       a blank row would invite someone to type over it. */}}
+  {{range $i, $c := .ICalFeeds}}
   <div class="row">
     <label for="calname{{$i}}">Feed {{$i}}</label><span class="rule"></span>
     <div class="field">
@@ -57,6 +60,56 @@
   </div>
   <button type="submit">Save calendars</button>
 </form>
+
+{{if .GoogleEnabled}}
+<h1>Google Calendar</h1>
+{{if .GoogleError}}<p class="error">{{.GoogleError}}</p>{{end}}
+
+{{if .Pairing.UserCode}}
+{{/* A flow is running. The code is on the panel, but it is repeated here
+     because the phone that pressed the button is very likely still in the
+     user's hand -- and this page is the one place that can also say what to do
+     with it. */}}
+<div class="row">
+  <label>Waiting</label><span class="rule"></span>
+  <div class="field">
+    <p>Go to <span class="mono">{{.Pairing.VerificationURL}}</span> and enter:</p>
+    <p class="mono" style="font-size:1.6em;letter-spacing:0.08em">{{.Pairing.UserCode}}</p>
+    <p class="hint">This code is also on the panel. Reload this page once you have finished.</p>
+  </div>
+</div>
+{{else}}
+
+{{range .GoogleAccounts}}
+<div class="row">
+  <label>{{.Email}}</label><span class="rule"></span>
+  <div class="field">
+    {{if .Calendars}}
+    <ul class="cal-list">{{range .Calendars}}<li>{{.Name}}</li>{{end}}</ul>
+    {{else}}
+    <p class="hint">Connected, but no calendars from this account are shown yet.</p>
+    {{end}}
+    <form method="post" action="/google/disconnect" style="margin-top:8px">
+      <input type="hidden" name="account" value="{{.Email}}">
+      {{/* Says what it removes: disconnecting drops this account's calendars
+           from the panel, and a bare "Disconnect" does not convey that. */}}
+      <button type="submit" class="secondary">Disconnect{{if .Calendars}} and remove {{len .Calendars}} calendar{{if gt (len .Calendars) 1}}s{{end}}{{end}}</button>
+    </form>
+  </div>
+</div>
+{{end}}
+
+<form method="post" action="/google/connect">
+  <div class="row">
+    <label>Add account</label><span class="rule"></span>
+    <div class="field">
+      <button type="submit">Connect Google Calendar</button>
+      <p class="hint">A code will appear on the panel. Enter it at google.com/device on your phone.</p>
+    </div>
+  </div>
+</form>
+{{end}}
+{{end}}
 
 <h1>Place</h1>
 <form method="post" action="/save/place">

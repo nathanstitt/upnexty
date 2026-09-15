@@ -39,4 +39,45 @@ type pageData struct {
 	// Next is the path to return to after a successful login. Only the login
 	// page reads it.
 	Next string
+
+	// GoogleEnabled reports that the board has OAuth credentials. When false
+	// the section is hidden entirely rather than shown disabled: a button that
+	// cannot work is worse than no button, and an iCal-only board is a normal
+	// configuration rather than a half-configured one.
+	GoogleEnabled bool
+
+	// GoogleAccounts are the connected accounts, each with the calendars it
+	// feeds, so disconnecting says what it is about to remove.
+	GoogleAccounts []GoogleAccount
+
+	// GoogleError is the most recent device-flow failure. Same problem as
+	// WiFiError: the flow resolves long after its request was answered, so this
+	// page is the only place left to report it.
+	GoogleError string
+
+	// Pairing is the in-flight device-flow code, shown here as well as on the
+	// panel -- the user may still be holding the phone they submitted from.
+	Pairing PairingCode
+}
+
+// GoogleAccount is one connected account and what it feeds.
+type GoogleAccount struct {
+	Email     string
+	Calendars []config.CalendarSource
+}
+
+// ICalFeeds are the calendar sources editable as a URL. The settings form
+// rebuilds the list from its url fields, so it must render -- and therefore
+// save -- only the sources that have one.
+func (p pageData) ICalFeeds() []config.CalendarSource {
+	if p.Config == nil {
+		return nil
+	}
+	var out []config.CalendarSource
+	for _, src := range p.Config.Calendars {
+		if src.SourceKind() == config.KindICal {
+			out = append(out, src)
+		}
+	}
+	return out
 }

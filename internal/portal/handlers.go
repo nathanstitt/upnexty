@@ -33,6 +33,7 @@ func (s *Server) page(w http.ResponseWriter, errMsg string, code int) {
 	if s.MAC != "" {
 		data.APName = wifi.APName(s.MAC)
 	}
+	s.fillGoogle(&data, cfg)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
 	if err := tmpl.ExecuteTemplate(w, "layout.html", data); err != nil {
@@ -244,7 +245,22 @@ func (s *Server) handleSaveCalendars(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if err := s.save(func(c *config.Config) error {
-		c.Calendars = feeds
+		// Google sources are not in this form and must survive it.
+		//
+		// The form carries name/url pairs and the list is rebuilt from the url
+		// values, so a source with no URL -- which every Google calendar is --
+		// would be dropped by saving any unrelated field on this page. Carrying
+		// them through here rather than rendering them as disabled rows keeps
+		// the two kinds edited in the places that can actually edit them: a
+		// Google calendar is added by connecting an account, not by typing an
+		// address.
+		var kept []config.CalendarSource
+		for _, src := range c.Calendars {
+			if src.SourceKind() != config.KindICal {
+				kept = append(kept, src)
+			}
+		}
+		c.Calendars = append(feeds, kept...)
 		return nil
 	}); err != nil {
 		s.page(w, err.Error(), http.StatusInternalServerError)
@@ -611,4 +627,36 @@ func (s *Server) handleGoogleDisconnect(w http.ResponseWriter, r *http.Request) 
 	}
 	s.setGoogleErr(nil)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// fillGoogle populates the Google section of the settings page.
+//
+// A failure to list accounts is reported rather than swallowed: the accounts
+// come from a directory read, so an error here means the token directory is
+// unreadable, and silently showing "no accounts connected" would invite the
+// user to reconnect an account that is already there.
+func (s *Server) fillGoogle(data *pageData, cfg *config.Config) {
+	if s.Google == nil {
+		return
+	}
+	data.GoogleEnabled = true
+	data.GoogleError = s.getGoogleErr()
+	data.Pairing = s.PairingCode()
+
+	accounts, err := s.Google.Accounts()
+	if err != nil {
+		if data.GoogleError == "" {
+			data.GoogleError = "Could not read connected accounts: " + err.Error()
+		}
+		return
+	}
+	for _, email := range accounts {
+		acct := GoogleAccount{Email: email}
+		for _, src := range cfg.Calendars {
+			if src.SourceKind() == config.KindGoogle && src.Account == email {
+				acct.Calendars = append(acct.Calendars, src)
+			}
+		}
+		data.GoogleAccounts = append(data.GoogleAccounts, acct)
+	}
 }

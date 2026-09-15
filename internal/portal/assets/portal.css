@@ -124,3 +124,23 @@ button {
   font-size: 15px; line-height: 1.55; color: var(--dim);
   margin: 0 0 12px;
 }
+
+/* A connected Google account's calendars. Plain list markers would read as
+   bullet points in a form full of fields; these are a statement of what the
+   account currently feeds, not a list to act on. */
+.cal-list {
+  list-style: none;
+  margin: 0; padding: 0;
+  color: var(--dim); font-size: 14px; line-height: 1.6;
+}
+
+/* Disconnect is destructive but not dangerous -- nothing is lost that
+   reconnecting does not restore -- so it is de-emphasised rather than alarming.
+   A red button here would rank it above "Connect", which is the action almost
+   everyone on this page wants. */
+button.secondary {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--rule);
+  margin-top: 10px;
+}
