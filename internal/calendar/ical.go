@@ -137,12 +137,42 @@ const pastWindow = 24 * time.Hour
 // them misstates it.
 const KeepPast = 1
 
-// Fetch retrieves one iCal feed and parses it. The owner email is derived from
-// the feed URL so ATTENDEE PARTSTAT can be matched. loc is the configured
-// local timezone, used for any DTSTART/EXDATE/RECURRENCE-ID without an
-// explicit TZID (including every all-day VALUE=DATE event); pass nil to fall
-// back to UTC.
+// Fetch retrieves one calendar and returns the occurrences in the window,
+// dispatching on the source's kind.
+//
+// This is the only entry point cmd/dashboard uses and the only place that has
+// to know a backend exists: model.BuildAgenda consumes the concrete []Event
+// this returns, so a new backend is added here rather than threaded through
+// the layers above.
 func Fetch(ctx context.Context, src config.CalendarSource, now time.Time, daysAhead int, loc *time.Location) ([]Event, error) {
+	return FetchWith(ctx, src, now, daysAhead, loc, nil)
+}
+
+// FetchWith is Fetch with the Google token source supplied.
+//
+// Separate from Fetch rather than a sixth parameter on it because an iCal-only
+// board -- every board today -- has no token source to pass, and threading a
+// nil through the common path would invite passing nil by habit and only
+// finding out when someone adds a Google calendar.
+func FetchWith(ctx context.Context, src config.CalendarSource, now time.Time, daysAhead int,
+	loc *time.Location, ts TokenSource) ([]Event, error) {
+
+	switch k := src.SourceKind(); k {
+	case config.KindICal:
+		return fetchICal(ctx, src, now, daysAhead, loc)
+	case config.KindGoogle:
+		return fetchGoogle(ctx, src, ts, now, daysAhead, loc)
+	default:
+		return nil, fmt.Errorf("calendar %q: unknown kind %q", src.Name, k)
+	}
+}
+
+// fetchICal retrieves one iCal feed and parses it. The owner email is derived
+// from the feed URL so ATTENDEE PARTSTAT can be matched. loc is the configured
+// local timezone, used for any DTSTART/EXDATE/RECURRENCE-ID without an explicit
+// TZID (including every all-day VALUE=DATE event); pass nil to fall back to
+// UTC.
+func fetchICal(ctx context.Context, src config.CalendarSource, now time.Time, daysAhead int, loc *time.Location) ([]Event, error) {
 	body, err := httpGet(ctx, src.URL)
 	if err != nil {
 		return nil, err

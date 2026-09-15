@@ -37,7 +37,23 @@
     <div id="now-content">{{- if .VM.Setup -}}
       {{/* Wrapped like .nb-now so #now-content's space-between sees one group
            and centres it, rather than scattering three lines down the panel. */}}
-      {{if .VM.Setup.Connecting}}
+      {{if .VM.Setup.Pairing}}
+      {{/* A Google device-flow code is waiting to be typed. This one appears on
+           a board whose Wi-Fi is fine -- the user pressed a button in the
+           settings page and the code is only useful on the panel, because the
+           browser that started the flow was answered before Google even issued
+           it. Ordered before Connecting: the two cannot both be live (pairing
+           needs a working network, association is tearing one down), and if
+           they somehow were, the code is the one with a deadline on it. */}}
+      <div class="nb-now">
+        <div class="sh-lead">Connect Google</div>
+        {{/* The scheme is stripped for display: it is 8 characters of a fixed
+             prefix that pushes the part someone actually types onto a second
+             line, and nobody keys "https://" into a phone browser anyway. */}}
+        <div class="sh-step">Go to <span class="sh-mono">{{.VM.Setup.PairHost}}</span></div>
+        <div class="sh-step">Code <span class="sh-mono">{{.VM.Setup.PairCode}}</span></div>
+      </div>
+      {{else if .VM.Setup.Connecting}}
       {{/* An association attempt is running. The browser that submitted the
            form is losing its connection as the AP comes down, so the panel is
            the only surface that can still report progress. */}}

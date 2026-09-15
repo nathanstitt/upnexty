@@ -1,14 +1,15 @@
 package portal
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
-	"github.com/nathanstitt/luckfox-dashboard/internal/wifi"
+	"github.com/nathanstitt/upnexty/internal/config"
+	"github.com/nathanstitt/upnexty/internal/wifi"
 )
 
 // ConfigStore is the slice of cmd/dashboard's Store that the portal needs.
@@ -79,6 +80,96 @@ type Server struct {
 	// time it comes back.
 	wifiErrMu sync.Mutex
 	wifiErr   string
+
+	// Google is the device-flow client used to connect a Google account. Nil
+	// disables the feature: the settings page hides the button rather than
+	// offering something that cannot work, which is how a board built without
+	// OAuth credentials behaves.
+	Google GoogleLinker
+
+	// pairing single-flights the device-flow goroutine, for the same reason
+	// connecting does for WiFi: the flow outlives its request (the user has to
+	// walk to their phone, and Google's poll interval is 5s over a window of
+	// up to 30 minutes), so a second submit would otherwise start a second
+	// flow and a second code, and the panel can only show one.
+	pairing atomic.Bool
+
+	// pairingCode is the {user_code, verification_url} the panel displays while
+	// a flow is in flight, or the zero value when none is. Same shape and
+	// rationale as pendingSSID: written beside the pairing swap, read by the
+	// render goroutine.
+	pairingCode atomic.Value // PairingCode
+
+	// googleErrMu guards googleErr, the most recent device-flow outcome.
+	// Same problem as wifiErr: the response is long gone by the time the flow
+	// resolves, so the settings page is the only place left to report it.
+	googleErrMu sync.Mutex
+	googleErr   string
+}
+
+// PairingCode is what the user types at Google to authorise the board.
+//
+// It reaches the user via the PANEL, not the browser that submitted the form.
+// That is not a stylistic choice: the code takes seconds to arrive and the
+// flow then runs for as long as it takes someone to pick up their phone, so
+// the page that started it has already been answered. The panel is the surface
+// that is still showing something by then -- exactly the reasoning behind
+// Connecting() for WiFi.
+type PairingCode struct {
+	// UserCode is the short string typed at VerificationURL, e.g. "VSBR-DGFB".
+	UserCode string
+	// VerificationURL is where to type it, e.g. "https://www.google.com/device".
+	VerificationURL string
+	// Account is the address being connected, when a re-auth of a known
+	// account started the flow. Empty for a first connection, where nobody
+	// knows yet which account the user will sign in as.
+	Account string
+}
+
+// GoogleLinker runs the OAuth device flow and persists the resulting token.
+//
+// An interface so the portal does not import the token store: it keeps this
+// package testable without a temp directory and an httptest token endpoint,
+// and it is the seam that lets a board built without credentials pass nil.
+type GoogleLinker interface {
+	// StartDeviceFlow asks Google for a code. The returned code is shown on
+	// the panel.
+	StartDeviceFlow(ctx context.Context) (PairingCode, string, error)
+	// AwaitToken polls until the user authorises, the code expires, or ctx
+	// ends, then stores the token. It returns the account that was connected.
+	AwaitToken(ctx context.Context, deviceCode string) (account string, err error)
+	// Accounts lists the connected accounts, for the settings page.
+	Accounts() ([]string, error)
+	// Disconnect deletes an account's token.
+	Disconnect(account string) error
+}
+
+// PairingCode returns the in-flight device-flow code, or the zero value when
+// no flow is running. Read by the render loop each tick, like Connecting.
+func (s *Server) PairingCode() PairingCode {
+	if !s.pairing.Load() {
+		return PairingCode{}
+	}
+	pc, _ := s.pairingCode.Load().(PairingCode)
+	return pc
+}
+
+// setGoogleErr records the most recent device-flow outcome. nil clears it, so
+// a later successful connection does not leave a stale failure on the page.
+func (s *Server) setGoogleErr(err error) {
+	s.googleErrMu.Lock()
+	defer s.googleErrMu.Unlock()
+	if err == nil {
+		s.googleErr = ""
+		return
+	}
+	s.googleErr = err.Error()
+}
+
+func (s *Server) getGoogleErr() string {
+	s.googleErrMu.Lock()
+	defer s.googleErrMu.Unlock()
+	return s.googleErr
 }
 
 // setWiFiErr records the most recent background Connect outcome. err == nil
@@ -149,6 +240,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /save/hostname", s.auth(http.HandlerFunc(s.handleSaveHostname)))
 	mux.Handle("POST /save/password", s.auth(http.HandlerFunc(s.handleSavePassword)))
 	mux.Handle("POST /unmute", s.auth(http.HandlerFunc(s.handleUnmute)))
+	mux.Handle("POST /google/connect", s.auth(http.HandlerFunc(s.handleGoogleConnect)))
+	mux.Handle("POST /google/disconnect", s.auth(http.HandlerFunc(s.handleGoogleDisconnect)))
 
 	// Login and logout are outside auth by definition.
 	mux.HandleFunc("POST /login", s.handleLogin)

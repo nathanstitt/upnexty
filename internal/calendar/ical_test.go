@@ -7,8 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/nathanstitt/upnexty/internal/config"
 )
 
 // ref is a fixed "now" inside the fixture window: Mon 2026-08-24 08:00 UTC.
@@ -525,5 +528,70 @@ func TestHTTPGetAcceptsFeedAtExactlyTheCap(t *testing.T) {
 	}
 	if len(body) != maxFeedBytes {
 		t.Errorf("got %d bytes, want %d", len(body), maxFeedBytes)
+	}
+}
+
+// Fetch dispatches on the source's kind, and an unimplemented or unknown
+// backend must ERROR rather than return zero events.
+//
+// Returning (nil, nil) would reach the panel as a calendar with nothing in it,
+// which is indistinguishable from a genuinely empty day -- the same silent
+// failure shape as a truncated feed. An error at least lights up
+// ViewModel.Stale.
+func TestFetchDispatchesOnKind(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		src     config.CalendarSource
+		wantErr string
+	}{
+		{
+			// Fetch (as opposed to FetchWith) has no token source, so a Google
+			// source must say so rather than return an empty calendar.
+			name:    "google without a token source",
+			src:     config.CalendarSource{Name: "G", Kind: config.KindGoogle, CalID: "x@example.com"},
+			wantErr: "no google token source",
+		},
+		{
+			name:    "google without a cal_id",
+			src:     config.CalendarSource{Name: "G", Kind: config.KindGoogle},
+			wantErr: "no cal_id",
+		},
+		{
+			name:    "an unknown kind is rejected",
+			src:     config.CalendarSource{Name: "Q", Kind: "carrier-pigeon"},
+			wantErr: "unknown kind",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			evs, err := Fetch(context.Background(), tc.src, ref, 7, time.UTC)
+			if err == nil {
+				t.Fatalf("got nil error and %d events, want an error", len(evs))
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want it to mention %q", err, tc.wantErr)
+			}
+			if evs != nil {
+				t.Errorf("got %d events alongside the error, want none", len(evs))
+			}
+		})
+	}
+}
+
+// An empty Kind is what every config written before the Google backend has,
+// and it must still take the iCal path.
+func TestFetchTreatsEmptyKindAsICal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(load(t, "basic.ics"))
+	}))
+	defer srv.Close()
+
+	evs, err := Fetch(context.Background(), config.CalendarSource{
+		Name: "Legacy", URL: srv.URL,
+	}, ref, 7, time.UTC)
+	if err != nil {
+		t.Fatalf("empty Kind did not take the iCal path: %v", err)
+	}
+	if len(evs) == 0 {
+		t.Error("iCal path returned no events for a fixture that has them")
 	}
 }

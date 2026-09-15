@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
-	"github.com/nathanstitt/luckfox-dashboard/internal/wifi"
+	"github.com/nathanstitt/upnexty/internal/config"
+	"github.com/nathanstitt/upnexty/internal/wifi"
 )
 
 // page renders the settings page with an optional error message.
@@ -496,5 +497,118 @@ func (s *Server) handleUnmute(w http.ResponseWriter, r *http.Request) {
 		s.page(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// handleGoogleConnect starts the OAuth device flow.
+//
+// The response redirects immediately and the flow continues in the background,
+// for the same reason handleSaveWiFi does: the user has to read a code off the
+// panel, walk to another device, sign in, and consent. Google's own parameters
+// say how long that is allowed to take -- a 5s poll interval over a 30-minute
+// window -- so blocking the request on it is not an option.
+//
+// The code therefore reaches the user through the PANEL rather than this
+// response. See portal.PairingCode.
+func (s *Server) handleGoogleConnect(w http.ResponseWriter, r *http.Request) {
+	if s.Google == nil {
+		s.page(w, "This board was built without Google credentials.", http.StatusBadRequest)
+		return
+	}
+	// Single-flight, exactly as for WiFi: a second flow would mint a second
+	// code, and the panel has one place to show one. The user resubmitting
+	// because nothing has appeared yet is the expected way to reach this.
+	if !s.pairing.CompareAndSwap(false, true) {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	// Ask for the code synchronously. It is one fast request, and doing it here
+	// means a failure (no network, bad credentials) is reported on the page the
+	// user is looking at rather than only on the panel.
+	code, deviceCode, err := s.Google.StartDeviceFlow(r.Context())
+	if err != nil {
+		s.pairing.Store(false)
+		s.setGoogleErr(err)
+		s.page(w, "Could not start Google sign-in: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	// Publish before starting the goroutine so the very next render shows it.
+	// A frame takes ~10s on this hardware, so a late write misses one entirely
+	// -- the same ordering handleSaveWiFi documents for pendingSSID.
+	s.pairingCode.Store(code)
+	s.setGoogleErr(nil)
+
+	go func() {
+		defer func() {
+			s.pairing.Store(false)
+			s.pairingCode.Store(PairingCode{})
+		}()
+		// Not r.Context(): that is cancelled the moment this response is
+		// written, which would kill the flow before the user has read the code
+		// off the panel. The bound is the device code's own lifetime.
+		ctx, cancel := context.WithTimeout(context.Background(), deviceFlowWindow)
+		defer cancel()
+
+		account, err := s.Google.AwaitToken(ctx, deviceCode)
+		s.setGoogleErr(err)
+		if err != nil {
+			return
+		}
+		// A newly connected account is useless until something fetches with
+		// it, and the next scheduled fetch may be ten minutes away.
+		if rf, ok := s.Store.(CalendarRefetcher); ok {
+			rf.RefetchCalendars()
+		}
+		_ = account
+	}()
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// deviceFlowWindow bounds the background poll. Google expires a device code
+// after 30 minutes; a little longer here means the poll loop sees Google's own
+// expired_token response and reports something specific, rather than this
+// timeout firing first and reporting a generic cancellation.
+const deviceFlowWindow = 35 * time.Minute
+
+// handleGoogleDisconnect deletes one account's token.
+func (s *Server) handleGoogleDisconnect(w http.ResponseWriter, r *http.Request) {
+	if s.Google == nil {
+		s.page(w, "This board was built without Google credentials.", http.StatusBadRequest)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.page(w, "That form could not be read. Try again.", http.StatusBadRequest)
+		return
+	}
+	account := strings.TrimSpace(r.FormValue("account"))
+	if account == "" {
+		s.page(w, "Which account should be disconnected?", http.StatusBadRequest)
+		return
+	}
+	if err := s.Google.Disconnect(account); err != nil {
+		s.page(w, "Could not disconnect "+account+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Drop the calendars that account fed. Leaving them would point every
+	// fetch at a token that no longer exists, so the row would go stale behind
+	// an error the user has already acted on by disconnecting.
+	if err := s.save(func(c *config.Config) error {
+		kept := c.Calendars[:0]
+		for _, src := range c.Calendars {
+			if src.SourceKind() == config.KindGoogle && src.Account == account {
+				continue
+			}
+			kept = append(kept, src)
+		}
+		c.Calendars = kept
+		return nil
+	}); err != nil {
+		s.page(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.setGoogleErr(nil)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

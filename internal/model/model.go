@@ -3,11 +3,12 @@ package model
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
-	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
+	"github.com/nathanstitt/upnexty/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/config"
+	"github.com/nathanstitt/upnexty/internal/weather"
 )
 
 // Layout constants for the 1920x480 panel. The left "now block" is fixed width;
@@ -49,6 +50,31 @@ type SetupHint struct {
 	// user's browser is on, so the panel is the only surface that can still
 	// tell them what is happening.
 	Connecting string
+
+	// PairCode and PairURL are the Google device-flow code to type and where
+	// to type it, or "" when no flow is running.
+	//
+	// Same reasoning as Connecting, for a different reason: the flow runs for
+	// as long as it takes someone to pick up their phone and sign in, so the
+	// browser that started it was answered minutes ago. The panel is where the
+	// code has to appear, and it is the one surface guaranteed to be in front
+	// of the person who just pressed the button.
+	PairCode string
+	PairURL  string
+}
+
+// Pairing reports whether a Google device-flow code is waiting to be entered.
+func (s *SetupHint) Pairing() bool { return s != nil && s.PairCode != "" }
+
+// PairHost is PairURL without its scheme, for display on the panel. Keeping
+// the full URL in the model and trimming for presentation means the value the
+// code came with is never rewritten -- only how it is shown.
+func (s *SetupHint) PairHost() string {
+	if s == nil {
+		return ""
+	}
+	u := strings.TrimPrefix(s.PairURL, "https://")
+	return strings.TrimPrefix(u, "http://")
 }
 
 // ViewModel is everything the template needs. No method on it may consult the

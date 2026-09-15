@@ -1,0 +1,74 @@
+{
+ "kind": "calendar#events",
+ "summary": "test@example.com",
+ "timeZone": "America/Chicago",
+ "items": [
+  {
+   "id": "series123_20260914T180000Z",
+   "status": "confirmed",
+   "summary": "Nathan / Scott Weekly 1:1",
+   "start": {"dateTime": "2026-09-14T09:30:00-05:00", "timeZone": "America/Chicago"},
+   "end":   {"dateTime": "2026-09-14T09:55:00-05:00", "timeZone": "America/Chicago"},
+   "recurringEventId": "series123_R20250127T190000",
+   "attendees": [
+    {"email": "me@example.com", "self": true, "responseStatus": "accepted"},
+    {"email": "other@example.com", "organizer": true, "responseStatus": "accepted"}
+   ]
+  },
+  {
+   "id": "moved456",
+   "status": "confirmed",
+   "summary": "Moved Instance",
+   "start": {"dateTime": "2026-09-14T14:00:00-05:00"},
+   "end":   {"dateTime": "2026-09-14T14:30:00-05:00"},
+   "recurringEventId": "series456_R20250101T120000",
+   "originalStartTime": {"dateTime": "2026-09-14T11:00:00-05:00"}
+  },
+  {
+   "id": "cancelled789",
+   "status": "cancelled",
+   "summary": "Cancelled Occurrence",
+   "recurringEventId": "series789_R20250101T120000"
+  },
+  {
+   "id": "allday001",
+   "status": "confirmed",
+   "summary": "Company Holiday",
+   "start": {"date": "2026-09-16"},
+   "end":   {"date": "2026-09-17"}
+  },
+  {
+   "id": "declined002",
+   "status": "confirmed",
+   "summary": "Meeting I Declined",
+   "start": {"dateTime": "2026-09-15T10:00:00-05:00"},
+   "end":   {"dateTime": "2026-09-15T11:00:00-05:00"},
+   "attendees": [
+    {"email": "me@example.com", "self": true, "responseStatus": "declined"}
+   ]
+  },
+  {
+   "id": "tentative003",
+   "status": "confirmed",
+   "summary": "Maybe Meeting",
+   "start": {"dateTime": "2026-09-15T13:00:00-05:00"},
+   "end":   {"dateTime": "2026-09-15T13:30:00-05:00"},
+   "attendees": [
+    {"email": "me@example.com", "self": true, "responseStatus": "tentative"}
+   ]
+  },
+  {
+   "id": "noattendees004",
+   "status": "confirmed",
+   "summary": "Solo Focus Block",
+   "start": {"dateTime": "2026-09-15T15:00:00-05:00"},
+   "end":   {"dateTime": "2026-09-15T16:00:00-05:00"}
+  },
+  {
+   "id": "notitle005",
+   "status": "confirmed",
+   "start": {"dateTime": "2026-09-15T17:00:00-05:00"},
+   "end":   {"dateTime": "2026-09-15T17:30:00-05:00"}
+  }
+ ]
+}

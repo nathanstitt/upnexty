@@ -407,6 +407,18 @@ func renderOnce(cfg *config.Config, store *Store, wc *wifi.Client, hintTracker *
 			}
 			setup.Connecting = ssid
 		}
+		// A device-flow code overrides the hysteresis for a different reason
+		// again: it appears on a board whose WiFi is perfectly healthy, which
+		// is exactly the case the tracker returns nil for. Without this the
+		// code would never be shown at all -- the user would be told to look
+		// at the panel and find their ordinary agenda there.
+		if pc := ps.PairingCode(); pc.UserCode != "" {
+			if setup == nil {
+				setup = hint(wc.MAC())
+			}
+			setup.PairCode = pc.UserCode
+			setup.PairURL = pc.VerificationURL
+		}
 	}
 
 	vm := model.Build(time.Now(), cfg, evs, wx, errs, setup)

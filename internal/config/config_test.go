@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -261,5 +263,83 @@ func TestSaveFailureLeavesPreviousConfig(t *testing.T) {
 	}
 	if loaded.Location.Timezone != "UTC" {
 		t.Errorf("config was corrupted; got timezone %q, want UTC", loaded.Location.Timezone)
+	}
+}
+
+// A config written before the Google backend existed must load unchanged, with
+// its sources resolving to iCal. This is the compatibility guarantee that lets
+// the new fields ship without a migration: every board in the field has a
+// config.json shaped exactly like this one.
+func TestExistingConfigLoadsAsICal(t *testing.T) {
+	p := writeTemp(t, `{"calendars":[
+		{"name":"Personal","color":"#8b97ab","url":"https://example.com/a.ics"},
+		{"name":"Work","color":"#4f9cff","url":"https://example.com/b.ics"}
+	]}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Calendars) != 2 {
+		t.Fatalf("got %d calendars, want 2", len(c.Calendars))
+	}
+	for _, src := range c.Calendars {
+		if src.Kind != "" {
+			t.Errorf("%s: Kind = %q, want it absent in an old config", src.Name, src.Kind)
+		}
+		if got := src.SourceKind(); got != KindICal {
+			t.Errorf("%s: SourceKind() = %q, want %q", src.Name, got, KindICal)
+		}
+		if src.URL == "" {
+			t.Errorf("%s: URL was dropped", src.Name)
+		}
+	}
+}
+
+// A mixed config -- one iCal feed and two Google calendars sharing an account
+// -- is the normal state during migration, and the shape the fetch dispatch
+// has to handle.
+func TestMixedKindsRoundTrip(t *testing.T) {
+	p := writeTemp(t, `{"calendars":[
+		{"name":"Legacy","color":"#111","url":"https://example.com/a.ics"},
+		{"name":"Personal","color":"#222","kind":"google","cal_id":"me@example.com","account":"me@example.com"},
+		{"name":"Work","color":"#333","kind":"google","cal_id":"work@example.com","account":"me@example.com"}
+	]}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		kind, calID, account string
+	}{
+		{KindICal, "", ""},
+		{KindGoogle, "me@example.com", "me@example.com"},
+		{KindGoogle, "work@example.com", "me@example.com"},
+	}
+	if len(c.Calendars) != len(want) {
+		t.Fatalf("got %d calendars, want %d", len(c.Calendars), len(want))
+	}
+	for i, w := range want {
+		got := c.Calendars[i]
+		if got.SourceKind() != w.kind {
+			t.Errorf("[%d] SourceKind() = %q, want %q", i, got.SourceKind(), w.kind)
+		}
+		if got.CalID != w.calID {
+			t.Errorf("[%d] CalID = %q, want %q", i, got.CalID, w.calID)
+		}
+		if got.Account != w.account {
+			t.Errorf("[%d] Account = %q, want %q", i, got.Account, w.account)
+		}
+	}
+
+	// Re-marshalling must not invent fields on the iCal source: omitempty is
+	// what keeps an untouched config byte-stable through a portal save.
+	blob, err := json.Marshal(c.Calendars[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, absent := range []string{"kind", "cal_id", "account"} {
+		if bytes.Contains(blob, []byte(`"`+absent+`"`)) {
+			t.Errorf("iCal source serialised %q: %s", absent, blob)
+		}
 	}
 }

@@ -15,3 +15,11 @@
 *.bin
 
 .DS_Store
+
+# Google OAuth credentials and tokens. The client secret identifies the app and
+# a refresh token grants calendar access until revoked -- neither belongs in a
+# repo, and both are read from disk at runtime (see internal/googleauth).
+/google-client.json
+/google-token*.json
+/google-tokens/
+*.token.json

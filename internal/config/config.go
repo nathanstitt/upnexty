@@ -10,11 +10,53 @@ import (
 	"time"
 )
 
-// CalendarSource is one iCal feed.
+// CalendarSource is one calendar the panel shows, fetched either as an iCal
+// feed or through the Google Calendar API.
+//
+// Kind selects the backend and is empty on every config written before the API
+// path existed, so empty means "ical" -- see SourceKind. That keeps an existing
+// config.json loading unchanged rather than needing a migration.
 type CalendarSource struct {
 	Name  string `json:"name"`
 	Color string `json:"color"`
-	URL   string `json:"url"`
+
+	// URL is the iCal feed address. Unused by Google sources.
+	URL string `json:"url"`
+
+	// Kind is "" or "ical" for an iCal feed, "google" for the Calendar API.
+	Kind string `json:"kind,omitempty"`
+
+	// CalID is the Google calendar id, usually an email address. Google only.
+	CalID string `json:"cal_id,omitempty"`
+
+	// Account names the authorised Google account whose token reads this
+	// calendar, and is the filename under the token directory.
+	//
+	// A token authorises ONE account. That account often sees other calendars
+	// -- this board's nas@stitt.org token lists ns51@rice.edu as owner, so one
+	// authorisation covers both -- but that is a property of how those accounts
+	// are shared, not a rule. A calendar belonging to an account the signed-in
+	// user cannot see needs its own authorisation, which is why the token is
+	// named here rather than assumed to be the board's only one.
+	//
+	// Empty on a board holding exactly one token means "that one", so the
+	// common single-account setup needs no ceremony.
+	Account string `json:"account,omitempty"`
+}
+
+// Calendar source kinds. The zero value is KindICal so a config predating the
+// Google backend keeps working untouched.
+const (
+	KindICal   = "ical"
+	KindGoogle = "google"
+)
+
+// SourceKind returns the source's backend, resolving the empty default.
+func (c CalendarSource) SourceKind() string {
+	if c.Kind == "" {
+		return KindICal
+	}
+	return c.Kind
 }
 
 // WiFiConfig holds the credentials the board associates with. Written by the
