@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
+	"github.com/nathanstitt/upnexty/internal/config"
 )
 
 // Event is one concrete calendar occurrence within the requested window.
@@ -76,7 +77,22 @@ type icalVEvent struct {
 func (e *icalVEvent) get(key string) (icalProp, bool) { p, ok := e.single[key]; return p, ok }
 func (e *icalVEvent) val(key string) string           { return e.single[key].value }
 
-// httpGet fetches a URL, capping the response body at 8MB.
+// maxFeedBytes caps a feed body. Raised from 8MB after a real feed outgrew it:
+// a 8.9MB Google calendar was being cut at 8MB on every fetch, and because
+// io.ReadAll over an io.LimitReader returns (data, nil) at the limit, the
+// truncated iCal parsed "successfully" with its last events missing and no
+// error anywhere. See httpGet for the check that now catches this.
+const maxFeedBytes = 32 << 20
+
+// ErrTruncated reports a feed larger than maxFeedBytes. It is an error rather
+// than a silent trim because a short read is indistinguishable from a calendar
+// whose later events were deleted -- the panel would just stop showing them.
+var ErrTruncated = errors.New("feed exceeds maximum size")
+
+// httpGet fetches a URL, capping the response body at maxFeedBytes.
+//
+// Reads one byte past the cap so a body that exactly fills it can be told from
+// one that overflows it; the extra byte is discarded.
 func httpGet(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -90,14 +106,16 @@ func httpGet(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxFeedBytes {
+		return nil, fmt.Errorf("GET %s: %w (over %d bytes)", url, ErrTruncated, maxFeedBytes)
+	}
+	return body, nil
 }
 
-// Fetch retrieves one iCal feed and parses it. The owner email is derived from
-// the feed URL so ATTENDEE PARTSTAT can be matched. loc is the configured
-// local timezone, used for any DTSTART/EXDATE/RECURRENCE-ID without an
-// explicit TZID (including every all-day VALUE=DATE event); pass nil to fall
-// back to UTC.
 // pastWindow is how far back occurrences are expanded.
 //
 // Wide enough to reach the start of any reasonable day, because the panel shows
@@ -119,6 +137,11 @@ const pastWindow = 24 * time.Hour
 // them misstates it.
 const KeepPast = 1
 
+// Fetch retrieves one iCal feed and parses it. The owner email is derived from
+// the feed URL so ATTENDEE PARTSTAT can be matched. loc is the configured
+// local timezone, used for any DTSTART/EXDATE/RECURRENCE-ID without an
+// explicit TZID (including every all-day VALUE=DATE event); pass nil to fall
+// back to UTC.
 func Fetch(ctx context.Context, src config.CalendarSource, now time.Time, daysAhead int, loc *time.Location) ([]Event, error) {
 	body, err := httpGet(ctx, src.URL)
 	if err != nil {

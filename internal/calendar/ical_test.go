@@ -1,6 +1,11 @@
 package calendar
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -478,5 +483,47 @@ func TestTrimPastStillKeepsOneWhenNothingOverlaps(t *testing.T) {
 	if len(got) != 2 || got[0].Title != "third" {
 		t.Fatalf("kept %d events starting %q, want 2 starting \"third\"",
 			len(got), got[0].Title)
+	}
+}
+
+// A feed larger than the cap must be an error, not a silent trim.
+//
+// The original code read through an io.LimitReader and returned whatever came
+// back. io.ReadAll stops at the limit WITHOUT an error, so an oversized feed
+// arrived as a truncated-but-valid-looking iCal: the tail VEVENTs simply did
+// not exist, Parse reported success, and the panel showed a calendar with its
+// last events missing. Found in production with an 8.9MB feed against the
+// then-8MB cap, which cut 559KB off every single fetch.
+func TestHTTPGetRejectsOversizedFeed(t *testing.T) {
+	big := bytes.Repeat([]byte("X"), maxFeedBytes+1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(big)
+	}))
+	defer srv.Close()
+
+	_, err := httpGet(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("oversized feed returned no error; it would parse as a truncated calendar")
+	}
+	if !errors.Is(err, ErrTruncated) {
+		t.Errorf("error is %v, want it to wrap ErrTruncated", err)
+	}
+}
+
+// A feed exactly at the cap is fine: the extra byte read is what separates
+// "exactly full" from "overflowing", and it must not trip the check.
+func TestHTTPGetAcceptsFeedAtExactlyTheCap(t *testing.T) {
+	exact := bytes.Repeat([]byte("Y"), maxFeedBytes)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(exact)
+	}))
+	defer srv.Close()
+
+	body, err := httpGet(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("feed at exactly the cap was rejected: %v", err)
+	}
+	if len(body) != maxFeedBytes {
+		t.Errorf("got %d bytes, want %d", len(body), maxFeedBytes)
 	}
 }
