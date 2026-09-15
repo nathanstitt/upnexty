@@ -25,15 +25,15 @@ import (
 
 	"github.com/nathanstitt/omnidoc/pkg/omnidoc"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
-	"github.com/nathanstitt/luckfox-dashboard/internal/fb"
-	"github.com/nathanstitt/luckfox-dashboard/internal/model"
-	"github.com/nathanstitt/luckfox-dashboard/internal/portal"
-	"github.com/nathanstitt/luckfox-dashboard/internal/quote"
-	"github.com/nathanstitt/luckfox-dashboard/internal/view"
-	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
-	"github.com/nathanstitt/luckfox-dashboard/internal/wifi"
+	"github.com/nathanstitt/upnexty/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/config"
+	"github.com/nathanstitt/upnexty/internal/fb"
+	"github.com/nathanstitt/upnexty/internal/model"
+	"github.com/nathanstitt/upnexty/internal/portal"
+	"github.com/nathanstitt/upnexty/internal/quote"
+	"github.com/nathanstitt/upnexty/internal/view"
+	"github.com/nathanstitt/upnexty/internal/weather"
+	"github.com/nathanstitt/upnexty/internal/wifi"
 )
 
 const (
@@ -542,34 +542,47 @@ func fetchAll(ctx context.Context, cfg *config.Config, store *Store) {
 }
 
 func fetchCalendars(ctx context.Context, cfg *config.Config, store *Store) bool {
-	var all []calendar.Event
+	var results []feedResult
 	var errs []string
 	now := time.Now()
 	for _, src := range cfg.Calendars {
 		if src.URL == "" || len(src.URL) > 6 && src.URL[:6] == "PASTE_" {
 			continue
 		}
+		// An entry goes into results whether the fetch worked or not: results
+		// is the list of feeds that are still live, and a feed missing from it
+		// has its cache discarded. Skipping the failures here would restore
+		// exactly the bug this shape exists to fix, one level up.
 		evs, err := calendar.Fetch(ctx, src, now, cfg.Agenda.DaysAhead, cfg.TimeLocation())
 		if err != nil {
 			errs = append(errs, "ical("+src.Name+"): "+err.Error())
+			results = append(results, feedResult{Key: src.URL})
 			continue
 		}
-		all = append(all, evs...)
+		results = append(results, feedResult{Key: src.URL, Events: evs, OK: true})
 	}
-	// Each feed arrives individually sorted, but concatenating sorted slices
-	// does not produce a sorted slice — sort the merge before truncating so a
-	// MaxEvents cutoff drops the chronologically latest events across ALL
-	// feeds, not just whichever feed happened to be appended last.
-	sort.SliceStable(all, func(i, j int) bool { return all[i].Start.Before(all[j].Start) })
-	// Trim past events across the merged set, not per feed. Parse cannot do it:
-	// it sees one calendar at a time, so with several feeds each would keep its
-	// own last finished event and the row would show one past card per
-	// calendar, with a bare gap chip between each pair.
-	all = calendar.TrimPast(all, now, calendar.KeepPast)
-	if cfg.Agenda.MaxEvents > 0 && len(all) > cfg.Agenda.MaxEvents {
-		all = all[:cfg.Agenda.MaxEvents]
+	// The merge runs inside SetEvents, over fresh and cached events together,
+	// so a feed served from cache lands on the row in the same order and with
+	// the same past-event trimming as one that fetched cleanly. Doing any of
+	// this out here would only see the feeds that succeeded this round.
+	merge := func(all []calendar.Event) []calendar.Event {
+		// Each feed arrives individually sorted, but concatenating sorted
+		// slices does not produce a sorted slice — sort the merge before
+		// truncating so a MaxEvents cutoff drops the chronologically latest
+		// events across ALL feeds, not just whichever feed happened to be
+		// appended last.
+		sort.SliceStable(all, func(i, j int) bool { return all[i].Start.Before(all[j].Start) })
+		// Trim past events across the merged set, not per feed. Parse cannot
+		// do it: it sees one calendar at a time, so with several feeds each
+		// would keep its own last finished event and the row would show one
+		// past card per calendar, with a bare gap chip between each pair.
+		all = calendar.TrimPast(all, now, calendar.KeepPast)
+		if cfg.Agenda.MaxEvents > 0 && len(all) > cfg.Agenda.MaxEvents {
+			all = all[:cfg.Agenda.MaxEvents]
+		}
+		return all
 	}
-	store.SetEvents(all, errs)
+	store.SetEvents(results, errs, merge)
 	// Draw as soon as the events land. Without this a refetch triggered by a
 	// save would finish in a second and sit unseen until the next minute
 	// boundary, so the panel would show "Fetching..." for most of a minute

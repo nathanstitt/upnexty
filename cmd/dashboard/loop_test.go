@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
-	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
+	"github.com/nathanstitt/upnexty/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/config"
+	"github.com/nathanstitt/upnexty/internal/weather"
 )
 
 func TestStoreConfigSwap(t *testing.T) {
@@ -155,11 +155,11 @@ func TestStoreKeepsLastGoodOnFailure(t *testing.T) {
 	s := &Store{}
 	evs := []calendar.Event{{Title: "kept"}}
 	w := &weather.Weather{Current: weather.Conditions{TempF: 70}}
-	s.SetEvents(evs, nil)
+	s.SetEvents(okFeed("feed-a", evs...), nil, nil)
 	s.SetWeather(w, nil)
 
 	// A later failure must not clear what we already have.
-	s.SetEvents(nil, []string{"ical: timeout"})
+	s.SetEvents(failedFeed("feed-a"), []string{"ical: timeout"}, nil)
 	s.SetWeather(nil, []string{"weather: timeout"})
 
 	gotEvs, gotW, errs := s.Snapshot()
@@ -181,7 +181,7 @@ func TestStoreCalendarPendingUntilFirstFetch(t *testing.T) {
 	if !s.CalendarPending() {
 		t.Error("CalendarPending = false on a fresh store, want true")
 	}
-	s.SetEvents([]calendar.Event{{Title: "e"}}, nil)
+	s.SetEvents(okFeed("feed-a", calendar.Event{Title: "e"}), nil, nil)
 	if s.CalendarPending() {
 		t.Error("CalendarPending = true after a successful fetch, want false")
 	}
@@ -191,7 +191,7 @@ func TestStoreCalendarPendingUntilFirstFetch(t *testing.T) {
 // board with an unreachable feed on "Fetching..." forever.
 func TestStoreCalendarPendingClearsOnFailedFetch(t *testing.T) {
 	s := &Store{}
-	s.SetEvents(nil, []string{"ical: timeout"})
+	s.SetEvents(failedFeed("feed-a"), []string{"ical: timeout"}, nil)
 	if s.CalendarPending() {
 		t.Error("CalendarPending = true after a failed fetch, want false")
 	}
@@ -199,8 +199,8 @@ func TestStoreCalendarPendingClearsOnFailedFetch(t *testing.T) {
 
 func TestStoreReplacesOnSuccess(t *testing.T) {
 	s := &Store{}
-	s.SetEvents([]calendar.Event{{Title: "old"}}, nil)
-	s.SetEvents([]calendar.Event{{Title: "new"}}, nil)
+	s.SetEvents(okFeed("feed-a", calendar.Event{Title: "old"}), nil, nil)
+	s.SetEvents(okFeed("feed-a", calendar.Event{Title: "new"}), nil, nil)
 	evs, _, errs := s.Snapshot()
 	if len(evs) != 1 || evs[0].Title != "new" {
 		t.Errorf("events = %v, want the fresh set", evs)
@@ -224,7 +224,7 @@ func TestStoreReplacesOnSuccess(t *testing.T) {
 func TestFetchLoopRetryIsPerSourceIndependent(t *testing.T) {
 	s := &Store{}
 	s.SetConfig(&config.Config{})
-	s.SetEvents(nil, []string{"ical: persistently broken"})
+	s.SetEvents(failedFeed("feed-a"), []string{"ical: persistently broken"}, nil)
 
 	const interval = 40 * time.Millisecond
 	oldRetry := retryDelay
@@ -516,7 +516,7 @@ func TestRecoverRenderPassesThroughSuccess(t *testing.T) {
 // reads the same way.
 func TestRefetchCalendarsResetsPendingAndWakes(t *testing.T) {
 	s := NewStore(&config.Config{}, t.TempDir()+"/config.json")
-	s.SetEvents(nil, nil)
+	s.SetEvents(nil, nil, nil)
 	if s.CalendarPending() {
 		t.Fatal("CalendarPending = true after a fetch, want false")
 	}
@@ -568,7 +568,7 @@ func TestRefetchCalendarsCoalesces(t *testing.T) {
 func TestRefetchCalendarsWithoutAChannelIsSafe(t *testing.T) {
 	s := &Store{configPath: t.TempDir() + "/config.json"}
 	s.SetConfig(&config.Config{})
-	s.SetEvents(nil, nil)
+	s.SetEvents(nil, nil, nil)
 	s.RefetchCalendars() // must not panic or block
 	if !s.CalendarPending() {
 		t.Error("CalendarPending = false; the reset should happen regardless of the channel")
@@ -598,5 +598,279 @@ func TestWaitRenderWakeTimesOut(t *testing.T) {
 	s.WaitRenderWake(50 * time.Millisecond)
 	if d := time.Since(start); d < 40*time.Millisecond {
 		t.Errorf("returned after %v, well before the %v asked for", d, 50*time.Millisecond)
+	}
+}
+
+// okFeed and failedFeed build the one-feed rounds most Store tests want. A
+// round is a slice because SetEvents treats it as the authoritative list of
+// live feeds, so even a test that only cares about one feed has to name it.
+func okFeed(key string, evs ...calendar.Event) []feedResult {
+	return []feedResult{{Key: key, Events: evs, OK: true}}
+}
+
+func failedFeed(key string) []feedResult {
+	return []feedResult{{Key: key}}
+}
+
+func titlesOf(evs []calendar.Event) []string {
+	var out []string
+	for _, e := range evs {
+		out = append(out, e.Title)
+	}
+	return out
+}
+
+func eq(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestSetEventsKeepsLastGoodPerFeed is the regression test for the
+// partial-failure bug: SetEvents used to store the merged set only when errs
+// was empty, so a single failing feed discarded events from every feed that
+// had just succeeded and the panel kept serving the last fully-clean fetch.
+// A Google Calendar backend can fail for days on an expired token, which under
+// the old rule would freeze the whole agenda for as long as that lasts.
+//
+// Each case is a sequence of fetch rounds; the assertion is on the merged set
+// after the last one. The merge func is nil throughout so the expectation is
+// exactly what the cache logic produced, in feed order — sorting and trimming
+// have their own test (see TestFetchCalendarsServesCachedEventsForAFailedFeed).
+func TestSetEventsKeepsLastGoodPerFeed(t *testing.T) {
+	ev := func(title string) calendar.Event { return calendar.Event{Title: title} }
+
+	type round struct {
+		results []feedResult
+		errs    []string
+	}
+	tests := []struct {
+		name  string
+		round []round
+		want  []string
+	}{
+		{
+			name: "all feeds succeed",
+			round: []round{{results: []feedResult{
+				{Key: "a", Events: []calendar.Event{ev("a1")}, OK: true},
+				{Key: "b", Events: []calendar.Event{ev("b1")}, OK: true},
+			}}},
+			want: []string{"a1", "b1"},
+		},
+		{
+			name: "one of two feeds fails: healthy feed updates, failing feed serves its cache",
+			round: []round{
+				{results: []feedResult{
+					{Key: "a", Events: []calendar.Event{ev("a1")}, OK: true},
+					{Key: "b", Events: []calendar.Event{ev("b1")}, OK: true},
+				}},
+				{results: []feedResult{
+					{Key: "a", Events: []calendar.Event{ev("a2")}, OK: true},
+					{Key: "b"},
+				}, errs: []string{"ical(b): timeout"}},
+			},
+			// a2 is the proof: under the old global rule the errored round was
+			// dropped whole and this would still read a1.
+			want: []string{"a2", "b1"},
+		},
+		{
+			name: "a feed failing on its very first fetch contributes nothing",
+			round: []round{{results: []feedResult{
+				{Key: "a", Events: []calendar.Event{ev("a1")}, OK: true},
+				{Key: "b"},
+			}, errs: []string{"ical(b): dial error"}}},
+			want: []string{"a1"},
+		},
+		{
+			name: "every feed fails on the first fetch: empty, not fabricated",
+			round: []round{{results: []feedResult{{Key: "a"}, {Key: "b"}},
+				errs: []string{"ical(a): x", "ical(b): y"}}},
+			want: nil,
+		},
+		{
+			name: "a feed removed from config stops contributing its cache",
+			round: []round{
+				{results: []feedResult{
+					{Key: "a", Events: []calendar.Event{ev("a1")}, OK: true},
+					{Key: "b", Events: []calendar.Event{ev("b1")}, OK: true},
+				}},
+				// b deleted in the portal: it is not attempted, so it is not
+				// in results, so its cached b1 must be gone for good.
+				{results: []feedResult{
+					{Key: "a", Events: []calendar.Event{ev("a2")}, OK: true},
+				}},
+			},
+			want: []string{"a2"},
+		},
+		{
+			name: "a removed feed's cache does not come back when another feed fails",
+			round: []round{
+				{results: []feedResult{
+					{Key: "a", Events: []calendar.Event{ev("a1")}, OK: true},
+					{Key: "b", Events: []calendar.Event{ev("b1")}, OK: true},
+				}},
+				{results: []feedResult{{Key: "a", Events: []calendar.Event{ev("a2")}, OK: true}}},
+				{results: []feedResult{{Key: "a"}}, errs: []string{"ical(a): timeout"}},
+			},
+			want: []string{"a2"},
+		},
+		{
+			name: "a feed that recovers replaces its cache rather than merging with it",
+			round: []round{
+				{results: []feedResult{{Key: "a", Events: []calendar.Event{ev("a1")}, OK: true}}},
+				{results: []feedResult{{Key: "a"}}, errs: []string{"ical(a): timeout"}},
+				{results: []feedResult{{Key: "a", Events: []calendar.Event{ev("a2")}, OK: true}}},
+			},
+			want: []string{"a2"},
+		},
+		{
+			name: "a feed that legitimately empties is not treated as a failure",
+			round: []round{
+				{results: []feedResult{{Key: "a", Events: []calendar.Event{ev("a1")}, OK: true}}},
+				// OK with no events means "this calendar is clear", which must
+				// clear the row -- not re-serve a1 the way a failure would.
+				{results: []feedResult{{Key: "a", OK: true}}},
+			},
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Store{}
+			for _, r := range tt.round {
+				s.SetEvents(r.results, r.errs, nil)
+			}
+			evs, _, errs := s.Snapshot()
+			if got := titlesOf(evs); !eq(got, tt.want) {
+				t.Errorf("events = %v, want %v", got, tt.want)
+			}
+			// The staleness signal is independent of whether the cache
+			// covered for the failure: model.Build reads len(errs) > 0, and a
+			// panel served partly from cache is stale.
+			last := tt.round[len(tt.round)-1]
+			if len(errs) != len(last.errs) {
+				t.Errorf("errs = %v, want the last round's %v", errs, last.errs)
+			}
+		})
+	}
+}
+
+// Two configured sources pointing at the same URL share one cache entry, so a
+// cached round merges the same events once rather than twice. They fetch
+// identical data; the live path already collapses them the same way.
+func TestSetEventsCollapsesFeedsSharingAURL(t *testing.T) {
+	s := &Store{}
+	dup := func(ok bool, title string) []feedResult {
+		var evs []calendar.Event
+		if title != "" {
+			evs = []calendar.Event{{Title: title}}
+		}
+		return []feedResult{
+			{Key: "https://example.test/cal.ics", Events: evs, OK: ok},
+			{Key: "https://example.test/cal.ics", Events: evs, OK: ok},
+		}
+	}
+	s.SetEvents(dup(true, "shared"), nil, nil)
+	s.SetEvents(dup(false, ""), []string{"ical: timeout"}, nil)
+
+	evs, _, _ := s.Snapshot()
+	if got := titlesOf(evs); !eq(got, []string{"shared", "shared"}) {
+		t.Errorf("events = %v, want the cached set merged once per source entry", got)
+	}
+}
+
+// Snapshot must keep handing back a copy: a caller that mutates what it got
+// must not reach into the Store's merged set.
+func TestSnapshotCopiesTheMergedSet(t *testing.T) {
+	s := &Store{}
+	s.SetEvents(okFeed("a", calendar.Event{Title: "original"}), nil, nil)
+
+	evs, _, _ := s.Snapshot()
+	evs[0].Title = "mutated"
+
+	again, _, _ := s.Snapshot()
+	if again[0].Title != "original" {
+		t.Errorf("Snapshot returned %q after a caller mutated an earlier copy, want %q",
+			again[0].Title, "original")
+	}
+}
+
+// TestFetchCalendarsServesCachedEventsForAFailedFeed is the end-to-end half:
+// a feed that worked and then goes down must keep its events on the row, and
+// they must be sorted and past-trimmed alongside the healthy feed's fresh ones
+// rather than appended in feed order. That is why the merge runs inside
+// SetEvents -- out in fetchCalendars it would only ever see this round's
+// successes, and a cached feed's events would land in a block at the end.
+func TestFetchCalendarsServesCachedEventsForAFailedFeed(t *testing.T) {
+	base := time.Now().Add(48 * time.Hour).UTC()
+	at := func(n int) string { return base.AddDate(0, 0, n).Format("20060102T150405Z") }
+	ics := func(uid, dtstart string) string {
+		return "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n" +
+			"BEGIN:VEVENT\r\nUID:" + uid + "\r\nDTSTART:" + dtstart + "\r\nDTEND:" + dtstart +
+			"\r\nSUMMARY:" + uid + "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	}
+
+	// Feed A is healthy throughout and holds the LATE event, so a correct
+	// merge interleaves the cached early one ahead of it. Its event also
+	// CHANGES between rounds: without that, the old whole-set-kept behaviour
+	// and the new per-feed cache produce the same answer and the test proves
+	// nothing.
+	aTitle := "A-late-first"
+	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(ics(aTitle, at(9))))
+	}))
+	defer srvA.Close()
+
+	var breakB bool
+	srvB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if breakB {
+			http.Error(w, "gone", http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(ics("B-early", at(1))))
+	}))
+	defer srvB.Close()
+
+	cfg := &config.Config{Calendars: []config.CalendarSource{
+		{Name: "A", URL: srvA.URL},
+		{Name: "B", URL: srvB.URL},
+	}}
+	cfg.Agenda.DaysAhead = 20
+
+	store := &Store{}
+	if ok := fetchCalendars(context.Background(), cfg, store); !ok {
+		t.Fatal("first fetchCalendars = false, want true (both feeds healthy)")
+	}
+
+	breakB = true
+	aTitle = "A-late-second"
+	if ok := fetchCalendars(context.Background(), cfg, store); ok {
+		t.Fatal("second fetchCalendars = true, want false (feed B is down)")
+	}
+
+	evs, _, errs := store.Snapshot()
+	if got := titlesOf(evs); !eq(got, []string{"B-early", "A-late-second"}) {
+		t.Errorf("events = %v, want [B-early A-late-second]: B's cached event kept and "+
+			"sorted into place while A's fresh one still lands", got)
+	}
+	if len(errs) != 1 {
+		t.Errorf("errs = %v, want the one failure so the panel still reads stale", errs)
+	}
+
+	// Dropping B from the config retires its cache; only A's event is left.
+	cfg.Calendars = cfg.Calendars[:1]
+	if ok := fetchCalendars(context.Background(), cfg, store); !ok {
+		t.Fatal("third fetchCalendars = false, want true (only the healthy feed is configured)")
+	}
+	evs, _, _ = store.Snapshot()
+	if got := titlesOf(evs); !eq(got, []string{"A-late-second"}) {
+		t.Errorf("events = %v, want [A-late-second]: a feed removed from config must stop contributing", got)
 	}
 }

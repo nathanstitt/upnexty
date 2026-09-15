@@ -5,16 +5,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nathanstitt/luckfox-dashboard/internal/calendar"
-	"github.com/nathanstitt/luckfox-dashboard/internal/config"
-	"github.com/nathanstitt/luckfox-dashboard/internal/weather"
+	"github.com/nathanstitt/upnexty/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/config"
+	"github.com/nathanstitt/upnexty/internal/weather"
 )
 
 // Store holds the most recent successful fetch of each source. A failed fetch
 // records an error but never discards last-good data — a transient outage must
-// not blank the panel. It is written by two fetch goroutines (calendar and
-// weather, each on their own interval) and read by the render loop, so every
-// field is guarded by mu.
+// not blank the panel. "Each source" is per calendar feed, not per fetch round:
+// see feedEvents. It is written by two fetch goroutines (calendar and weather,
+// each on their own interval) and read by the render loop, so every field is
+// guarded by mu.
 type Store struct {
 	mu      sync.RWMutex
 	cfg     *config.Config
@@ -22,6 +23,22 @@ type Store struct {
 	weather *weather.Weather
 	evErrs  []string
 	wxErrs  []string
+
+	// feedEvents is the last-good event set for each calendar feed, keyed by
+	// feedResult.Key (the feed's URL — see that type). It exists so last-good
+	// data is kept PER FEED rather than globally: SetEvents used to drop the
+	// whole merged fetch whenever any feed errored, so one broken calendar
+	// froze every working one at whatever the last fully-clean fetch showed.
+	// That was latent while every feed was iCal over HTTP and failures were
+	// brief, and stops being latent with a backend that can fail for days at a
+	// time (an expired OAuth token), which would pin the entire agenda.
+	//
+	// Entries for feeds no longer in the config are pruned on each fetch
+	// rather than left to expire: a feed deleted in the portal must stop
+	// contributing events immediately, and nothing else would ever collect
+	// them — this map would otherwise accumulate every URL the board has ever
+	// been pointed at, for the life of the process.
+	feedEvents map[string][]calendar.Event
 
 	// evFetched records that a calendar fetch has completed, successfully or
 	// not. It distinguishes "no events yet" from "no events", which are
@@ -179,21 +196,84 @@ func (s *Store) WaitCalendarWake(d time.Duration) bool {
 	}
 }
 
-// SetEvents records the result of a calendar fetch attempt. On failure (errs
-// non-nil) the previous events are kept; evs is expected to be nil in that
-// case, but the last-good set is preserved either way.
+// feedResult is one calendar feed's outcome from a single fetch round.
+type feedResult struct {
+	// Key identifies the feed across fetches. The URL is what we key on: it is
+	// the only field of config.CalendarSource that actually selects the data,
+	// so a feed renamed or recoloured in the portal keeps its cache instead of
+	// being treated as a brand-new feed and blanking until its next successful
+	// fetch. Name looks like the friendlier key and is exactly wrong for that
+	// reason — it is free text the user edits.
+	//
+	// Two sources sharing a URL therefore share one cache entry. Doing that
+	// deliberately: they fetch identical data, so a per-source cache would
+	// hold two copies and a failure of one but not the other would merge the
+	// same events in twice. Collapsing them means duplicate sources behave in
+	// the cached path exactly as they do in the live path, where the later
+	// SetEvents assignment for a key simply wins.
+	Key string
+	// Events is what this feed returned, already parsed but not yet merged
+	// with the other feeds. Ignored when OK is false.
+	Events []calendar.Event
+	// OK distinguishes "this feed returned nothing" from "this feed failed".
+	// They are the same empty slice and must not be: the first replaces the
+	// cache (a genuinely empty calendar), the second preserves it.
+	OK bool
+}
+
+// SetEvents records the result of a calendar fetch round, one entry per feed
+// that was attempted, and rebuilds the merged event set from it.
 //
-// A failed attempt still clears evFetched: the panel has now tried, and an
-// empty agenda is the honest answer. Gating on success instead would leave a
-// board with an unreachable feed showing "Fetching..." forever.
-func (s *Store) SetEvents(evs []calendar.Event, errs []string) {
+// Feeds that succeeded replace their cached events; feeds that failed keep
+// theirs, so an outage on one calendar no longer freezes the others. errs
+// still carries every failure, whether or not cached events covered for it —
+// model.Build turns a non-empty errs into ViewModel.Stale, and a panel served
+// partly from cache is exactly what that indicator is for.
+//
+// merge is applied to the concatenation of all live feeds' events while the
+// lock is held. The caller owns it because the merge policy (sort by start,
+// TrimPast, MaxEvents) is about the agenda rather than about storage, and it
+// has to run over the merged set: cached events must be sorted and trimmed
+// alongside fresh ones, or a feed being served from cache would look different
+// on the panel — out of order, or past events still on the row — than the same
+// feed succeeding. A nil merge stores the concatenation as-is.
+//
+// Feeds absent from results are dropped from the cache entirely; see
+// Store.feedEvents. That makes results the authoritative list of live feeds,
+// so the caller must pass an entry for every configured feed it attempted,
+// including the failures — omitting a failed feed would silently delete its
+// cache, which is the bug this method exists to fix.
+//
+// A failed attempt still sets evFetched: the panel has now tried, and an empty
+// agenda is the honest answer. Gating on success instead would leave a board
+// with an unreachable feed showing "Fetching..." forever.
+func (s *Store) SetEvents(results []feedResult, errs []string, merge func([]calendar.Event) []calendar.Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.evErrs = errs
 	s.evFetched = true
-	if len(errs) == 0 {
-		s.events = evs
+
+	next := make(map[string][]calendar.Event, len(results))
+	var all []calendar.Event
+	for _, r := range results {
+		evs := r.Events
+		if !r.OK {
+			// The failing feed contributes whatever it last returned. A feed
+			// that has never succeeded has no entry, so the lookup yields nil
+			// and it contributes nothing — the first fetch of a broken feed
+			// must show an empty row, not invent events for it.
+			evs = s.feedEvents[r.Key]
+		}
+		next[r.Key] = evs
+		all = append(all, evs...)
 	}
+	s.feedEvents = next
+
+	if merge != nil {
+		all = merge(all)
+	}
+	s.events = all
 }
 
 // SetWeather records the result of a weather fetch attempt. On failure w is
