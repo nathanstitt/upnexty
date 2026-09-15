@@ -356,10 +356,167 @@ to dismiss. That is the dominant open problem with touch (see docs/TODO.md).
 
 Those figures predate the portal. With it running in the same process, idle RSS
 measured 33–38MB across two observations on 2026-08-27 (354MB free), so the
-portal costs nothing meaningful at rest — but the per-frame and peak numbers
-have not been re-measured since.
+portal costs nothing meaningful at rest.
+
+**A frame peaks far higher than idle RSS suggests.** Measured 2026-09-14:
+`VmHWM` reached **91MB** during the first render after boot, against a 38–53MB
+`VmRSS` between frames. The memory is returned afterwards — RSS falls back and
+HWM stays flat across later frames — so this is a per-render spike, not a leak.
+It is ~2.5× the idle figure above, which is the number to plan against on a
+477MB board. Read `VmHWM`, not `VmRSS`: RSS between ticks says nothing about
+what a render costs.
+
+## Health logging
+
+`/root/health.sh` (started by `board/etc/init.d/S98health`) samples uptime,
+`MemAvailable`, the dashboard's RSS/HWM/threads/fds, its cumulative CPU, and
+`wlan0` state every 30s to **`/root/health.log`**.
+
+`/root` because it is UBI and persists; `/tmp`, `/var/log` and `/run` are tmpfs
+and are erased by the reboot that follows a hang — which is exactly why the
+2026-09-14 lockup (panel frozen at 12:17, no ping, no SSH, no adb, recovered
+only by a power cycle) left nothing to examine.
+
+Two signals it exists to capture:
+
+- **`cpu=` stops climbing while `pid=` stays the same.** A render burns ~800
+  jiffies (~8s) a frame, so a flat total across several minutes means the
+  process is alive but no longer rendering. `/proc/pid/io` does not exist on
+  this kernel, and `/dev/fb0`'s mtime is the device node's rather than the last
+  write, so neither of those works as a render heartbeat — CPU time is what is
+  left.
+- **`!!! UNCLEAN SHUTDOWN`** at the top of a boot's samples. `S98health`
+  writes `running` to `/root/health.state` on start and `stopped` on a clean
+  stop, so finding `running` at boot means the previous run was cut off.
+  `/root/health.lastseen` carries the last live timestamp. Verified with a
+  sysrq hard reset (`echo b > /proc/sysrq-trigger`), which reproduces a lockup
+  closely enough to test the detector, and confirmed silent on a clean stop.
+
+Timestamps before `S99wlan0` runs `rdate` are tagged `(preclock)` — the board
+has no RTC and boots at 1970. Order by `up=` instead.
+
+### What the first captured lockup showed (2026-09-14 18:06)
+
+The board froze with the sampler running, so for once there is data. It rules
+out more than it confirms — **the board died abruptly while completely
+healthy**:
+
+| | |
+|---|---|
+| `avail` | never below 315MB; **369MB** in the final sample. Not an OOM. |
+| RSS | oscillated 33–63MB per render and returned every time. No leak. |
+| threads / fds | flat at 7 and 7–8 for the whole 12 minutes. |
+| `cpu` | climbing to the last sample (+720j). It died mid-render, not after stalling. |
+| load | ~1.0 throughout — one busy process, as expected. |
+| thermal | 54°C after recovery; not heat. |
+
+So it is **not** userspace resource exhaustion, which is what the sampler was
+built to catch. Both of that day's lockups happened during heavy USB/adb
+traffic — one mid-`adb push` of the 17MB binary — and in the second,
+`adb get-state` kept answering `device` while `adb shell` could not fork. A
+live gadget with a userspace that cannot fork points at the kernel or a vendor
+driver (the USB gadget and the AIC8800DC are both out-of-tree blobs on 6.1.99),
+not at the dashboard.
+
+One unexplained correlation, on a single data point: `hwm` stepped 68MB → 95MB
+at 18:05:09, the largest render peak recorded, and the board died ~60s later.
+Memory was returned and 374MB stayed free, so it is not exhaustion — treat it
+as a lead, not a cause.
+
+A third lockup the same afternoon (froze 18:20:17, `up=312` — **5.2 minutes**)
+looked identical in every metric: 372MB available, RSS 50MB, threads 7, fds 7,
+`cpu` still climbing into the final sample. **The survival time is not fixed**
+— 11.6 min, then 5.2 min — so do not read a period into it. What is consistent
+across all three is the shape: a healthy board that stops instantly, WiFi
+first, with the USB gadget still answering `adb get-state` while `adb shell`
+can no longer fork.
+
+### The lockup is the external iCal fetch (2026-09-14)
+
+Four tests on one afternoon, each changing one thing:
+
+| Test | Configuration | Result |
+|---|---|---|
+| baseline | real HTTPS iCal feeds | **died at 5.2 and 11.6 min** |
+| 1 | dashboard stopped entirely | survived 26 min |
+| 2d | **the same real feed, 5091 events, served from `127.0.0.1`** | **survived 25 min, full 95MB peak** |
+| 3 | real HTTPS feeds restored | **died at 11 min**, at the refetch |
+
+Test 2d is the one that matters: identical data, identical parse, identical
+memory spike, fetched over loopback instead of TLS — and the board was fine.
+Test 3 put the external URLs back on a board that had been up 96 minutes and it
+died 11 minutes later, at the 10-minute refetch.
+
+That eliminates rendering, parsing, and the memory peak. It is not HTTPS in
+general either: the weather fetch (`api.open-meteo.com`, small JSON, every 15
+min) ran successfully throughout all of it. What is left is **pulling ~16MB
+over TLS through the AIC8800DC vendor driver**, every 10 minutes.
+
+The feeds are big: `Personal` 2290 VEVENTs / 7.0MB and `Rice` 2801 / 8.9MB,
+**5091 events and 15.9MB total, to yield 43 events in the 7-day window**.
+
+Every lockup looks the same and none of them is resource exhaustion — see the
+health-log evidence below.
+
+### Isolation test 1 (2026-09-14): the dashboard is implicated
+
+With `S99zdashboard` **stopped** and only the health sampler running, the board
+**survived 26 minutes** — healthy the whole way (408MB available, WiFi up,
+`load` steady at 0.9 from the I²C storm described under Touch). The same board
+had died at **5.2** and **11.6** minutes with the dashboard running.
+
+That is one run, not a proof: with only two failure samples the spread is wide
+enough that a single quiet window is possible. Repeat it before treating the
+dashboard as the confirmed cause. But it is the first evidence that separates
+the two, and it argues **against** the pure kernel/driver theory the health log
+seemed to support — a healthy board dying mid-stride looked like a driver
+fault, yet the dashboard is what changes the outcome.
+
+Next cut, if the repeat agrees: run the dashboard with `calendars` set to `[]`
+(weather still fetches — `weather_minutes` cannot be disabled, config
+validation forces any value ≤ 0 back to 15), which separates iCal fetching from
+rendering.
+
+**Deploy over SSH, not `adb push`.** A push that dies mid-transfer takes the
+binary with it, and adb is implicated in both freezes. Stage and swap so an
+interrupted copy cannot leave the board with no binary:
+
+```bash
+scp build/dashboard root@<board>:/root/dashboard.new
+ssh root@<board> 'mv /root/dashboard.new /root/dashboard && chmod +x /root/dashboard'
+```
+
+The next step for this, if it recurs, is a USB-TTL adapter on the UART pins:
+the kernel's dying words are the one thing no userspace sampler can capture.
 
 ## Touch
+
+**The I²C bus runs a permanent ~300 interrupt/sec storm**, with nobody touching
+the glass. Measured 2026-09-14: `ff060000.i2c` (IRQ 44) accumulated 316,701
+interrupts in 1055s of uptime — 300/s average since boot, steady rather than
+escalating. A `kworker` sits in D state in `goodix_process_events`, which is
+what holds load average near 0.9 on a board that is otherwise 93% idle.
+
+Read that load figure correctly: it is D-state I/O wait, not CPU work, so it
+does not mean something is spinning on the processor.
+
+The device tree also declares two I²C devices this hardware does not have, and
+both fail to probe at boot:
+
+```
+Goodix-TS 2-0014: Error reading 1 bytes from 0x8140: -6
+Goodix-TS 2-0014: I2C communication failure: -6
+edt_ft5x06 2-0038: touchscreen probe failed
+```
+
+`2-0014` and `2-0038` end up with no driver bound; the real digitizer is
+`2-005d` (ID 9271) and the backlight is `2-0045`. The storm comes from the
+*working* driver at `2-005d`, not from the failed probes.
+
+Whether this is related to the lockups is **unresolved** — the rate is constant
+from boot and does not climb toward a freeze, so it does not on its own explain
+a hang at a variable 5–12 minutes. It is documented here because it is real,
+costs power and wakeups continuously, and was found while chasing the hangs.
 
 The panel's Goodix digitizer is on `/dev/input/event0`, reporting **portrait**
 coordinates (0–479 x, 0–1919 y) whatever the framebuffer rotation is.
