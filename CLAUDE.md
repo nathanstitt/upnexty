@@ -395,87 +395,22 @@ Two signals it exists to capture:
 Timestamps before `S99wlan0` runs `rdate` are tagged `(preclock)` — the board
 has no RTC and boots at 1970. Order by `up=` instead.
 
-### What the first captured lockup showed (2026-09-14 18:06)
+### The lockups
 
-The board froze with the sampler running, so for once there is data. It rules
-out more than it confirms — **the board died abruptly while completely
-healthy**:
+**See `docs/lockups.md`.** Eight freezes across 2026-09-14/15, six hypotheses
+proposed and all six refuted by testing. That document records the signature,
+what the health log showed, each theory and how it died, and what to try next.
 
-| | |
-|---|---|
-| `avail` | never below 315MB; **369MB** in the final sample. Not an OOM. |
-| RSS | oscillated 33–63MB per render and returned every time. No leak. |
-| threads / fds | flat at 7 and 7–8 for the whole 12 minutes. |
-| `cpu` | climbing to the last sample (+720j). It died mid-render, not after stalling. |
-| load | ~1.0 throughout — one busy process, as expected. |
-| thermal | 54°C after recovery; not heat. |
+The short version: the board stops dead with every metric healthy — WiFi first,
+the USB gadget still answering `adb get-state` while userspace cannot fork —
+after anywhere from 5 minutes to 2 hours. It is not resource exhaustion, not
+the calendar feed size, not the RAM (memtester: 16 tests, 0 failures), and not
+large-allocation churn. What is left is the kernel or the out-of-tree vendor
+drivers, which needs a UART console to see.
 
-So it is **not** userspace resource exhaustion, which is what the sampler was
-built to catch. Both of that day's lockups happened during heavy USB/adb
-traffic — one mid-`adb push` of the 17MB binary — and in the second,
-`adb get-state` kept answering `device` while `adb shell` could not fork. A
-live gadget with a userspace that cannot fork points at the kernel or a vendor
-driver (the USB gadget and the AIC8800DC are both out-of-tree blobs on 6.1.99),
-not at the dashboard.
+Do not re-derive this from scratch; several of the refuted theories are
+individually convincing.
 
-One unexplained correlation, on a single data point: `hwm` stepped 68MB → 95MB
-at 18:05:09, the largest render peak recorded, and the board died ~60s later.
-Memory was returned and 374MB stayed free, so it is not exhaustion — treat it
-as a lead, not a cause.
-
-A third lockup the same afternoon (froze 18:20:17, `up=312` — **5.2 minutes**)
-looked identical in every metric: 372MB available, RSS 50MB, threads 7, fds 7,
-`cpu` still climbing into the final sample. **The survival time is not fixed**
-— 11.6 min, then 5.2 min — so do not read a period into it. What is consistent
-across all three is the shape: a healthy board that stops instantly, WiFi
-first, with the USB gadget still answering `adb get-state` while `adb shell`
-can no longer fork.
-
-### The lockup is the external iCal fetch (2026-09-14)
-
-Four tests on one afternoon, each changing one thing:
-
-| Test | Configuration | Result |
-|---|---|---|
-| baseline | real HTTPS iCal feeds | **died at 5.2 and 11.6 min** |
-| 1 | dashboard stopped entirely | survived 26 min |
-| 2d | **the same real feed, 5091 events, served from `127.0.0.1`** | **survived 25 min, full 95MB peak** |
-| 3 | real HTTPS feeds restored | **died at 11 min**, at the refetch |
-
-Test 2d is the one that matters: identical data, identical parse, identical
-memory spike, fetched over loopback instead of TLS — and the board was fine.
-Test 3 put the external URLs back on a board that had been up 96 minutes and it
-died 11 minutes later, at the 10-minute refetch.
-
-That eliminates rendering, parsing, and the memory peak. It is not HTTPS in
-general either: the weather fetch (`api.open-meteo.com`, small JSON, every 15
-min) ran successfully throughout all of it. What is left is **pulling ~16MB
-over TLS through the AIC8800DC vendor driver**, every 10 minutes.
-
-The feeds are big: `Personal` 2290 VEVENTs / 7.0MB and `Rice` 2801 / 8.9MB,
-**5091 events and 15.9MB total, to yield 43 events in the 7-day window**.
-
-Every lockup looks the same and none of them is resource exhaustion — see the
-health-log evidence below.
-
-### Isolation test 1 (2026-09-14): the dashboard is implicated
-
-With `S99zdashboard` **stopped** and only the health sampler running, the board
-**survived 26 minutes** — healthy the whole way (408MB available, WiFi up,
-`load` steady at 0.9 from the I²C storm described under Touch). The same board
-had died at **5.2** and **11.6** minutes with the dashboard running.
-
-That is one run, not a proof: with only two failure samples the spread is wide
-enough that a single quiet window is possible. Repeat it before treating the
-dashboard as the confirmed cause. But it is the first evidence that separates
-the two, and it argues **against** the pure kernel/driver theory the health log
-seemed to support — a healthy board dying mid-stride looked like a driver
-fault, yet the dashboard is what changes the outcome.
-
-Next cut, if the repeat agrees: run the dashboard with `calendars` set to `[]`
-(weather still fetches — `weather_minutes` cannot be disabled, config
-validation forces any value ≤ 0 back to 15), which separates iCal fetching from
-rendering.
 
 **A transfer can corrupt the binary silently.** On 2026-09-15 a dashboard
 arrived at exactly the right size with a different checksum:

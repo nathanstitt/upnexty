@@ -75,11 +75,13 @@ than a one-time setup.
 
 ## What this does not claim to fix
 
-The lockups (see CLAUDE.md). Test 3 implicated external fetching, but the
-mechanism is unknown, and the gzip finding above invalidated the "16MB over
-TLS" magnitude that theory rested on. This plan is justified by the memory and
-CPU numbers alone. If it also stops the lockups, that is a bonus to verify, not
-a promise.
+The lockups — and this is now **tested, not hedged**. The board was switched to
+the Google backend on 2026-09-15 (peak RSS 60MB instead of 91–126MB, no 16MB
+buffers, no iCal parsing at all) and locked up anyway after ~85 minutes.
+
+So this plan is justified by the memory and CPU numbers alone, which is what it
+always claimed. See `docs/lockups.md` for the full investigation; the cause is
+below userspace and no calendar backend affects it.
 
 ## Do not use the iCal export's date parameters
 
