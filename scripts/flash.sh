@@ -35,7 +35,35 @@ info "flashing $IMAGE ($(du -h "$IMAGE" | cut -f1)) -- board is in $mode mode"
 echo "    this erases the board. ctrl-c within 5s to abort."
 sleep 5
 
-run_upgrade_tool uf "$IMAGE"
+# Ignore SIGPIPE for the write, and never let the caller's pipe reach it.
+#
+# On 2026-09-15 a flash was run as `upgrade_tool UF ... | head`. head exited at
+# 3%, the kernel sent SIGPIPE, and the write died having erased the bootloader
+# but written almost none of the image. The board dropped to Maskrom and never
+# came back. A partial write is the one outcome worth engineering against here:
+# it is the difference between "retry it" and "the board no longer boots".
+#
+# Progress goes to the terminal on stderr regardless; stdout is teed to a log so
+# a transcript survives without a pipe being able to kill the writer.
+flash_log="${TMPDIR:-/tmp}/luckfox-flash-$(date +%Y%m%d-%H%M%S).log"
+info "progress log: $flash_log"
+
+set +e
+(
+	trap '' PIPE
+	run_upgrade_tool uf "$IMAGE"
+) > >(tee "$flash_log") 2>&1
+rc=$?
+set -e
+
+if [ "$rc" -ne 0 ]; then
+	die "flash FAILED (exit $rc) -- see $flash_log
+
+The board is probably in Maskrom now with a partial image. That is recoverable:
+hold BOOT while reconnecting the OTG port, then run this script again. Do not
+pipe this script's output into a command that exits early (head, grep -q, less
+that you quit) -- that is what interrupts the write."
+fi
 
 info "flashed. the board reboots on its own; give it ~15s."
 echo "next: scripts/deploy.sh, then set the panel timings (see CLAUDE.md)"
