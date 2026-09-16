@@ -153,13 +153,19 @@ that way.
 
 ## What is left
 
-The surviving explanation is the kernel or a vendor driver. Both candidates are
-out-of-tree blobs on Linux 6.1.99:
+The surviving explanation is the kernel or a vendor driver on Linux 6.1.99.
 
-- **`aic8800_fdrv`** — the AIC8800DC WiFi driver, loaded from `/root/*.ko`.
-  WiFi is always the first thing to die.
-- **`dwc2`** — the USB gadget. It keeps answering after userspace is gone,
-  which is either a clue or a coincidence.
+- ~~**`aic8800_fdrv`** — the AIC8800DC WiFi driver.~~ **Refuted 2026-09-15**
+  (hypothesis 7): the board died at 1h48m with the module not resident.
+- **`dwc2`** — the USB controller, and now the leading candidate by
+  elimination. The gadget (IRQ 53) keeps answering `adb get-state` after
+  userspace is gone, and the host side (IRQ 54) runs a permanent 8,000
+  interrupt/sec SOF storm — see *The dwc2 SOF interrupt storm* below.
+- **The kernel itself**, or the Rockchip BSP's other out-of-tree pieces.
+
+WiFi dying first is still the most consistent symptom, but hypothesis 7 shows
+that is a *consequence* rather than the cause — the board locks up the same way
+with no WiFi driver in memory at all.
 
 There is also a **permanent ~300 interrupt/sec I²C storm** from the touch
 driver (see CLAUDE.md, *Touch*), with a `kworker` in D state in
@@ -167,6 +173,144 @@ driver (see CLAUDE.md, *Touch*), with a `kworker` in D state in
 freeze, so it does not explain the timing — but it is continuous kernel-side
 pressure on a board that is failing in kernel space, and it has not been ruled
 out as a contributing factor.
+
+## The second-board test (2026-09-15) — attempted, not completed
+
+The obvious way to separate "this board is defective" from "this design locks
+up" is a second board. One was connected on 2026-09-15. **The test never ran**
+— the board was destroyed during setup, before it rendered a single frame. The
+board-defect question is still open.
+
+What was established before it died is worth keeping:
+
+**The replacement shipped with stock Zero W firmware**, not the base-Lyra image
+this project flashes. `aic8800_fdrv` and `aic_load_fw` were already resident,
+`/root` was empty, and the panel was at stock 800×1280. So a second board is not
+a drop-in comparison: to reproduce this stack it has to be reflashed with
+`Luckfox_Lyra_Flash_*` and then have the WiFi driver grafted on by
+`setup-wifi.sh`, exactly as CLAUDE.md describes.
+
+**How it was destroyed.** The flash was run as `upgrade_tool UF … | head`. `head`
+exited at 3%, the kernel delivered SIGPIPE, and the write stopped having erased
+the bootloader and written almost none of the image. The board fell back to
+Maskrom — recoverable in principle — but then stopped enumerating on USB
+entirely and never powered up again. The same cable and port worked on the
+original board immediately afterward, which rules out the host side.
+
+No mechanism connects a NAND write to a power failure: mask ROM is on-die and
+unwritable, and a bootloader-wiped board should still present a USB gadget. The
+likeliest reading is an unrelated hardware failure with very unlucky timing.
+That is not certain, and the interrupted write was avoidable regardless.
+
+`scripts/flash.sh` now ignores SIGPIPE for the duration of the write and tees
+its own log, so no caller's pipe can interrupt a flash again.
+
+### Two tooling bugs found, both fixed
+
+**`flash.sh` could never have worked on a Mac.** `run_upgrade_tool` called
+`sudo` unconditionally. Under `sudo`, `upgrade_tool` segfaults immediately —
+`EXC_BAD_ACCESS`, `KERN_INVALID_ADDRESS at 0x8`, four frames from `start`,
+before it touches a device. Run as the ordinary user it flashes normally. Note
+this is **not** the arm64 crash CLAUDE.md documents: this was the x86_64 slice
+under `arch -x86_64`, and the trigger is `sudo`, not the architecture. macOS
+gives the logged-in user USB access; root was never required.
+
+**Maskrom → Loader never completes on this hardware.** `DB MiniLoaderAll.bin`
+reports `Download boot ok` and returns 0, but the board stays in Maskrom through
+30s of polling, and `UF` from Maskrom fails at `Wait For Maskrom Fail` every
+time. `UF` from **Loader** mode worked on the first try. If a future board lands
+in Maskrom, expect to need a real power cycle with BOOT held to reach Loader —
+the software transition does not work here.
+
+### For the next attempt
+
+- **Flash from Loader, not Maskrom**, and never pipe the flash into anything.
+- **`reboot loader` is unreliable on stock Zero W firmware.** Plain `adb shell
+  reboot loader` returned `Waiting for SIGTERM`, rc=255, and the board kept
+  running with uptime climbing. Detaching it (`nohup sh -c "sleep 1; reboot
+  loader" &`) did reboot it. Holding BOOT while connecting is the dependable
+  route.
+- **`upgrade_tool` reports `connected(0)` when it cannot access USB** — the same
+  output as a genuinely absent board. Confirm with `ioreg -p IOUSB -l -w 0 |
+  grep 'idVendor" = 8711'` before concluding anything about the board's state.
+  Reading that empty list as "the board is gone" wasted a cycle here.
+- **Capture the real `config.json` first.** Only `config.sample.json` with
+  `PASTE_ICAL_URL` is in the repo; the working config lived on the board. A soak
+  against an empty calendar never exercises the fetch path that hypothesis 3 was
+  built on, so it cannot refute — or confirm — the most interesting theory.
+- **Soak well past 2 hours.** Recorded survival ranges from 5.2 minutes to ~2
+  hours, so anything shorter than several hours of clean running says nothing.
+
+### 7. The AIC8800 WiFi driver
+
+*Claim:* `aic8800_fdrv` is an out-of-tree vendor blob, WiFi is always the first
+thing to die, and every other software explanation had been eliminated. This was
+the leading hypothesis going into 2026-09-15.
+
+*Tested* by unloading the driver entirely and keeping the workload identical.
+`soak-nowifi.sh` serves a 4.5MB / 5,000-event iCal feed from `127.0.0.1`, so the
+parse, the unfolding passes, the ~66MB `VmHWM` spike and the ~10s render all
+still happen -- only the radio is gone. This is test 2d's design (same data,
+different transport) applied to the driver instead of the feed.
+
+*Refuted.* The board locked up at **1h48m** (started 20:21:27, died 22:09:50),
+squarely inside the established 5min--2h range, with the driver not resident.
+
+The evidence that it really was unloaded matters, because `wlan0=-` alone does
+not prove it -- `ip link set wlan0 down` and `rmmod` produce an identical
+reading. What settles it is `slab=`: the driver is worth ~5,000 pages (~20MB) of
+kernel memory, and across all 211 samples of the soak `slab` stayed within 71
+pages of 7429, against 12,485 with the driver loaded. It never returns. (The
+sampler now records `wdrv=y/n` from `/proc/modules` directly, so this does not
+have to be reconstructed again.)
+
+Incidentally also refutes **a marginal power supply**: the board was on Mac USB
+power when it died at 22:09, and the move to a wall charger came afterwards.
+
+## The dwc2 SOF interrupt storm
+
+Found while reading the new kernel counters. Not yet linked to the lockups, but
+it is a real defect and it is on one of the two remaining suspects.
+
+**The USB *host* controller takes ~8,000 interrupts/sec, permanently.** Measured
+2026-09-16 on an idle board:
+
+| | |
+|---|---|
+| IRQ 53 `ff740000.usb` (gadget/adb) | 59 total -- idle |
+| IRQ 54 `ff780000.usb` (host) | 7.2M, **8,039/s**, all on CPU1 |
+
+It is not traffic. A `ping -f` flood over WiFi moved it from 8,039/s to
+8,048/s -- nine interrupts per second of actual data on an 8,000/s floor. It is
+also independent of everything else tested: identical at 8,000/s during the
+2026-09-15 soak with `aic8800_fdrv` unloaded and no network at all, and
+identical with the adb host disconnected.
+
+8,000/s is exactly the USB 2.0 high-speed **microframe (SOF) rate** -- one
+interrupt every 125µs. The registers confirm the mechanism:
+
+```
+GINTMSK = 0xf300080e    bit 3 (SOF) SET -- the interrupt is unmasked
+GINTSTS = 0x04600001    serviced and cleared between reads
+HPRT0   = 0x00001005    port enabled, connected, high-speed
+```
+
+A correctly configured dwc2 masks SOF when it has no periodic transfers to
+schedule. This one leaves it enabled and wakes the CPU 8,000 times a second to
+do nothing, on a 1.2GHz Cortex-A7. The only devices on that bus are the onboard
+hub (`1a86:8091`) and the AIC8800DC (`a69c:88dc`).
+
+Worth noting what this is *not*: it is not the gadget, so it is unrelated to
+adb, and disconnecting the host cable would not change it. The earlier reading
+in CLAUDE.md that treated IRQ 54 as the adb gadget was wrong -- IRQ 54 is shared
+between `ff780000.usb` and `dwc2_hsotg:usb1`, and the gadget is IRQ 53.
+
+Whether it causes the lockups is **unresolved**, and the honest case against is
+the same one that applies to the I²C storm: the rate is constant from boot and
+does not climb toward a freeze, so it does not by itself explain a hang at a
+variable 5 minutes to 2 hours. What makes it worth pursuing anyway is that it is
+continuous kernel-side pressure on one of the two named suspects, and it is
+measurable and fixable in a way the rest of this investigation has not been.
 
 ## The next step
 

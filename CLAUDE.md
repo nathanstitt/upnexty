@@ -65,9 +65,37 @@ chmod +x tools/upgrade_tool_v2.44_for_mac/upgrade_tool
 Use `ditto`, not `unzip` — the archive contains a Chinese-named PDF that
 macOS `unzip` fails on mid-extraction.
 
-**v2.44's arm64 slice segfaults** in `pthread_mutex_init` at startup. The
-scripts always invoke it via `arch -x86_64`; do the same if you call it
-directly. v2.44 is the newest macOS build Rockchip ships.
+**v2.44's arm64 slice segfaults** in `pthread_mutex_init` at startup — *on
+macOS 15 and earlier*. The scripts prefer `arch -x86_64` for that reason.
+
+**On macOS 27 there is no Rosetta**, so `arch -x86_64` fails with `Bad CPU type
+in executable` and takes every board script with it. The arm64 slice runs
+correctly there (verified 2026-09-16: `LD` enumerates and exits 0), so
+`common.sh` now probes for Rosetta and falls back to running it natively.
+Install Rosetta with `softwareupdate --install-rosetta` if you hit an arm64 bug.
+v2.44 is the newest macOS build Rockchip ships.
+
+**Never run `upgrade_tool` under `sudo`, and never pipe its output.** Two
+separate ways to lose a board, both hit on 2026-09-15:
+
+- Under `sudo` it segfaults instantly — `EXC_BAD_ACCESS at 0x8`, four frames
+  from `start`, before it opens a device. This is *not* the arm64 crash above;
+  it happens to the x86_64 slice too. macOS gives the logged-in user raw USB
+  access, so root is never needed. `scripts/common.sh` used to add `sudo`, which
+  meant `flash.sh` could not work on a Mac at all.
+- Piping it into anything that exits early (`head`, `grep -q`, a `less` you
+  quit) sends SIGPIPE mid-write. A flash killed at 3% erases the bootloader
+  without writing the image. `flash.sh` now traps SIGPIPE and tees its own log;
+  keep that property if you touch it.
+
+Flash from **Loader** mode. `UF` from Maskrom fails at `Wait For Maskrom Fail`
+on this hardware, and `DB MiniLoaderAll.bin` returns success without actually
+leaving Maskrom — hold BOOT while connecting to get a usable mode.
+
+When `upgrade_tool LD` prints `connected(0)`, that can mean it lacks USB access
+rather than that no board is attached — a sandboxed shell produces exactly this.
+Cross-check with `ioreg -p IOUSB -l -w 0 | grep 'idVendor" = 8711'` before
+concluding the board is gone.
 
 ## Daily loop
 
@@ -372,6 +400,19 @@ what a render costs.
 `MemAvailable`, the dashboard's RSS/HWM/threads/fds, its cumulative CPU, and
 `wlan0` state every 30s to **`/root/health.log`**.
 
+It also samples the kernel side, added 2026-09-16 because every captured lockup
+until then ended on a "completely healthy" line — the sampler watched userspace
+only, and the failure is below it:
+
+| field | what it is | why |
+|---|---|---|
+| `wdrv=` | is `aic8800_fdrv` in `/proc/modules` | `wlan0=-` cannot distinguish a downed link from an unloaded driver, and that was exactly the question the 2026-09-15 soak turned on |
+| `slab=` | `nr_slab_*` pages from `vmstat` | kernel memory leak; `/proc/slabinfo` does not exist on this kernel (`CONFIG_SLUB_DEBUG` off). The WiFi driver is worth ~5,000 pages, so this doubles as a module-presence check |
+| `hi=` | largest free block in `buddyinfo` | fragmentation collapse fails high-order allocations while `MemAvailable` still looks fine — the shape of a healthy-looking board that cannot fork |
+| `sk=`/`tcpm=` | sockets, TCP pages | socket-buffer leak |
+| `irq=` | `dwc2,i2c` totals | the two suspect drivers |
+| `ctxt=`/`forks=` | since boot | the signature is "userspace cannot fork while the kernel still services USB"; if that lasts one sample these freeze while `irq` climbs |
+
 `/root` because it is UBI and persists; `/tmp`, `/var/log` and `/run` are tmpfs
 and are erased by the reboot that follows a hang — which is exactly why the
 2026-09-14 lockup (panel frozen at 12:17, no ping, no SSH, no adb, recovered
@@ -457,6 +498,17 @@ what holds load average near 0.9 on a board that is otherwise 93% idle.
 
 Read that load figure correctly: it is D-state I/O wait, not CPU work, so it
 does not mean something is spinning on the processor.
+
+**The I²C storm is not the biggest one.** The USB *host* controller
+(`ff780000.usb`, IRQ 54) runs at **~8,000 interrupts/sec** — 27× the I²C rate,
+permanently, on CPU1. That is the USB 2.0 microframe rate: `GINTMSK` has the SOF
+bit set, so the controller wakes the CPU every 125µs with nothing to do. It is
+not traffic (a `ping -f` flood adds ~9/s to it) and not the adb gadget (that is
+IRQ 53, which is idle at ~59 interrupts total). See `docs/lockups.md`.
+
+When reading `/proc/interrupts` here, note IRQ 54 is **shared** between
+`ff780000.usb` and `dwc2_hsotg:usb1`, and only `ff740000.usb` on IRQ 53 is the
+gadget. Attributing IRQ 54's count to adb is the easy mistake.
 
 The device tree also declares two I²C devices this hardware does not have, and
 both fail to probe at boot:
