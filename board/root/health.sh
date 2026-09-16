@@ -65,6 +65,44 @@ sample() {
     cpu=-1
   fi
   link=$(cat /sys/class/net/wlan0/operstate 2>/dev/null || echo "-")
+  # Whether the WiFi driver is actually resident, not just whether the
+  # interface is up. wlan0= alone cannot answer this: `ip link set wlan0 down`
+  # and `rmmod aic8800_fdrv` both leave wlan0= reading "-", so a log showing
+  # "-" proves nothing about the module. During the 2026-09-15 soak that
+  # distinction was the whole question -- whether the board died with the
+  # driver unloaded -- and it had to be reconstructed indirectly from slab=
+  # (the driver is worth ~5000 pages, so its absence is visible there). Record
+  # it directly instead of making the next reader infer it.
+  wdrv=$(grep -q '^aic8800_fdrv ' /proc/modules 2>/dev/null && echo y || echo n)
+  # Kernel-side counters. Every sample up to 2026-09-15 watched userspace only,
+  # which is why each captured lockup ends on a "completely healthy" line: the
+  # failure is below the application and nothing here could see it.
+  #
+  # /proc/slabinfo does not exist on this kernel (CONFIG_SLUB_DEBUG is off), so
+  # slab is read from vmstat's nr_slab_* instead -- same numbers, in pages.
+  #
+  # slab= reclaimable+unreclaimable pages. A kernel memory leak in a vendor
+  # driver shows here and NOT in MemAvailable until it is far too late.
+  slab=$(awk '/^nr_slab_reclaimable/{r=$2} /^nr_slab_unreclaimable/{u=$2} END{print r+u}' /proc/vmstat 2>/dev/null)
+  # Highest-order free block in buddyinfo. Order 0 is 4KB, so the last column
+  # is 4MB blocks. Fragmentation collapse -- this tail draining to 0 -- makes
+  # high-order allocations fail while MemAvailable still looks fine, which is
+  # exactly the shape of a healthy-looking board that cannot fork.
+  hi=$(awk '/zone[ \t]+Normal/{print $NF}' /proc/buddyinfo 2>/dev/null)
+  # Sockets and TCP memory: a socket-buffer leak in the WiFi driver would
+  # accumulate here. sk= total sockets, tcpm= TCP pages charged.
+  sk=$(awk '/^sockets:/{print $3}' /proc/net/sockstat 2>/dev/null)
+  tcpm=$(awk '/^TCP:/{print $NF}' /proc/net/sockstat 2>/dev/null)
+  # Interrupt totals for the two drivers under suspicion, summed across CPUs.
+  # dwc2 (USB gadget) keeps answering adb after userspace is gone; i2c is the
+  # permanent touch-controller storm. A rate that departs from its baseline in
+  # the samples before a freeze is the thing worth catching.
+  irqs=$(awk '/dwc2_hsotg/{d=0; for(i=2;i<=NF-2;i++) d+=$i} /ff060000\.i2c/{c=0; for(i=2;i<=NF-2;i++) c+=$i} END{printf "%d,%d", d, c}' /proc/interrupts 2>/dev/null)
+  # Context switches and forks since boot. The signature lockup is "userspace
+  # cannot fork while the kernel still services USB" -- if that state persists
+  # for even one sample, ctxt/fork stop advancing while dwc2 keeps climbing.
+  ctxt=$(awk '/^ctxt/{print $2}' /proc/stat 2>/dev/null)
+  forks=$(awk '/^processes/{print $2}' /proc/stat 2>/dev/null)
   # Heartbeat: the last time we know the board was alive. The next boot reads
   # this to report when an unclean shutdown happened.
   # Write via a temp file and rename: `>` truncates first, so a board that dies
@@ -72,7 +110,7 @@ sample() {
   # unclean shutdown with no time on it. Observed 2026-09-14. rename(2) is
   # atomic, so the file is always either the old stamp or the new one.
   echo "$now" > /root/health.lastseen.tmp && mv /root/health.lastseen.tmp /root/health.lastseen
-  echo "$now up=$up avail=${avail}kB free=${memfree}kB load=$load pid=${pid:--} rss=${rss}kB hwm=${hwm}kB thr=$thr fd=$fds cpu=${cpu}j wlan0=$link" >> "$LOG"
+  echo "$now up=$up avail=${avail}kB free=${memfree}kB load=$load pid=${pid:--} rss=${rss}kB hwm=${hwm}kB thr=$thr fd=$fds cpu=${cpu}j wlan0=$link wdrv=$wdrv slab=${slab}p hi=$hi sk=$sk tcpm=$tcpm irq=$irqs ctxt=$ctxt forks=$forks" >> "$LOG"
 }
 
 rotate_if_big

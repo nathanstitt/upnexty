@@ -1,0 +1,28 @@
+#!/bin/sh
+# Unwind a soak that outlived the board.
+#
+# soak-nowifi.sh records an absolute deadline in /root/soak.state. If the board
+# locks up mid-soak -- which is the entire point of the exercise, so it is the
+# expected case rather than the exceptional one -- the background sleeper that
+# would have stopped it dies too, and the board reboots with the soak still
+# nominally running: config pointed at the loopback feed, state file present.
+# That is how the 2026-09-15 run came back on a synthetic calendar with its
+# state file claiming RUNNING.
+#
+# This runs after S99wlan0 (which sets the clock via rdate -- before that the
+# board is at 1970 and no deadline can be judged) and after S99zdashboard, so
+# it sorts last. It is a no-op unless a soak is running AND its deadline has
+# passed, so leaving it installed costs nothing.
+SOAK=/root/soak-nowifi.sh
+
+case "$1" in
+start)
+	[ -x "$SOAK" ] || exit 0
+	"$SOAK" expire
+	;;
+stop | restart | status) ;;
+*)
+	echo "Usage: $0 {start|stop|restart|status}"
+	exit 1
+	;;
+esac
