@@ -92,10 +92,30 @@ Flash from **Loader** mode. `UF` from Maskrom fails at `Wait For Maskrom Fail`
 on this hardware, and `DB MiniLoaderAll.bin` returns success without actually
 leaving Maskrom — hold BOOT while connecting to get a usable mode.
 
-When `upgrade_tool LD` prints `connected(0)`, that can mean it lacks USB access
-rather than that no board is attached — a sandboxed shell produces exactly this.
-Cross-check with `ioreg -p IOUSB -l -w 0 | grep 'idVendor" = 8711'` before
-concluding the board is gone.
+**A sandboxed shell reports a healthy board as a missing one.** Every tool that
+reaches the board fails *silently* without raw USB or network access — none of
+them say "permission denied", they all say "nothing there", which reads exactly
+like dead hardware. Caught three times in one session on 2026-09-16:
+
+| Tool | What it printed | What was true |
+|---|---|---|
+| `upgrade_tool LD` | `connected(0)` | board sitting in Loader mode |
+| `adb devices` | empty list | `b57290249a9b3206 device`, adbd fine |
+| `ping <board>` | 100% packet loss | 4.6ms replies |
+
+That last one cost an hour of chasing a "wedged USB gadget" that did not exist:
+`idProduct 0x0013` is simply what this board's composite gadget (`ffs.adb` +
+`rndis.0`) advertises, and `adbd` was running the whole time.
+
+Before concluding the board is gone, cross-check with something that does not
+need the same access:
+
+```bash
+ioreg -p IOUSB -l -w 0 | grep -A12 rk3xxx     # is it even on the bus?
+```
+
+and look at the panel — a rendering dashboard settles it instantly. If the
+board is on WiFi, SSH is unaffected by USB permissions and is the better path.
 
 ## Daily loop
 
