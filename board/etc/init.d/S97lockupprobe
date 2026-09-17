@@ -7,13 +7,21 @@
 # Two changes, both aimed at the same gap: the board dies with every metric
 # healthy and leaves nothing behind.
 #
-#   panic=10        A panic currently hangs forever (panic=0), which looks
-#                   identical from outside to the hang we are chasing. Ten
-#                   seconds to reboot means a panic announces itself by the
-#                   board coming back, and health.sh's boot marker records it.
-#                   Note ramoops has been empty after every lockup so far, so
-#                   the kernel is probably not panicking at all -- this exists
-#                   to make that inference safe rather than assumed.
+#   panic=0         Leave a panicked board panicked. This was briefly set to
+#                   10 (reboot after ten seconds) on the theory that a panic
+#                   should announce itself by the board coming back. That is
+#                   the wrong trade for an unattended board: a rebooted board
+#                   looks healthy again, so a panic that happens overnight is
+#                   noticed only as an uptime reset the next morning, and the
+#                   oops on the panel is wiped ten seconds after it appears.
+#
+#                   With 0 the board stays stopped, which is both the same
+#                   state the lockups leave it in and a state that keeps the
+#                   panel readable until someone looks. Nothing is lost by
+#                   waiting: console-ramoops-0 holds the printk output either
+#                   way and survives a reboot.
+#
+#                   PANIC_TIMEOUT in /etc/default/lockupprobe overrides it.
 #
 #   touch unbind    The Goodix digitizer generates a permanent ~300 interrupt/s
 #                   storm from boot with nobody touching the glass, and parks a
@@ -34,7 +42,7 @@
 start() {
 	printf "Lockup probe: "
 
-	echo "${PANIC_TIMEOUT:-10}" > /proc/sys/kernel/panic 2>/dev/null
+	echo "${PANIC_TIMEOUT:-0}" > /proc/sys/kernel/panic 2>/dev/null
 
 	if [ "${TOUCH_KEEP:-0}" = "1" ]; then
 		printf "panic=$(cat /proc/sys/kernel/panic), touch kept"
