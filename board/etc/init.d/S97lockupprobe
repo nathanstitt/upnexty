@@ -1,0 +1,72 @@
+#!/bin/sh
+# Lockup-investigation settings. Temporary -- remove once the freezes are
+# understood. See docs/lockups.md.
+#
+# Sorts before S98health so the settings are in place before sampling starts.
+#
+# Two changes, both aimed at the same gap: the board dies with every metric
+# healthy and leaves nothing behind.
+#
+#   panic=10        A panic currently hangs forever (panic=0), which looks
+#                   identical from outside to the hang we are chasing. Ten
+#                   seconds to reboot means a panic announces itself by the
+#                   board coming back, and health.sh's boot marker records it.
+#                   Note ramoops has been empty after every lockup so far, so
+#                   the kernel is probably not panicking at all -- this exists
+#                   to make that inference safe rather than assumed.
+#
+#   touch unbind    The Goodix digitizer generates a permanent ~300 interrupt/s
+#                   storm from boot with nobody touching the glass, and parks a
+#                   kworker in D state which is what pins load average near 1.0
+#                   on a 93% idle board. Measured 2026-09-17: unbinding took
+#                   i2c from 296/s to 0/s and the D-state kworker disappeared.
+#
+#                   It is the only continuous kernel-side load that can be
+#                   removed with one write, which makes it the cheapest
+#                   remaining variable to eliminate. Touch stops working while
+#                   this is set -- taps do nothing, the detail sheet cannot be
+#                   opened. That is the trade.
+#
+# TOUCH_KEEP=1 in /etc/default/lockupprobe leaves the digitizer bound.
+
+[ -f /etc/default/lockupprobe ] && . /etc/default/lockupprobe
+
+start() {
+	printf "Lockup probe: "
+
+	echo "${PANIC_TIMEOUT:-10}" > /proc/sys/kernel/panic 2>/dev/null
+
+	if [ "${TOUCH_KEEP:-0}" = "1" ]; then
+		printf "panic=$(cat /proc/sys/kernel/panic), touch kept"
+	else
+		# The digitizer is 2-005d; 2-0014 and 2-0038 are phantom devices the
+		# device tree declares and that never probe (see CLAUDE.md, Touch).
+		if [ -w /sys/bus/i2c/drivers/Goodix-TS/unbind ]; then
+			echo 2-005d > /sys/bus/i2c/drivers/Goodix-TS/unbind 2>/dev/null
+		fi
+		printf "panic=$(cat /proc/sys/kernel/panic), touch unbound"
+	fi
+	echo " OK"
+}
+
+stop() {
+	printf "Lockup probe: restoring touch "
+	[ -w /sys/bus/i2c/drivers/Goodix-TS/bind ] &&
+		echo 2-005d > /sys/bus/i2c/drivers/Goodix-TS/bind 2>/dev/null
+	echo "OK"
+}
+
+case "$1" in
+start) start ;;
+stop) stop ;;
+restart) stop; sleep 1; start ;;
+status)
+	echo "panic=$(cat /proc/sys/kernel/panic 2>/dev/null)"
+	echo "touch bound: $(ls /sys/bus/i2c/drivers/Goodix-TS/ 2>/dev/null | grep -c 2-005d)"
+	echo "i2c irqs: $(awk '/ff060000.i2c/{s=0;for(i=2;i<=NF-2;i++)s+=$i;print s}' /proc/interrupts)"
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|status}"
+	exit 1
+	;;
+esac

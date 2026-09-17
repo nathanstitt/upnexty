@@ -312,6 +312,101 @@ variable 5 minutes to 2 hours. What makes it worth pursuing anyway is that it is
 continuous kernel-side pressure on one of the two named suspects, and it is
 measurable and fixable in a way the rest of this investigation has not been.
 
+### 8. Something visible in kernel-side counters
+
+*Claim:* every captured lockup ends on a completely healthy sample because the
+sampler only ever watched userspace. Watch the kernel — slab, fragmentation,
+socket buffers, interrupts, context switches — and the failure will show.
+
+*Tested* by adding those counters to `health.sh` (2026-09-16) and running until
+the next lockup. The board died 2026-09-17T00:56:03Z after 3h02m.
+
+*Refuted.* They are as flat as everything else. The final sample, 30 seconds
+before death:
+
+```
+ctxt=1353/s  forks=2.8/s  dwc2=8016/s  i2c=299/s
+slab=12543p  hi=327  sk=45  avail=366612kB
+```
+
+Across the whole 3-hour run: `slab` moved **+16 pages** (~64KB), `hi` 333→327,
+`sk` 44→45, `avail` 368MB→366MB. No kernel memory leak, no fragmentation
+collapse, no socket-buffer leak, no memory pressure. The interrupt rates never
+depart from their constant baselines.
+
+One sub-hypothesis died with it, and it is worth stating separately because the
+signature section implies otherwise: **`ctxt` and `forks` climb normally into
+the final sample.** "Userspace cannot fork" is something that happens *at* the
+freeze, not a state the board degrades into beforehand. There is no runway.
+
+This closes the "sample kernel-side metrics" suggestion below. Do not re-add it
+hoping for a different answer; the counters are in `health.sh` and they are
+flat. What it bought is the knowledge that **everything `/proc` exposes says the
+board is healthy one sample before it dies** — which is no longer a hypothesis
+about the tooling's blindness but a measurement of it.
+
+### 9. A marginal power supply
+
+*Claim:* sustained WiFi TX/RX is the board's largest current draw, and a supply
+browning out under load fits every observation including the healthy final
+sample. Listed below as untested and free to try.
+
+*Refuted 2026-09-16/17.* The board ran on a wall charger, physically
+disconnected from the Mac, and locked up after **2h12m** (panel clock frozen at
+19:05 CDT; `health.lastseen` 00:56:03Z agrees within the sampling interval).
+
+It also disposes of a dwc2 sub-hypothesis: with no host attached there was no
+adb traffic and no USB host activity at all, and the board died on schedule
+anyway. The *host controller's* SOF storm is untouched by this — it runs
+regardless of what is plugged in — but "the Mac's USB traffic provokes it" is
+out.
+
+### 10. The kernel panics or oopses
+
+*Claim:* the kernel hits a panic, oops, or BUG, and dies where no userspace
+sampler can see it. This is the assumption behind "get a UART and read the
+dying words."
+
+*Tested for free, and it is at best half true.* This board has **ramoops
+configured and active** — 180KB reserved at `ramoops@83000` in the device tree,
+`pstore` mounted at `/sys/fs/pstore` with the `ramoops` backend, a 128KB console
+buffer, and `max_reason=2` (panic and oops). Ramoops survives a reboot by
+design: that is its entire purpose.
+
+After the 2026-09-17 lockup, `/sys/fs/pstore` was **empty**.
+
+So the kernel did not panic and did not oops. It never reached its own crash
+handler. Whatever stops this board stops it *before* the kernel notices anything
+is wrong — which rules out a clean software fault and points at something
+lower: a hardware hang, a bus lockup, a clock or power-domain failure, or an
+interrupt storm with interrupts masked.
+
+This raises the odds that a UART sees **nothing at all** at the moment of death.
+Worth knowing before buying one, and worth checking `/sys/fs/pstore` first after
+any future lockup — it costs one command.
+
+Check it with:
+
+```bash
+adb shell ls -la /sys/fs/pstore/    # empty = no panic, no oops
+```
+
+## What the instrumentation is worth now
+
+Seven hypotheses refuted by testing, two more here, and the sampler is
+comprehensive. That is the state to reason from:
+
+- **Userspace**: RSS, HWM, threads, fds, CPU jiffies — flat, and CPU still
+  climbing into the final sample every time (it dies mid-render).
+- **Kernel**: slab, buddyinfo, sockets, TCP pages, interrupts, ctxt, forks —
+  flat.
+- **Hardware**: memtester 16 tests 0 failures; two power sources; two boards
+  (the second died during setup, so this is weaker than it sounds).
+
+Nothing observable from userspace changes before the freeze. The next piece of
+evidence has to come from outside userspace, and there is exactly one way to
+get it.
+
 ## The next step
 
 **A USB-TTL adapter on the UART pins.** There is no serial console on the
@@ -321,20 +416,100 @@ trace — and every remaining hypothesis lives exactly where userspace tooling i
 blind. That blindness is why the health sampler kept reporting a healthy board
 one second before death.
 
-Cheap, and the only thing likely to move this forward.
+Cheap, and now the **only** thing likely to move this forward — the three
+secondary suggestions that used to live here have all been carried out:
 
-Secondary, if a UART is not available:
+- ~~Sample kernel-side metrics~~ — done, hypothesis 8. They are flat.
+- ~~Try a different power supply~~ — done, hypothesis 9. It died on wall power.
+- ~~Run with WiFi down~~ — done, hypothesis 7. It died with the driver unloaded.
 
-- **Sample kernel-side metrics** in `health.sh` — `/proc/slabinfo`,
-  `/proc/vmstat`, `/proc/net/sockstat`. The current sampler watches userspace
-  only, so a kernel memory or socket-buffer problem would be invisible to it.
-- **Try a different power supply.** Sustained WiFi TX/RX is the board's largest
-  current draw, and a marginal supply browning out under load fits every
-  observation here — including the healthy final sample. Untested, and it costs
-  nothing to swap.
-- **Run with WiFi down** (adb only, no calendar fetches) for several hours. If
-  the board survives, that implicates the WiFi driver directly rather than by
-  elimination.
+### Neither USB-C port can do this
+
+Worth stating plainly, because it is the obvious thing to try first. The two
+ports are different controllers and neither carries a console:
+
+| Port | Controller | `dr_mode` | What it is |
+|---|---|---|---|
+| power/adb | `ff740000.usb` | `peripheral` | the gadget — power in, adb out |
+| the other | `ff780000.usb` | `host` | a **host** port; already runs the internal hub and the AIC8800DC |
+
+A host port talks *to* devices; it does not emit a console. The console UART is
+at `0xff0a0000` (UART0, per `earlycon=uart8250,mmio32,0xff0a0000` in
+`/proc/cmdline`) and is routed to header pins. USB-C can carry UART over its SBU
+pins on boards designed for it; this is not one.
+
+The host port is still useful for something else — see *Capturing to USB storage*
+below.
+
+### What to buy
+
+Any 3.3V USB-TTL adapter: CP2102, CH340, FT232RL. **It must be 3.3V** — a 5V
+adapter on RK3506 UART pins can damage the SoC. Most sell as "3.3V/5V" with a
+jumper; set it to 3.3V before connecting anything.
+
+### Wiring
+
+Three jumper wires to the board's UART0 header, crossed TX↔RX:
+
+| Adapter | Board |
+|---|---|
+| GND | GND |
+| RX | TX |
+| TX | RX |
+
+**Do not connect the adapter's VCC.** The board has its own supply; back-feeding
+it through the header is a good way to lose a second board.
+
+Console settings are the Rockchip default: **1500000 baud, 8N1**, no flow
+control. That is not a typo — 1.5 Mbaud, not 115200.
+
+```bash
+ls /dev/cu.usbserial-* /dev/cu.SLAB_USBtoUART* /dev/cu.wchusbserial*
+screen /dev/cu.usbserial-XXXX 1500000     # ctrl-a k to quit
+```
+
+### Capturing to USB storage
+
+The second USB-C port (`ff780000.usb`) is a **host** port, so a flash drive
+plugged into it mounts like any other disk. That does not capture a panic, but
+it removes one doubt about the health log: `/root` is UBI on NAND, and a hard
+freeze can lose whatever the last write had not flushed.
+
+`usb_storage` is already loaded. If the sampler writes to a mounted stick with
+`sync` on every line, the log on the stick is guaranteed to be on disk at the
+moment of the freeze rather than in a page cache that never flushes.
+
+Worth doing only if the NAND log is ever suspected of truncation. So far its
+last line has always been a plausible 30s before death, so it probably is not
+lying — but the option is free and the port is otherwise idle.
+
+### What it is for
+
+Capture to a file and leave it running until the board dies:
+
+```bash
+screen -L -Logfile uart-$(date +%F).log /dev/cu.usbserial-XXXX 1500000
+```
+
+The dying words are the whole point — a watchdog trace, a dwc2 error, a stall
+warning, anything at all. Ten hypotheses have been refuted by inference because
+the board reports perfect health right up to the last sample. The UART is the
+one channel that does not go through the userspace that stops working.
+
+**Temper the expectation, though.** Hypothesis 10 shows the kernel never
+panics or oopses — `/sys/fs/pstore` is empty after a lockup, on a board where
+ramoops is configured and would have caught either. A UART may therefore show
+nothing at the moment of death, and *that itself is the finding*: a console
+that goes silent mid-line without a trace says the CPU stopped executing, which
+is a very different problem from a kernel that crashed.
+
+What a UART adds beyond pstore:
+
+- **Pre-death chatter** ramoops would not record — driver warnings, timeouts,
+  link resets in the seconds before the freeze.
+- **The nothing.** Silence mid-line, with no oops, is positive evidence for a
+  hardware-level stop.
+- **U-Boot and early boot**, which no userspace tool can reach.
 
 ## A note on method
 

@@ -55,11 +55,27 @@ start() {
 	# Guarded because it is not worth failing to start over, and vtcon
 	# numbering is not guaranteed: pick the console that names itself the
 	# frame buffer device rather than hardcoding vtcon1.
-	for vt in /sys/class/vtconsole/vtcon*; do
-		if grep -qi "frame buffer" "$vt/name" 2>/dev/null; then
-			echo 0 > "$vt/bind" 2>/dev/null
-		fi
-	done
+	#
+	# KEEP_FBCON=1 leaves the console attached, trading the caret for the
+	# ability to see a kernel oops on the panel. That matters while the
+	# lockups are unexplained: with fbcon unbound the kernel has no path to
+	# the display at all, so a panic goes only to ttyFIQ0 (which nothing is
+	# reading) and ramoops -- which is why every lockup so far has shown a
+	# frozen dashboard frame rather than a trace. See docs/lockups.md.
+	#
+	# The caret is only a nuisance while the board is healthy. Once it dies
+	# the dashboard stops rendering, so there is nothing left to overwrite an
+	# oops. Set it in /etc/default/dashboard to survive a reboot.
+	[ -f /etc/default/dashboard ] && . /etc/default/dashboard
+	if [ "${KEEP_FBCON:-0}" = "1" ]; then
+		echo "  (KEEP_FBCON=1: leaving kernel console on the panel)"
+	else
+		for vt in /sys/class/vtconsole/vtcon*; do
+			if grep -qi "frame buffer" "$vt/name" 2>/dev/null; then
+				echo 0 > "$vt/bind" 2>/dev/null
+			fi
+		done
+	fi
 
 	# Backgrounded by the shell, not by --background, and the pidfile is written
 	# here rather than by --make-pidfile.
