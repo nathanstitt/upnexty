@@ -57,3 +57,48 @@ scheduling and forking normally right up to the end.
 `/sys/fs/pstore` was empty afterwards, on a board where ramoops is configured
 and `panic_on_oops`, `softlockup_panic` and `hardlockup_panic` are all enabled —
 so the kernel never panicked and its own lockup detectors never fired.
+
+## `dashboard-crash-2026-09-17T2103Z.log`
+
+The second unprompted dashboard death, 2026-09-17 16:03 CDT (21:03 UTC), on the
+6.8-hour run — the longest the board has ever managed. The board itself stayed
+up and healthy; only the process died. The panel held its last frame with the
+clock frozen at 16:02, which is what a dead renderer looks like from the couch.
+
+A different fault from the first one, and a more specific one:
+
+```
+runtime: bad span s.state=43 s.sweepgen=735325140 sweepgen=16110
+fatal error: non in-use span in unswept list
+```
+
+This is Go's garbage collector finding its own heap metadata corrupted. A span
+is the runtime's record for a run of heap pages. `state=43` is not a valid span
+state at all (valid values are 0-3), and `sweepgen=735325140` against an
+expected `16110` is not an off-by-one — it is a field holding garbage.
+
+It was thrown from `runtime.sweepone` on the background sweeper while the main
+goroutine was inside the rasteriser
+(`vector.(*Rasterizer).rasterizeDstAlphaSrcOpaqueOpOver`, via omnidoc's
+`raster.(*Device).PushClip`). So the corruption was found during GC of a heap
+that a render was actively churning.
+
+**Taken with the first crash, the pattern is the interesting part.** Two
+unprompted deaths in two days, both memory corruption, neither in application
+logic:
+
+| | 2026-09-16 | 2026-09-17 |
+|---|---|---|
+| Fault | SIGSEGV, PC jumped to `0xff520464` | corrupted GC span metadata |
+| Where | `g0`, scheduler stack, `findRunnable` | `sweepone`, background sweeper |
+| Doing what | idle, looking for work | mid-render |
+| Kernel noticed | yes — `unhandled page fault` | **no — nothing in dmesg** |
+
+Both are the runtime's own structures being wrong, not application state. That
+is what memory corruption looks like from inside a managed heap, and it is the
+same class of event that produced the `bytes.Replace` SIGSEGV that hypothesis 4
+in `../lockups.md` attributed to bad RAM before memtester cleared it.
+
+The second one leaving **no kernel trace at all** is worth noting: `/sys/fs/pstore`
+held only the routine `console-ramoops-0`, and `dmesg` had no fault. The
+corruption happened without the MMU ever being asked for an invalid address.
