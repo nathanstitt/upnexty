@@ -102,3 +102,62 @@ in `../lockups.md` attributed to bad RAM before memtester cleared it.
 The second one leaving **no kernel trace at all** is worth noting: `/sys/fs/pstore`
 held only the routine `console-ramoops-0`, and `dmesg` had no fault. The
 corruption happened without the MMU ever being asked for an invalid address.
+
+## `dashboard-crash-2026-09-18T0737Z.log`
+
+Third unprompted death, 2026-09-18 02:37 CDT (07:37 UTC), **10.5 hours** into
+what became the longest board run on record. The board itself never faltered —
+it was still up at 10.8h with every counter nominal.
+
+```
+fatal error: span has no free objects
+runtime.(*mcentral).cacheSpan  mcentral.go:187
+runtime.(*mcache).refill       mcache.go:205
+runtime.(*mcache).nextFree     malloc.go:1006
+runtime.mallocgc               malloc.go:1143
+runtime.growslice              slice.go:265
+  omnidoc/render.(*Path).Close
+  omnidoc/layout/paint.fillRect
+  omnidoc/layout/paint.paintBorder
+```
+
+A third distinct allocator invariant, broken in a third place: the allocator
+took a span from the central free list and found it had no free objects, which
+is a contradiction in terms — `cacheSpan` only selects spans that claim to have
+some. Triggered by an ordinary `growslice` during border painting.
+
+No kernel fault accompanied it (`dmesg` clean, pstore empty).
+
+## The pattern across three crashes
+
+| | 2026-09-16 | 2026-09-17 | 2026-09-18 |
+|---|---|---|---|
+| Fault | SIGSEGV, PC → `0xff520464` | `non in-use span in unswept list` | `span has no free objects` |
+| Runtime area | scheduler (`findRunnable`) | sweeper (`sweepone`) | allocator (`cacheSpan`) |
+| Doing what | idle | mid-render | mid-render |
+| Kernel noticed | yes, page fault | no | no |
+| Board survived | yes | yes | yes |
+
+Three failures, three different runtime subsystems, three different invariants,
+none in application logic. Every one is the Go runtime discovering that memory
+it owns holds values it could not have written.
+
+**What this is not.** It is not an omnidoc or dashboard bug: application code
+does not touch span metadata or the scheduler's g0 stack, and the same binary
+runs these paths millions of times between crashes. It is not a Go bug for the
+same reason — these are the runtime's own consistency checks firing, which is
+them working correctly. It is not the touch driver: the digitizer has been
+unbound since 2026-09-17 and the touch goroutine is not even started (the log's
+first line records `taps disabled`), yet the crashes continue.
+
+**What it points at.** Something outside the process writes to its memory.
+Hypothesis 4 in `../lockups.md` blamed bad RAM and was refuted by memtester —
+but that document already records the caveat that memtester cannot reproduce GC
+write barriers racing DMA, and all three crashes land in exactly that gap. The
+board has a DMA-capable peripheral (dwc2) in a documented-misconfigured state,
+running 8,000 interrupts/sec continuously.
+
+**Relationship to the lockups is unresolved.** These kill a process and leave
+the board healthy; the lockups kill the board. They may share a cause or be
+unrelated. Worth noting that the two longest board runs on record (6.8h, 10.8h+)
+both ended with a dashboard crash rather than a lockup.
