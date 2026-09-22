@@ -161,3 +161,29 @@ running 8,000 interrupts/sec continuously.
 the board healthy; the lockups kill the board. They may share a cause or be
 unrelated. Worth noting that the two longest board runs on record (6.8h, 10.8h+)
 both ended with a dashboard crash rather than a lockup.
+
+## `dashboard-crash-2026-09-22T2001Z.log`
+
+**The first crash on a second board.** Board 3, flashed that afternoon with the
+same base-Lyra image and WiFi graft as the control board, running the same
+binary and a byte-identical `config.json`. The process died between the
+20:00:53Z and 20:01:24Z health samples, 1h45m after boot, with the board
+otherwise healthy: WiFi up, SSH and adb answering, load 0.02, 409MB available.
+The panel kept its last frame, which reads as a lockup from across the room.
+
+```
+fatal error: index out of range
+runtime.(*pageAlloc).update(0x10da478, 0xdcdb0000, 0xf, 0x1, 0x1)
+    mpagealloc.go:503
+runtime.(*pageAlloc).allocRange / alloc / (*mheap).allocSpan
+```
+
+reached from `mallocgcLarge` in omnidoc's `blurShadowSurface` during a render.
+The page allocator indexed its summary tables with a chunk address it does not
+own: a fourth corrupted runtime invariant, after the g0 instruction fetch
+(09-16), "non in-use span in unswept list" (09-17) and "span has no free
+objects" (09-18). All four are the Go runtime finding its own metadata wrong,
+in four different places, on two boards. That removes the board-defect
+hypothesis for these crashes. What is left is memory being corrupted under a
+correct process: the kernel or a driver writing where it should not, or the
+runtime on this kernel and ARMv7 combination.
