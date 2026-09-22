@@ -69,7 +69,7 @@ require_adb
 # `grep -m1` closes the pipe early, so strings takes SIGPIPE -- harmless here,
 # but it would trip the `set -e` inherited from common.sh. head -1 instead.
 board_vm="$(adb shell 'strings /lib/modules/6.1.99/kernel/net/wireless/cfg80211.ko 2>/dev/null | grep "^vermagic=" | head -1' | tr -d '\r')"
-img_vm="$(strings "$MODSRC/aic8800_fdrv.ko" | grep '^vermagic=' | head -1)"
+img_vm="$(grep -a -o 'vermagic=[^[:cntrl:]]*' "$MODSRC/aic8800_fdrv.ko" | head -1)"
 if [ "$board_vm" != "$img_vm" ]; then
 	die "vermagic mismatch -- the module will not load
   board: $board_vm
