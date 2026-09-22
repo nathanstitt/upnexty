@@ -91,9 +91,30 @@ separate ways to lose a board, both hit on 2026-09-15:
   without writing the image. `flash.sh` now traps SIGPIPE and tees its own log;
   keep that property if you touch it.
 
-Flash from **Loader** mode. `UF` from Maskrom fails at `Wait For Maskrom Fail`
-on this hardware, and `DB MiniLoaderAll.bin` returns success without actually
-leaving Maskrom — hold BOOT while connecting to get a usable mode.
+**Both USB modes flash on this Mac.** Verified 2026-09-22 on the control board
+and a fresh board; this replaces an earlier claim here that Maskrom→Loader never
+completes on this hardware.
+
+- **Loader**: hold BOOT while connecting. If the NAND boots, U-Boot's rockusb
+  enumerates as `USB download gadget`, `LD` prints `Mode=Loader`, and `UF`
+  writes the image. This wrote the first and third boards.
+- **Maskrom**: a board whose NAND does not boot enumerates as Maskrom with no
+  button held. `DB MiniLoaderAll.bin` loads usbplug, which re-enumerates as
+  `USB-MSC` (serial `rockchip`) **but keeps `bcdUSB 0x0200`, so `LD` still
+  prints `Mode=Maskrom`.** That label was misread on 2026-09-15 and again on
+  2026-09-22 as "the loader never came up". After `DB`, the check is `TD` or
+  `RCI`: when they answer, the loader is resident and `UF` works. `RD 3` from
+  Loader reboots a healthy board into Maskrom without touching NAND, which is
+  how this was tested.
+
+**How a defective board looks**: the second replacement (2026-09-22) accepted
+the loader with `Download boot ok`, never re-enumerated as `USB-MSC`, and
+answered nothing afterwards; its NAND did not boot either. usbplug dies in DRAM
+on that board. Nothing on the host changes that — return it.
+
+**Every board reports the same serial**, `b57290249a9b3206`, over adb and
+rockusb. It is a Luckfox constant, not a chip ID. Two boards on one Mac collide
+on adb; keep the second on wall power and WiFi only.
 
 **A sandboxed shell reports a healthy board as a missing one.** Every tool that
 reaches the board fails *silently* without raw USB or network access — none of
@@ -174,7 +195,9 @@ adb shell reboot
 ### Recovery
 
 A bad `boot` partition cannot brick the board — Maskrom lives in unwritable
-mask ROM. Hold BOOT while connecting the OTG port and reflash.
+mask ROM. Hold BOOT while connecting the OTG port and reflash. That gives
+Loader if U-Boot still boots and Maskrom if it does not; `flash.sh` accepts
+both (see Setup for how to read the Maskrom label after `DB`).
 
 ## The DSI panel fix
 
@@ -657,5 +680,6 @@ and the host-side raster, because nothing clips at the document level.
 - **`upgrade_tool RSM`** (read secure mode) is not implemented on this loader —
   it reports "did not support this operation" regardless of mode.
 - **Board clock resets to 1970** each boot; there's no RTC battery.
-- Flash reads only work in **Loader** mode, not Maskrom — Maskrom has no loader
-  resident to talk to the NAND.
+- Flash reads only work once a loader is resident: from **Loader** mode, or
+  from Maskrom after `DB`. Bare Maskrom has nothing to talk to the NAND. `LD`
+  says `Maskrom` in both of the latter cases; `RID` tells them apart.

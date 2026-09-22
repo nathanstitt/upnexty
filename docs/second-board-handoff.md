@@ -1,127 +1,93 @@
-# Second board: flashing blocked
+# Second board: resolved
 
-Handoff for the 2026-09-22 attempt to bring up a replacement board. The board is
-**undamaged and sitting in Maskrom**; no write ever reached its flash. What
-stopped us is the loader download, and it stops both available tools at the same
-step.
+Record of the 2026-09-22 attempt to bring up a replacement board. An earlier
+version of this file described the loader download as a blocker on the host.
+It was not. The second replacement board is defective; a third board flashed
+and now runs the control board's stack. This file keeps what was learned.
 
-Read `lockups.md` first for why a second board matters. The short version: twelve
-hypotheses tested and refuted, and the board-defect question has never been
-answered because the first replacement was destroyed during setup on 2026-09-15.
+Read `lockups.md` first for why a second board matters.
 
-## State right now
+## State at the end of the day
 
 | | |
 |---|---|
-| New board | Maskrom, `Vid=0x2207 Pid=0x350f`, nothing written |
-| Control board (old) | up on wall power, reachable at `192.168.1.86` |
-| `build/dashboard` | built, `ELF 32-bit ARM`, md5 `dae59ffba546414479b0b96d840e7b3e` |
-| Images | both verified `RKFW` (`524b4657`) in `~/Downloads/` |
+| Board 2 (second replacement) | defective, unflashed, **return it** |
+| Board 3 | base Lyra `250717` + WiFi graft, `192.168.1.115`, dashboard rendering, soaking |
+| Control board | untouched, back on wall power, `192.168.1.86`, soaking |
+| `scripts/setup-wifi.sh` | fixed: `strings` is an Xcode shim that refuses to run without the licence; now `grep -a` |
 
-The plan agreed with the user: flash **base Lyra** (`Luckfox_Lyra_Flash_250717`)
-then graft WiFi with `setup-wifi.sh`, so the new board matches the control
-board's stack exactly, and keep the old board running as a same-window control.
+Both boards run `S97lockupprobe`, which unbinds the touch driver at boot, so
+"taps disabled" in the dashboard log is the soak configuration, not a fault.
 
-## The blocker
+## What was actually wrong
 
-**The loader will not stay resident.** Every flash operation needs a loader
-downloaded into the board first; the board accepts it (sometimes reporting
-success) but never transitions out of Maskrom, so every subsequent command that
-has to address the flash fails.
+**The `LD` label after `DB` was misread.** On RK3506 the usbplug that `DB`
+loads re-enumerates as `USB-MSC` (serial `rockchip`) but keeps `bcdUSB 0x0200`,
+and `upgrade_tool LD` derives `Mode=` from that bit alone. So a board with a
+working loader prints `Mode=Maskrom`. Every "DB succeeds but the board stays in
+Maskrom" observation, on 2026-09-15 and again on 2026-09-22, was this. The
+right check after `DB` is `TD` or `RCI`.
 
-Observed across both tools:
+Proven with the control board on the same host, cable, tool and loader:
 
-| Command | Result |
+| time | event |
 |---|---|
-| `upgrade_tool DB <MiniLoaderAll.bin>` | `Download boot ok.` (rc=0), board **stays Maskrom** |
-| `upgrade_tool UF <update.img>` | `Download Boot Start` → `Download Boot Fail` |
-| `rkdeveloptool db <MiniLoaderAll.bin>` | hangs indefinitely, no output, no timeout of its own |
-| `rkdeveloptool wl 0x2000 uboot.img` | `Write LBA failed!` — immediate, nothing written |
-| `rkdeveloptool rfi` / `rci` / `td` | all fail — they need the loader |
-| `rkdeveloptool ld` | **works** — enumeration needs no loader |
+| `RD 3` from Loader | reboots into Maskrom without touching NAND |
+| `DB` +1.1 s | re-enumerates as `USB-MSC`, `bcdUSB 0x0200` |
+| `DB` +4 s | `Download boot ok` |
+| after | `TD`, `RCI`, `RID` (`SNAND`), `RFI` (255 MB) all answer |
 
-The `ld`-works/everything-else-fails split is the signature: USB communication is
-fine, the flash is unreachable.
+**Board 2 is defective.** Same procedure, twice, with both tools: the ROM
+accepted the loader, no `USB-MSC` ever appeared, and every probe afterwards
+failed with `RKU_Write failed, err=-1`. usbplug dies in DRAM. Its NAND did not
+boot with no button held either. The `rkdeveloptool db` "hang" is the same
+failure: its `CMD_TIMEOUT` is 0, so the control transfer the ROM stops
+answering blocks forever, where upgrade_tool logs `vendor=0x471 ... err=-7`.
 
-**This is not new.** The original board showed the same Maskrom→Loader failure on
-2026-09-15 (`Wait For Maskrom Fail`, and a `DB` that returned success without
-changing mode). It was worked around then, not solved.
+**The 2026-09-15 control was not a control.** That Maskrom test ran on the
+first replacement after its NAND was half erased and shortly before it stopped
+enumerating. The healthy board had never been through `DB` until today.
 
-### Two dead ends, recorded so they are not retried
+## Corrected dead ends
 
-**`rkdeveloptool` does not support this board's storage.** Source at
-`~/code/vendor/rkdeveloptool` (upstream main, HEAD 2025-03-07) has **zero**
-matches for `spinand`/`SPINAND`. Its `cs` options are `1=EMMC, 2=SD, 9=SPINOR` —
-SPI **NOR**. This board is W25N02KV SPI **NAND**. Rebuilding will not help;
-the feature is not implemented upstream.
+- **The base-Lyra and Zero W loaders are the same build.** 232 of 268,736
+  bytes differ, starting at the build-date field. Trying the other one was
+  never going to change anything.
+- **`rkdeveloptool` is not "missing SPI NAND support".** Storage selection is
+  the loader's job; the host tool only issues LBA commands. `wl` failed because
+  no loader was resident. Its infinite control-transfer timeout is the real
+  reason not to use it on a board that does not answer.
+- **The `upgrade_tool` crash is the arm64 slice**, as CLAUDE.md now says. Both
+  recorded crashes were `UF` runs started by absolute path from a directory
+  with no `config.ini`; runs from the tool's own directory did not crash. That
+  is a correlation, not a confirmed cause.
 
-**Repeated attempts degrade the board's state.** After several failed loader
-pushes, `upgrade_tool DB` began returning `Download boot failed! ... please check
-ddr, please reset device and retry`. A fresh Maskrom entry (unplug, hold BOOT,
-reconnect) cleared it and `DB` succeeded again on the first try. **If a loader
-push fails, reset before retrying** rather than hammering it.
+## What board 3 taught
 
-## What to try next
-
-1. **Flash from another machine.** A Linux box or a different Mac with a working
-   vendor-tool path. This is the lowest-risk option — the images and the
-   procedure are known-good, only the host is the problem.
-
-2. **Investigate the loader itself.** `MiniLoaderAll.bin` from
-   `Luckfox_Lyra_Flash_250717` is what both tools are pushing. The Zero W image
-   ships its own (`~/Downloads/Luckfox_Lyra_Zero_W_Flash_250717/`) — worth trying
-   that one, since it is built for the board that actually has this SoC variant.
-   Nothing has tested whether the base-Lyra loader is even correct for a Zero W.
-
-3. **Soak the new board on its shipped firmware.** Answers "is this board
-   defective?" without flashing. Be clear about what it buys — the test is
-   **one-sided**:
-
-   - *It locks up* → decisive. Two boards, two software stacks, same failure;
-     rules out both a defect in the old board and anything specific to the
-     base-Lyra stack.
-   - *It survives* → ambiguous. Board and stack both changed, so neither can be
-     attributed.
-
-   Given the old board's last run was 32.6h, "survives" needs days to distinguish
-   from "has not failed yet" — and that is exactly the branch where matching the
-   stack would have mattered. Worth running as a cheap **negative** test; not a
-   substitute for a proper flash.
-
-## Correction to CLAUDE.md
-
-CLAUDE.md currently says the `upgrade_tool` segfault is caused by running it
-under `sudo`, and that the arm64 slice is fine. **That edit (2026-09-15) was
-wrong and should be reverted.**
-
-The crash report from 2026-09-22 (`~/Library/Logs/DiagnosticReports/
-upgrade_tool-2026-09-22-090918.ips`) shows:
-
-```
-arch: ARM-64
-EXC_BAD_ACCESS, KERN_INVALID_ADDRESS at 0x0000000000000008
-  libsystem_pthread.dylib  arm64e
-  upgrade_tool             arm64
-```
-
-`libsystem_pthread` on top of an arm64 stack is the `pthread_mutex_init` startup
-crash CLAUDE.md described **originally**. The Sept 15 `sudo` theory confused a
-correlation (sudo bypassed the arch wrapper) for the cause. The original warning
-was right.
-
-Note this crash is a *startup* failure and is separate from the loader problem
-above — when `upgrade_tool` does run, it reaches `Download Boot Fail`, the same
-wall `rkdeveloptool` hits.
+- **BOOT held at power-on gives Loader, not Maskrom.** It is U-Boot's recovery
+  key. A board only shows Maskrom when its NAND does not boot.
+- **Every board reports the same serial** `b57290249a9b3206` over adb and
+  rockusb. It is a Luckfox constant. Two boards on one Mac collide on adb, so
+  keep the second on wall power and WiFi only.
+- **Board 3 drops off USB on its own.** Three times in one hour it vanished
+  from the bus entirely, from Loader and from Linux, with nothing touched.
+  Three `flash.sh` runs found no device for that reason; the fourth passed
+  seconds later with the same board. Use another cable and reseat it at the
+  board end before any USB work on it. On wall power and WiFi it is fine.
+- **The stock `/etc/wpa_supplicant.conf` on the base image is an open-network
+  stub**, and `setup-wifi.sh` only replaces a file containing `ssid="SSID"`,
+  so it reports "already configured" and leaves the stub. Copy the control
+  board's file over it.
 
 ## Method notes
 
-- **Never pipe a flashing tool.** `rkdeveloptool db` was run through `tail` on
-  the first attempt here. It caused no damage (a loader push is not a flash
-  write) but it is the exact mistake that destroyed the 2026-09-15 board, and
-  `flash.sh` traps SIGPIPE specifically to prevent it.
-- **`ld` working does not mean the tool works.** Enumeration needs no loader and
-  no storage driver, so it succeeds even when nothing else can.
-- **Check `ioreg` before believing a tool that reports no device.** A tool
-  without USB access reports an empty list, which is indistinguishable from
-  absent hardware:
-  `ioreg -p IOUSB -l -w 0 | grep -A12 rk3xxx`
+- **Never pipe a flashing tool.** `flash.sh` traps SIGPIPE for that reason.
+- **`ld` working does not mean the tool works.** Enumeration needs no loader.
+- **Check `ioreg` before believing a tool that reports no device**:
+  `ioreg -p IOUSB -l -w 0 | grep -A12 '"idVendor" = 8711'`. The product
+  name there (`USB download gadget`, `USB-MSC`, `rk3xxx`, or a bare
+  `IOUSBHostDevice`) says more than `LD` does.
+- **A polled `DB` is the diagnostic.** Poll `ioreg` for `sessionID` every
+  half second during `DB`: a healthy board changes it once and comes back as
+  `USB-MSC`; a dead one either never changes it or changes it and never
+  answers again.

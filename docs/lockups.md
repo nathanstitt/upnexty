@@ -208,23 +208,29 @@ its own log, so no caller's pipe can interrupt a flash again.
 ### Two tooling bugs found, both fixed
 
 **`flash.sh` could never have worked on a Mac.** `run_upgrade_tool` called
-`sudo` unconditionally. Under `sudo`, `upgrade_tool` segfaults immediately —
-`EXC_BAD_ACCESS`, `KERN_INVALID_ADDRESS at 0x8`, four frames from `start`,
-before it touches a device. Run as the ordinary user it flashes normally. Note
-this is **not** the arm64 crash CLAUDE.md documents: this was the x86_64 slice
-under `arch -x86_64`, and the trigger is `sudo`, not the architecture. macOS
-gives the logged-in user USB access; root was never required.
+`sudo` unconditionally, which bypassed the arch wrapper, and the arm64 slice
+crashed at startup in `pthread_mutex_init` (`EXC_BAD_ACCESS at 0x8`). An
+earlier version of this paragraph blamed `sudo` itself; the 2026-09-22 crash
+report shows an arm64 stack, so it was the slice. Root was never required
+either way. Both recorded crashes were `UF` runs started by absolute path from
+the repo root, where the tool logs `No found config.ini`; runs from the tool's
+own directory did not crash. Correlation only, not confirmed.
 
-**Maskrom → Loader never completes on this hardware.** `DB MiniLoaderAll.bin`
-reports `Download boot ok` and returns 0, but the board stays in Maskrom through
-30s of polling, and `UF` from Maskrom fails at `Wait For Maskrom Fail` every
-time. `UF` from **Loader** mode worked on the first try. If a future board lands
-in Maskrom, expect to need a real power cycle with BOOT held to reach Loader —
-the software transition does not work here.
+**Maskrom → Loader was misread, not broken.** On 2026-09-22 the control board
+was rebooted into Maskrom with `RD 3` (NAND untouched) and `DB
+MiniLoaderAll.bin` brought usbplug up in about a second: it re-enumerates as
+`USB-MSC`, serial `rockchip`, and `TD`/`RCI`/`RID`/`RFI` all answer. It keeps
+`bcdUSB 0x0200`, so `LD` prints `Mode=Maskrom` — which is what the 2026-09-15
+"stays in Maskrom through 30s of polling" observed. That test also ran on the
+replacement board after its NAND was half erased and shortly before it stopped
+enumerating, so it was never a clean control. The second replacement board
+(2026-09-22) accepted the loader and never re-enumerated: a defective board.
+The third flashed from Loader on the first attempt that found it on the bus.
 
 ### For the next attempt
 
-- **Flash from Loader, not Maskrom**, and never pipe the flash into anything.
+- **Flash from whichever mode the board offers**, and never pipe the flash into
+  anything. After `DB` in Maskrom, trust `TD`/`RCI`, not the `LD` label.
 - **`reboot loader` is unreliable on stock Zero W firmware.** Plain `adb shell
   reboot loader` returned `Waiting for SIGTERM`, rc=255, and the board kept
   running with uptime climbing. Detaching it (`nohup sh -c "sleep 1; reboot

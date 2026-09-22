@@ -89,8 +89,14 @@ run_upgrade_tool() {
 # difference now that writes are unprivileged too.
 query_upgrade_tool() { run_upgrade_tool "$@"; }
 
-# Rockchip USB mode: Maskrom (boot ROM, nothing flashed yet or BOOT held),
-# Loader (U-Boot's download gadget), or empty when Linux is running.
+# Rockchip USB mode as upgrade_tool labels it: Maskrom (boot ROM, because the
+# NAND does not boot), Loader (U-Boot's download gadget, BOOT held at power-on),
+# or empty when Linux is running.
+#
+# The label is bcdUSB's low bit, nothing more. After DB the resident usbplug
+# still reports 0x0200, so a board with a working loader prints Maskrom. Do not
+# read Maskrom-after-DB as "the loader never came up"; TD or RCI is the check.
+# UF handles the DB step itself, so flash.sh accepts either label.
 board_usb_mode() {
 	query_upgrade_tool LD 2>/dev/null | sed -n 's/.*Mode=\([A-Za-z]*\).*/\1/p' | head -1
 }
