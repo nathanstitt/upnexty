@@ -391,6 +391,64 @@ Check it with:
 adb shell ls -la /sys/fs/pstore/    # empty = no panic, no oops
 ```
 
+### 11. The I2C touch storm
+
+*Claim:* the Goodix digitizer generates ~300 interrupts/sec from boot with
+nobody touching the glass, and parks a kworker in D state. It is the only
+continuous kernel-side load that can be removed with one write, so it is the
+cheapest remaining variable to eliminate.
+
+*Tested* by unbinding `2-005d` from the `Goodix-TS` driver at boot
+(`S97lockupprobe`). Measured effect: i2c interrupts 296/s to **0/s**, the
+D-state kworker gone, load average 1.0 to ~0.1.
+
+*Not the cause, but the largest single effect measured so far.* The board still
+locked up — at **32.6 hours** (2026-09-19T05:45:50Z), against a previous record
+of 6.8h and a typical survival of ~2h.
+
+That is roughly a 5x increase in the record and ~16x the typical figure. Two
+consecutive runs both beat the old record, so it is unlikely to be the long tail
+of the old distribution. The Goodix driver is implicated as a **contributing
+factor**, not the trigger.
+
+The final samples are as flat as every previous lockup. Thirty seconds before
+death:
+
+```
+dwc2=8008/s  i2c=0/s  ctxt=72/s  forks=3.3/s
+slab=12468p  hi=346  sk=42  avail=384316kB  cpu still climbing
+```
+
+Note `i2c=0/s` throughout — the storm really was gone, and the board died
+anyway.
+
+### 12. The kernel leaves a trace in the console buffer
+
+*Claim:* with `console-ramoops-0` configured and verified working, the next
+lockup will capture the kernel's dying printk output and finally show what
+happens.
+
+*Refuted.* After the 2026-09-19 lockup, `/sys/fs/pstore` was **empty**. Not a
+truncated log, not a partial line — nothing at all.
+
+The setup was verified working beforehand: a test message written to
+`/dev/kmsg` and a full shutdown sequence were both read back from
+`console-ramoops-0` after a deliberate reboot on 2026-09-17. Ramoops remains
+configured after the lockup (128KB console buffer, pstore mounted, `ramoops`
+backend).
+
+So the kernel emitted **nothing** on its way down. Combined with hypothesis 10
+(no panic, no oops, `softlockup_panic` and `hardlockup_panic` both enabled and
+never firing), the picture is consistent and now well-supported:
+
+**The CPU stops executing without the kernel ever noticing.** No fault handler
+runs, no printk is emitted, no watchdog fires. That is not a software crash. It
+is the behaviour of a clock stopping, a power domain collapsing, or a bus
+wedging hard enough to take the core with it.
+
+This also lowers the expected value of a UART console. A serial line can only
+show what the kernel prints, and the kernel prints nothing.
+
 ## What the instrumentation is worth now
 
 Seven hypotheses refuted by testing, two more here, and the sampler is
@@ -409,19 +467,46 @@ get it.
 
 ## The next step
 
-**A USB-TTL adapter on the UART pins.** There is no serial console on the
-USB-C ports (both are OTG/host), so this needs the header. It is the only
-diagnostic that sees the kernel's dying words — a panic, an oops, a watchdog
-trace — and every remaining hypothesis lives exactly where userspace tooling is
-blind. That blindness is why the health sampler kept reporting a healthy board
-one second before death.
+**Read hypotheses 10 and 12 first.** They change what is worth doing, and they
+argue against the UART that the rest of this section recommends.
 
-Cheap, and now the **only** thing likely to move this forward — the three
-secondary suggestions that used to live here have all been carried out:
+The kernel does not panic, does not oops, never fires `softlockup_panic` or
+`hardlockup_panic` (both enabled), and emits **nothing** into a
+verified-working ramoops console buffer. A UART shows what the kernel prints.
+The kernel prints nothing. Expect silence mid-line — which is real evidence,
+but it is one bit of information for the cost of wiring up a header.
+
+Every software-side suggestion that used to live here has been carried out:
 
 - ~~Sample kernel-side metrics~~ — done, hypothesis 8. They are flat.
 - ~~Try a different power supply~~ — done, hypothesis 9. It died on wall power.
 - ~~Run with WiFi down~~ — done, hypothesis 7. It died with the driver unloaded.
+- ~~Capture the kernel's dying words~~ — done, hypothesis 12. There are none.
+- ~~Remove the I2C storm~~ — done, hypothesis 11. Survival 2h to 32.6h, still died.
+
+**What the evidence now supports.** Twelve hypotheses tested, twelve refuted.
+Everything observable from software says the board is healthy in the sample
+before it stops. The failure is below the level any software on this board can
+observe, which means more instrumentation of *this* board has a poor expected
+return.
+
+Two things are worth more than a UART:
+
+1. **A second board, properly tested.** The one genuine attempt (2026-09-15)
+   ended with the replacement destroyed during setup, so the board-defect
+   question has never actually been answered. If a second unit runs for a week
+   on the same image, this one is defective and the investigation is over.
+2. **The dwc2 misconfiguration**, which is the one concrete defect found and
+   never corrected: `rk3066-usb` parameter fallback, `power_down = NONE`,
+   `no_clock_gating = true`, a permanent 8,000/s SOF storm and `Mode Mismatch`
+   interrupts. Fixing it needs a kernel rebuild (`~/code/vendor/linux-rockchip`,
+   `drivers/usb/dwc2/params.c:104`); the module is loadable, so only `dwc2.ko`
+   has to be replaced. Note the version gap: the board runs 6.1.99, the armbian
+   branches are 6.1.115.
+
+The three dashboard crashes (see `crashes/README.md`) are the other live thread
+— three different Go runtime invariants corrupted in three different
+subsystems, on a board with a DMA-capable peripheral in a known-bad state.
 
 ### Neither USB-C port can do this
 
