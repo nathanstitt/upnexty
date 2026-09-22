@@ -65,16 +65,18 @@ need() {
 	command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1${2:+ ($2)}"
 }
 
-# Run upgrade_tool -- WITHOUT sudo, which is what makes it segfault.
+# Run upgrade_tool unprivileged.
 #
 # This used to run writes under sudo, on the theory that raw USB needs root. It
 # does not: macOS hands USB device access to the logged-in user, and every
-# operation (LD, DB, UF) works unprivileged. Under sudo the x86_64 slice dies
-# immediately -- EXC_BAD_ACCESS at 0x8, four frames from start, before it opens
-# a device -- so `flash.sh` could never have worked on a Mac. The same command
-# run as the user flashes normally. Verified 2026-09-15.
+# operation (LD, DB, UF) works unprivileged.
 #
-# The `arch -x86_64` preference above is a separate issue; see the note there.
+# A 2026-09-15 note here claimed sudo itself caused a segfault. That was wrong.
+# The crash (EXC_BAD_ACCESS at 0x8, four frames from start) is the arm64 slice
+# dying in pthread_mutex_init -- confirmed 2026-09-22 by a crash report showing
+# libsystem_pthread on an arm64 stack. sudo only appeared to cause it because
+# running under sudo bypassed the arch preference below, so the arm64 slice ran.
+# Dropping sudo is still right, just not for the stated reason.
 #
 # It writes logs to ~/upgrade_tool/log, which is another reason not to sudo:
 # under root they land in /var/root and the user's copies go stale.

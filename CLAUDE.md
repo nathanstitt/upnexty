@@ -78,11 +78,14 @@ v2.44 is the newest macOS build Rockchip ships.
 **Never run `upgrade_tool` under `sudo`, and never pipe its output.** Two
 separate ways to lose a board, both hit on 2026-09-15:
 
-- Under `sudo` it segfaults instantly — `EXC_BAD_ACCESS at 0x8`, four frames
-  from `start`, before it opens a device. This is *not* the arm64 crash above;
-  it happens to the x86_64 slice too. macOS gives the logged-in user raw USB
-  access, so root is never needed. `scripts/common.sh` used to add `sudo`, which
-  meant `flash.sh` could not work on a Mac at all.
+- It segfaults instantly — `EXC_BAD_ACCESS at 0x8`, four frames from `start`,
+  before it opens a device. **This IS the arm64 crash above**, not a separate
+  bug: the 2026-09-22 crash report shows `libsystem_pthread.dylib` on top of an
+  `arm64` stack, which is the `pthread_mutex_init` startup crash. An earlier
+  edit here blamed `sudo` for it; that was wrong, and the confusion was that
+  running under `sudo` bypassed the arch wrapper so the arm64 slice ran. Root is
+  not needed either way — macOS gives the logged-in user raw USB access — so
+  `scripts/common.sh` no longer adds `sudo`, but that was never the cause.
 - Piping it into anything that exits early (`head`, `grep -q`, a `less` you
   quit) sends SIGPIPE mid-write. A flash killed at 3% erases the bootloader
   without writing the image. `flash.sh` now traps SIGPIPE and tees its own log;
