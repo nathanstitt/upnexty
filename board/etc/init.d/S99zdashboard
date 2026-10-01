@@ -1,18 +1,99 @@
 #!/bin/sh
 #
-# Start the UpNext dashboard.
+# Start the UpNext dashboard under a supervisor that restarts it when it dies.
 #
 # Named S99z* so it sorts after S99wlan0: rcS runs these sequentially, and
 # wlan0 blocks for up to ~45s waiting on association and DHCP. The dashboard
 # tolerates having no network (it renders the clock and a STALE flag), so this
 # is only about getting live data into the first frame rather than the second.
+#
+# The supervisor exists because of docs/crashes/README.md: eight times in
+# eight days the process died with the board healthy, and each time the panel
+# sat frozen on its last frame until someone noticed. Every exit now restarts
+# it within seconds, after saving the log it left behind -- the crash logs are
+# the evidence the lockup investigation runs on, and a bare restart would
+# overwrite them.
 
 DAEMON=/root/dashboard
 CONFIG=/root/config.json
 LOGFILE=/root/dashboard.log
-PIDFILE=/var/run/dashboard.pid
+# One file per exit, named by the time it happened, so a run of crashes is
+# preserved in order. /root is UBI with ~45MB free and a crash log is under
+# 100KB; KEEP_CRASHES bounds the directory anyway.
+CRASHDIR=/root/crashes
+KEEP_CRASHES=20
+SUPLOG=/root/supervisor.log
+PIDFILE=/var/run/dashboard.pid         # the dashboard process itself
+SUPPIDFILE=/var/run/dashboard-sup.pid  # the supervisor loop
+STOPFLAG=/var/run/dashboard.stop       # set by stop(): an exit is not a crash
 
 [ -x "$DAEMON" ] || exit 0
+
+# Go writes a fatal stack to stderr, which the log captures. That is the only
+# crash evidence available here: this kernel has coredump support compiled
+# out. Setting ulimit -c and core_pattern looks like it works -- both take,
+# and /proc/PID/limits reports "unlimited" -- but nothing is ever written.
+# Verified by SEGV-ing a shell with the limit raised and the pattern set to an
+# absolute path, which produced no file either.
+#
+# So the stack has to be sufficient, which means GOTRACEBACK and an unstripped
+# binary when hunting something the unwinder cannot walk.
+#
+# GOTRACEBACK=crash would re-raise for a core on a kernel that supported them;
+# it is deliberately not set, because without coredump support it only adds
+# runtime frames to a stack that is already long.
+GOTRACEBACK=all
+export GOTRACEBACK
+
+# save_crash_log copies the log of a run that just ended into CRASHDIR and
+# prunes the directory to KEEP_CRASHES files, oldest first.
+save_crash_log() {
+	mkdir -p "$CRASHDIR"
+	cp "$LOGFILE" "$CRASHDIR/dashboard-$1.log" 2>/dev/null
+	n=$(ls "$CRASHDIR" 2>/dev/null | wc -l)
+	while [ "$n" -gt "$KEEP_CRASHES" ]; do
+		oldest=$(ls "$CRASHDIR" | head -1)
+		[ -n "$oldest" ] || break
+		rm -f "$CRASHDIR/$oldest"
+		n=$((n - 1))
+	done
+}
+
+# supervise runs the dashboard and restarts it whenever it exits, unless
+# stop() has asked it not to. The delay between restarts doubles while the
+# process keeps dying inside its first minute -- a binary that faults at
+# startup, a bad config -- and drops back to five seconds once a run lasts.
+# Restarting a startup fault every few seconds forever would fill /root with
+# identical crash logs and hide the real problem behind a blinking panel.
+supervise() {
+	delay=5
+	while :; do
+		started=$(cut -d. -f1 /proc/uptime)
+		"$DAEMON" --config "$CONFIG" >>"$LOGFILE" 2>&1 &
+		echo $! > "$PIDFILE"
+		wait $!
+		rc=$?
+		rm -f "$PIDFILE"
+		if [ -f "$STOPFLAG" ]; then
+			exit 0
+		fi
+		ran=$(( $(cut -d. -f1 /proc/uptime) - started ))
+		stamp=$(date -u +%Y-%m-%dT%H%M%SZ)
+		save_crash_log "$stamp"
+		echo "$stamp dashboard exited rc=$rc after ${ran}s; restarting in ${delay}s" >> "$SUPLOG"
+		sleep "$delay"
+		if [ -f "$STOPFLAG" ]; then
+			exit 0
+		fi
+		if [ "$ran" -lt 60 ]; then
+			delay=$((delay * 2))
+			[ "$delay" -gt 300 ] && delay=300
+		else
+			delay=5
+		fi
+		: > "$LOGFILE"
+	done
+}
 
 start() {
 	printf "Starting dashboard: "
@@ -21,30 +102,20 @@ start() {
 		echo "FAIL (no $CONFIG)"
 		return 1
 	fi
+	if [ -f "$SUPPIDFILE" ] && kill -0 "$(cat "$SUPPIDFILE")" 2>/dev/null; then
+		echo "already running (supervisor pid $(cat "$SUPPIDFILE"))"
+		return 0
+	fi
 
 	# Keep one generation before truncating. /root is UBI on NAND with ~50MB
 	# free and this runs every minute forever, so the log cannot simply grow --
 	# but truncating outright destroys the evidence in the one case that
 	# matters: a process that died and is being restarted, whose stack is in
-	# the log we are about to erase.
+	# the log we are about to erase. (The supervisor saves each exit's log to
+	# CRASHDIR as well; this covers a restart of the service itself.)
 	[ -s "$LOGFILE" ] && mv "$LOGFILE" "$LOGFILE.1"
 	: > "$LOGFILE"
-
-	# Go writes a fatal stack to stderr, which the log now captures. That is the
-	# only crash evidence available here: this kernel has coredump support
-	# compiled out. Setting ulimit -c and core_pattern looks like it works --
-	# both take, and /proc/PID/limits reports "unlimited" -- but nothing is ever
-	# written. Verified by SEGV-ing a shell with the limit raised and the
-	# pattern set to an absolute path, which produced no file either.
-	#
-	# So the stack has to be sufficient, which means GOTRACEBACK below and an
-	# unstripped binary when hunting something the unwinder cannot walk.
-	#
-	# GOTRACEBACK=crash would re-raise for a core on a kernel that supported
-	# them; it is deliberately not set, because without coredump support it
-	# only adds runtime frames to a stack that is already long.
-	GOTRACEBACK=all
-	export GOTRACEBACK
+	rm -f "$STOPFLAG"
 
 	# Detach the kernel's text console from the framebuffer. fbcon shares
 	# /dev/fb0 and keeps drawing its caret on top of whatever we write -- a
@@ -77,48 +148,45 @@ start() {
 		done
 	fi
 
-	# Backgrounded by the shell, not by --background, and the pidfile is written
-	# here rather than by --make-pidfile.
+	# The supervisor is this script re-entered with a private action, run
+	# under setsid so it survives the init shell going away. The dashboard's
+	# own stdout and stderr are redirected by the supervisor into $LOGFILE.
 	#
-	# BusyBox's start-stop-daemon reopens a --background child's stdout and
-	# stderr on /dev/null unconditionally, and has no option to redirect them
-	# (see its --help: -b takes no argument). The redirect on the invocation
-	# only ever applied to start-stop-daemon's own output, so the daemon's fd 1
-	# and 2 pointed at /dev/null and $LOGFILE could never receive anything.
-	#
-	# That silently discarded every crash: a Go runtime stack goes to stderr,
-	# so a fatal fault left an empty log and looked like a clean run. Verified
-	# by reading /proc/PID/fd/2 on the running daemon, which is the only way to
-	# see it -- the log being empty is exactly what a healthy service looks
-	# like too.
-	#
-	# setsid detaches from the controlling terminal, which is the other thing
-	# --background was providing.
-	setsid "$DAEMON" --config "$CONFIG" >>"$LOGFILE" 2>&1 &
-	echo $! > "$PIDFILE"
-	status=0
+	# Not start-stop-daemon --background: BusyBox's reopens the child's stdout
+	# and stderr on /dev/null unconditionally and has no option to redirect
+	# them, which once silently discarded every crash stack (a Go runtime
+	# fault goes to stderr). Verified by reading /proc/PID/fd/2 on the running
+	# daemon, which is the only way to see it -- an empty log is exactly what a
+	# healthy service looks like too.
+	setsid sh "$0" supervise >/dev/null 2>&1 &
+	echo $! > "$SUPPIDFILE"
 
 	# A fault at startup (bad config, missing framebuffer) exits within a
 	# second, and reporting OK for a process that is already gone is worse than
-	# a slow start. Confirm it is still alive before claiming success.
-	sleep 1
-	if ! kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
-		status=1
-	fi
-
-	if [ $status -eq 0 ]; then
+	# a slow start. Confirm the dashboard itself is alive before claiming
+	# success; the supervisor will keep retrying either way.
+	sleep 2
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
 		echo "OK"
-	else
-		echo "FAIL"
+		return 0
 	fi
-	return $status
+	echo "FAIL (see $LOGFILE; the supervisor keeps retrying)"
+	return 1
 }
 
 stop() {
 	printf "Stopping dashboard: "
+	# Order matters: flag first so the supervisor treats the exit as a stop
+	# rather than a crash, then the dashboard, then the supervisor in case it
+	# is asleep between retries.
+	: > "$STOPFLAG"
 	start-stop-daemon --stop --quiet --oknodo --retry 5 --pidfile "$PIDFILE"
 	status=$?
-	rm -f "$PIDFILE"
+	if [ -f "$SUPPIDFILE" ]; then
+		kill "$(cat "$SUPPIDFILE")" 2>/dev/null
+		rm -f "$SUPPIDFILE"
+	fi
+	rm -f "$PIDFILE" "$STOPFLAG"
 
 	# Give the console back. Without this a stopped dashboard leaves a frozen
 	# last frame and no way to see boot or kernel messages on the panel.
@@ -143,10 +211,18 @@ case "$1" in
 	status)
 		if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
 			echo "dashboard running (pid $(cat "$PIDFILE"))"
+		elif [ -f "$SUPPIDFILE" ] && kill -0 "$(cat "$SUPPIDFILE")" 2>/dev/null; then
+			echo "dashboard not running; supervisor (pid $(cat "$SUPPIDFILE")) is between retries"
+			tail -1 "$SUPLOG" 2>/dev/null
+			exit 1
 		else
 			echo "dashboard not running"
 			exit 1
 		fi
+		;;
+	supervise)
+		# Private: the loop start() launches. Not for hand use.
+		supervise
 		;;
 	*)
 		echo "Usage: $0 {start|stop|restart|status}" >&2

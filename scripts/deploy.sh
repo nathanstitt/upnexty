@@ -13,7 +13,7 @@ require_adb
 files=("$@")
 if [ ${#files[@]} -eq 0 ]; then
 	shopt -s nullglob
-	files=("$REPO_ROOT"/build/* "$REPO_ROOT"/scripts/set-dsi-panel.sh)
+	files=("$REPO_ROOT"/build/* "$REPO_ROOT"/scripts/set-dsi-panel.sh "$REPO_ROOT"/scripts/set-watchdog.sh)
 	shopt -u nullglob
 	[ ${#files[@]} -gt 0 ] || die "nothing to deploy -- run scripts/build.sh first"
 fi

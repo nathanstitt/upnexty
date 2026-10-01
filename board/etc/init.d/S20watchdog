@@ -1,0 +1,75 @@
+#!/bin/sh
+# Feed the hardware watchdog so a locked-up board resets itself.
+#
+# /dev/watchdog exists only once set-watchdog.sh has added the WDT0 node to
+# the boot partition and the board has rebooted (see CLAUDE.md, "Watchdog").
+# Until then this script says so and exits cleanly, so it is safe to install
+# on a board that has not been converted.
+#
+# The feeder is BusyBox's watchdog applet: it pings the device every PING
+# seconds and arms it with a TIMEOUT-second countdown. A lockup stops the
+# pings and the SoC resets TIMEOUT seconds later. The countdown is long
+# because the sampler and the dashboard both fork every 30-60s and a render
+# holds the CPU for ~10s; a short timeout would reboot a healthy board.
+#
+# Sorts early so a hang during the rest of boot -- S99wlan0 blocks up to 45s
+# on DHCP -- is covered too. Stopping the service closes the device with the
+# magic character, which disarms the timer.
+#
+# WATCHDOG_TIMEOUT and WATCHDOG_PING in /etc/default/watchdog override the
+# defaults. The hardware maximum is about 89s (2^31 ticks at 24MHz).
+
+DEV=/dev/watchdog
+PIDFILE=/var/run/watchdog.pid
+TIMEOUT=60
+PING=5
+
+[ -f /etc/default/watchdog ] && . /etc/default/watchdog
+TIMEOUT="${WATCHDOG_TIMEOUT:-$TIMEOUT}"
+PING="${WATCHDOG_PING:-$PING}"
+
+start() {
+	printf "Starting watchdog: "
+	if [ ! -c "$DEV" ]; then
+		echo "no $DEV (run /root/set-watchdog.sh and reboot) -- skipped"
+		return 0
+	fi
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+		echo "already running"
+		return 0
+	fi
+	if start-stop-daemon -S -q -b -m -p "$PIDFILE" -x /usr/sbin/watchdog -- -F -t "$PING" -T "$TIMEOUT" "$DEV"; then
+		echo "OK (reset after ${TIMEOUT}s without a ping)"
+	else
+		echo "FAIL"
+		return 1
+	fi
+}
+
+stop() {
+	printf "Stopping watchdog: "
+	# SIGTERM makes the applet write the magic close character before it
+	# exits, which disarms the timer. Without that a stopped feeder is a
+	# reboot in TIMEOUT seconds.
+	start-stop-daemon -K -q -p "$PIDFILE"
+	rm -f "$PIDFILE"
+	echo "OK"
+}
+
+case "$1" in
+start) start ;;
+stop) stop ;;
+restart) stop; sleep 1; start ;;
+status)
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+		echo "watchdog feeder running (pid $(cat "$PIDFILE"), timeout ${TIMEOUT}s)"
+	elif [ -c "$DEV" ]; then
+		echo "watchdog feeder not running -- $DEV is present but unfed"
+		exit 1
+	else
+		echo "no $DEV: node not applied (see set-watchdog.sh)"
+		exit 1
+	fi
+	;;
+*) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac
