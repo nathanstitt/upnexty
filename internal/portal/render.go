@@ -64,6 +64,21 @@ type pageData struct {
 type GoogleAccount struct {
 	Email     string
 	Calendars []config.CalendarSource
+
+	// Available is every calendar the account can read, with Selected set
+	// on the ones the panel shows. Empty when the list could not be fetched,
+	// in which case ListError says why and the page falls back to Calendars.
+	Available []GoogleCalendarChoice
+	ListError string
+}
+
+// GoogleCalendarChoice is one row of the per-account calendar picker.
+type GoogleCalendarChoice struct {
+	ID       string
+	Name     string
+	Color    string
+	Primary  bool
+	Selected bool
 }
 
 // ICalFeeds are the calendar sources editable as a URL. The settings form

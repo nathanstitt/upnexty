@@ -572,12 +572,20 @@ func (s *Server) handleGoogleConnect(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		// A token alone shows nothing: the panel only fetches calendars that
+		// are listed in the config. Adopt the account's primary calendar so
+		// connecting is enough on its own; the picker on the settings page
+		// adds the rest. Before this, a fresh account sat "Connected, but no
+		// calendars from this account are shown yet" until someone edited
+		// config.json by hand.
+		if err := s.adoptPrimaryCalendar(ctx, account); err != nil {
+			s.setGoogleErr(fmt.Errorf("connected %s, but could not add its calendar: %w", account, err))
+		}
 		// A newly connected account is useless until something fetches with
 		// it, and the next scheduled fetch may be ten minutes away.
 		if rf, ok := s.Store.(CalendarRefetcher); ok {
 			rf.RefetchCalendars()
 		}
-		_ = account
 	}()
 
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -629,6 +637,135 @@ func (s *Server) handleGoogleDisconnect(w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// adoptPrimaryCalendar adds the account's primary calendar as a source, unless
+// the config already lists a calendar for that account (a reconnect after a
+// revoked token must not duplicate what is there).
+func (s *Server) adoptPrimaryCalendar(ctx context.Context, account string) error {
+	for _, src := range s.Store.Config().Calendars {
+		if src.SourceKind() == config.KindGoogle && src.Account == account {
+			return nil
+		}
+	}
+	cals, err := s.Google.Calendars(ctx, account)
+	if err != nil {
+		return err
+	}
+	var primary *GoogleCalendar
+	for i := range cals {
+		if cals[i].Primary {
+			primary = &cals[i]
+			break
+		}
+	}
+	if primary == nil {
+		return fmt.Errorf("the account lists no primary calendar")
+	}
+	return s.save(func(c *config.Config) error {
+		c.Calendars = append(c.Calendars, googleSource(*primary, account, c.Calendars))
+		return nil
+	})
+}
+
+// googleSource builds a config entry for a listed calendar. Google's own
+// colour is used when it has one, so the panel matches what the user sees in
+// their calendar; otherwise the next palette colour not already taken.
+func googleSource(cal GoogleCalendar, account string, existing []config.CalendarSource) config.CalendarSource {
+	color := cal.Color
+	if !validHexColor(color) {
+		taken := map[string]bool{}
+		for _, src := range existing {
+			taken[src.Color] = true
+		}
+		color = nextColor(taken)
+	}
+	name := strings.TrimSpace(cal.Name)
+	if name == "" {
+		name = cal.ID
+	}
+	return config.CalendarSource{
+		Name:    name,
+		Color:   color,
+		Kind:    config.KindGoogle,
+		CalID:   cal.ID,
+		Account: account,
+	}
+}
+
+// validHexColor accepts "#rrggbb" only: the value lands in a style attribute.
+func validHexColor(c string) bool {
+	if len(c) != 7 || c[0] != '#' {
+		return false
+	}
+	for _, r := range c[1:] {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// handleGoogleCalendars applies the per-account picker: the checked calendars
+// become the account's sources. Ones already configured keep their name and
+// colour; new ones take the name and colour the form carried from the listing
+// (hidden fields, so this does not need a second API call); unchecked ones
+// are removed. Other accounts' sources and iCal feeds are untouched.
+func (s *Server) handleGoogleCalendars(w http.ResponseWriter, r *http.Request) {
+	if s.Google == nil {
+		s.page(w, "This board was built without Google credentials.", http.StatusBadRequest)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.page(w, "That form could not be read. Try again.", http.StatusBadRequest)
+		return
+	}
+	account := strings.TrimSpace(r.FormValue("account"))
+	if account == "" {
+		s.page(w, "Which account are these calendars for?", http.StatusBadRequest)
+		return
+	}
+	checked := r.Form["cal"]
+	if err := s.save(func(c *config.Config) error {
+		existing := map[string]config.CalendarSource{}
+		kept := c.Calendars[:0:0]
+		for _, src := range c.Calendars {
+			if src.SourceKind() == config.KindGoogle && src.Account == account {
+				existing[src.CalID] = src
+				continue
+			}
+			kept = append(kept, src)
+		}
+		for _, id := range checked {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			if src, ok := existing[id]; ok {
+				kept = append(kept, src)
+				continue
+			}
+			cal := GoogleCalendar{
+				ID:    id,
+				Name:  r.FormValue("name_" + id),
+				Color: r.FormValue("color_" + id),
+			}
+			kept = append(kept, googleSource(cal, account, kept))
+		}
+		c.Calendars = kept
+		return nil
+	}); err != nil {
+		s.page(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rf, ok := s.Store.(CalendarRefetcher); ok {
+		rf.RefetchCalendars()
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// calendarListTimeout bounds the per-account listing on the settings page.
+// The page must render with or without Google answering.
+const calendarListTimeout = 6 * time.Second
+
 // fillGoogle populates the Google section of the settings page.
 //
 // A failure to list accounts is reported rather than swallowed: the accounts
@@ -652,10 +789,27 @@ func (s *Server) fillGoogle(data *pageData, cfg *config.Config) {
 	}
 	for _, email := range accounts {
 		acct := GoogleAccount{Email: email}
+		selected := map[string]bool{}
 		for _, src := range cfg.Calendars {
 			if src.SourceKind() == config.KindGoogle && src.Account == email {
 				acct.Calendars = append(acct.Calendars, src)
+				selected[src.CalID] = true
 			}
+		}
+		// The picker needs the live list. A failure is shown beside the
+		// account rather than failing the page: the rest of the settings
+		// must stay editable when Google is unreachable.
+		ctx, cancel := context.WithTimeout(context.Background(), calendarListTimeout)
+		cals, err := s.Google.Calendars(ctx, email)
+		cancel()
+		if err != nil {
+			acct.ListError = "Could not list this account's calendars: " + err.Error()
+		}
+		for _, cal := range cals {
+			acct.Available = append(acct.Available, GoogleCalendarChoice{
+				ID: cal.ID, Name: cal.Name, Color: cal.Color, Primary: cal.Primary,
+				Selected: selected[cal.ID],
+			})
 		}
 		data.GoogleAccounts = append(data.GoogleAccounts, acct)
 	}

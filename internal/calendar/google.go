@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -319,4 +320,103 @@ func googleParseTime(gt googleTime, loc *time.Location) (t time.Time, allDay boo
 		return parsed, true, err == nil
 	}
 	return time.Time{}, false, false
+}
+
+// GoogleCalendar is one entry in an account's calendar list: what the
+// settings page offers for the panel once an account is connected.
+type GoogleCalendar struct {
+	ID      string
+	Name    string
+	Color   string // Google's background colour for it, "#rrggbb", or ""
+	Primary bool
+}
+
+// googleCalendarListPage is the subset of the calendarList resource used.
+type googleCalendarListPage struct {
+	Items []struct {
+		ID              string `json:"id"`
+		Summary         string `json:"summary"`
+		SummaryOverride string `json:"summaryOverride"`
+		BackgroundColor string `json:"backgroundColor"`
+		Primary         bool   `json:"primary"`
+		Hidden          bool   `json:"hidden"`
+		Deleted         bool   `json:"deleted"`
+	} `json:"items"`
+	NextPageToken string `json:"nextPageToken"`
+}
+
+// ListGoogleCalendars returns the calendars the account can read, primary
+// first and the rest by name. Hidden and deleted entries are left out: they
+// are ones the user has already removed from their own Google view.
+//
+// This is what makes connecting an account useful on its own. Without it a
+// token sat in the store with nothing to fetch, and the settings page could
+// only say "no calendars from this account are shown yet".
+func ListGoogleCalendars(ctx context.Context, ts TokenSource, account string) ([]GoogleCalendar, error) {
+	if ts == nil {
+		return nil, fmt.Errorf("google %q: no token source configured", account)
+	}
+	token, err := ts.AccessToken(ctx, account)
+	if err != nil {
+		return nil, fmt.Errorf("google %q: %w", account, err)
+	}
+
+	var out []GoogleCalendar
+	pageToken := ""
+	for page := 0; page < googleMaxPages; page++ {
+		q := url.Values{"minAccessRole": {"reader"}, "maxResults": {"250"}}
+		if pageToken != "" {
+			q.Set("pageToken", pageToken)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+			googleAPIBase+"/users/me/calendarList?"+q.Encode(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("google %q: %w", account, err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("google %q: %w", account, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			var ae googleAPIError
+			_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&ae)
+			resp.Body.Close()
+			msg := ae.Error.Message
+			if msg == "" {
+				msg = resp.Status
+			}
+			return nil, fmt.Errorf("google %q: listing calendars: %s", account, msg)
+		}
+		var list googleCalendarListPage
+		err = json.NewDecoder(io.LimitReader(resp.Body, googleMaxBody)).Decode(&list)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("google %q: decoding calendar list: %w", account, err)
+		}
+		for _, it := range list.Items {
+			if it.Hidden || it.Deleted || it.ID == "" {
+				continue
+			}
+			name := it.SummaryOverride
+			if name == "" {
+				name = it.Summary
+			}
+			if name == "" {
+				name = it.ID
+			}
+			out = append(out, GoogleCalendar{ID: it.ID, Name: name, Color: it.BackgroundColor, Primary: it.Primary})
+		}
+		if list.NextPageToken == "" {
+			break
+		}
+		pageToken = list.NextPageToken
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Primary != out[j].Primary {
+			return out[i].Primary
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out, nil
 }

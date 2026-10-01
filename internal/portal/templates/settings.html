@@ -84,10 +84,31 @@
 <div class="row">
   <label>{{.Email}}</label><span class="rule"></span>
   <div class="field">
-    {{if .Calendars}}
-    <ul class="cal-list">{{range .Calendars}}<li>{{.Name}}</li>{{end}}</ul>
+    {{if .Available}}
+    {{/* The picker: every calendar the account can read, ticked when the panel
+         shows it. Name and colour ride along as hidden fields so saving does
+         not need a second trip to Google. */}}
+    <form method="post" action="/google/calendars">
+      <input type="hidden" name="account" value="{{.Email}}">
+      <ul class="cal-list">
+      {{range .Available}}
+        <li><label>
+          <input type="checkbox" name="cal" value="{{.ID}}"{{if .Selected}} checked{{end}}>
+          {{.Name}}{{if .Primary}} <span class="hint">(primary)</span>{{end}}
+        </label>
+        <input type="hidden" name="name_{{.ID}}" value="{{.Name}}">
+        <input type="hidden" name="color_{{.ID}}" value="{{.Color}}"></li>
+      {{end}}
+      </ul>
+      <button type="submit" class="secondary">Show ticked calendars</button>
+    </form>
     {{else}}
-    <p class="hint">Connected, but no calendars from this account are shown yet.</p>
+      {{if .ListError}}<p class="error">{{.ListError}}</p>{{end}}
+      {{if .Calendars}}
+      <ul class="cal-list">{{range .Calendars}}<li>{{.Name}}</li>{{end}}</ul>
+      {{else}}
+      <p class="hint">Connected, but no calendars from this account are shown yet.</p>
+      {{end}}
     {{end}}
     <form method="post" action="/google/disconnect" style="margin-top:8px">
       <input type="hidden" name="account" value="{{.Email}}">

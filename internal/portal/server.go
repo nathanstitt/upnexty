@@ -126,6 +126,16 @@ type PairingCode struct {
 	Account string
 }
 
+// GoogleCalendar is one calendar an account can read, as the linker reports
+// it. Mirrors calendar.GoogleCalendar so this package stays free of the
+// fetcher's dependencies.
+type GoogleCalendar struct {
+	ID      string
+	Name    string
+	Color   string // "#rrggbb" or ""
+	Primary bool
+}
+
 // GoogleLinker runs the OAuth device flow and persists the resulting token.
 //
 // An interface so the portal does not import the token store: it keeps this
@@ -136,6 +146,11 @@ type GoogleLinker interface {
 	// panel; the opaque handle is passed straight back to AwaitToken and must
 	// not be displayed -- it is the bearer of the eventual token.
 	StartDeviceFlow(ctx context.Context) (code PairingCode, handle any, err error)
+
+	// Calendars lists the calendars the account can read, primary first.
+	// The settings page offers them as checkboxes, and a fresh connection
+	// adopts the primary one so the account feeds the panel straight away.
+	Calendars(ctx context.Context, account string) ([]GoogleCalendar, error)
 
 	// AwaitToken polls until the user authorises, the code expires, or ctx
 	// ends, then stores the token. It returns the account that was connected.
@@ -250,6 +265,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /save/password", s.auth(http.HandlerFunc(s.handleSavePassword)))
 	mux.Handle("POST /unmute", s.auth(http.HandlerFunc(s.handleUnmute)))
 	mux.Handle("POST /google/connect", s.auth(http.HandlerFunc(s.handleGoogleConnect)))
+	mux.Handle("POST /google/calendars", s.auth(http.HandlerFunc(s.handleGoogleCalendars)))
 	mux.Handle("POST /google/disconnect", s.auth(http.HandlerFunc(s.handleGoogleDisconnect)))
 
 	// Login and logout are outside auth by definition.

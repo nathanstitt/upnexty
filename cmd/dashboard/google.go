@@ -133,6 +133,19 @@ func (g *googleLinker) AwaitToken(ctx context.Context, handle any) (string, erro
 	return tok.Account, nil
 }
 
+// Calendars implements portal.GoogleLinker.
+func (g *googleLinker) Calendars(ctx context.Context, account string) ([]portal.GoogleCalendar, error) {
+	cals, err := calendar.ListGoogleCalendars(ctx, g, account)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]portal.GoogleCalendar, 0, len(cals))
+	for _, c := range cals {
+		out = append(out, portal.GoogleCalendar{ID: c.ID, Name: c.Name, Color: c.Color, Primary: c.Primary})
+	}
+	return out, nil
+}
+
 // Accounts implements portal.GoogleLinker.
 func (g *googleLinker) Accounts() ([]string, error) { return g.store.Accounts() }
 

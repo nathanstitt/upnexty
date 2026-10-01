@@ -260,3 +260,59 @@ func TestFetchGoogleSurfacesAPIErrors(t *testing.T) {
 		t.Errorf("got %d events alongside the error", len(evs))
 	}
 }
+
+func TestListGoogleCalendarsOrdersAndFilters(t *testing.T) {
+	var gotAuth, gotPath string
+	srv := googleTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[
+			{"id":"zzz@group.calendar.google.com","summary":"Zebra club","backgroundColor":"#123456"},
+			{"id":"me@x.com","summary":"me@x.com","primary":true,"backgroundColor":"#9fe1e7"},
+			{"id":"gone@x.com","summary":"Gone","deleted":true},
+			{"id":"hid@x.com","summary":"Hidden","hidden":true},
+			{"id":"a@x.com","summary":"Ignored","summaryOverride":"Alpha team"}
+		]}`))
+	})
+	withBase(t, srv.URL)
+
+	got, err := ListGoogleCalendars(context.Background(), &fakeTokens{token: "tok-1"}, "me@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer tok-1" {
+		t.Errorf("Authorization = %q, want the account's token", gotAuth)
+	}
+	if gotPath != "/users/me/calendarList" {
+		t.Errorf("path = %q, want /users/me/calendarList", gotPath)
+	}
+	want := []GoogleCalendar{
+		{ID: "me@x.com", Name: "me@x.com", Color: "#9fe1e7", Primary: true},
+		{ID: "a@x.com", Name: "Alpha team"},
+		{ID: "zzz@group.calendar.google.com", Name: "Zebra club", Color: "#123456"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d calendars %+v, want %d (hidden and deleted dropped)", len(got), got, len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("calendar %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestListGoogleCalendarsSurfacesAPIErrors(t *testing.T) {
+	srv := googleTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"message":"Calendar API has not been used in project"}}`))
+	})
+	withBase(t, srv.URL)
+	_, err := ListGoogleCalendars(context.Background(), &fakeTokens{token: "tok"}, "me@x.com")
+	if err == nil || !strings.Contains(err.Error(), "Calendar API has not been used") {
+		t.Errorf("err = %v, want the API's message", err)
+	}
+	if _, err := ListGoogleCalendars(context.Background(), nil, "me@x.com"); err == nil {
+		t.Error("a nil token source must be an error, not a panic or an empty list")
+	}
+}

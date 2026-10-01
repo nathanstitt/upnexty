@@ -82,7 +82,10 @@ occurrences in **96KB**, with recurrences already expanded server-side.
 
 Connecting an account uses the OAuth device flow: press the button in the
 portal, and the code appears **on the panel** — by the time Google issues it,
-the browser that started the flow has already been answered.
+the browser that started the flow has already been answered. Once the token
+lands the account's primary calendar is added to the panel on its own, and
+the settings page lists every calendar the account can read with a checkbox
+each, so secondary and shared calendars are one tick away.
 
 Setting it up needs a Google Cloud project with an OAuth client of type "TV and
 Limited Input device". See `docs/plans/google-calendar-api.md`, which also
