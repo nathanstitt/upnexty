@@ -19,27 +19,40 @@ browser, and no compositor on the device.
 - **Weather** — current conditions, an hourly temperature curve across the same
   window as the agenda, and a 7-day strip.
 - **Touch** — tapping a card opens a detail sheet with "hide from panel".
+- **Meeting chime** — a short bell through a USB speaker when a timed event
+  starts. Silent on a board with no sound card; `"sound": {"chime": false}`
+  turns it off.
 - **Settings portal** — served on `:80` by the same process. Wi-Fi, calendars,
   brightness, clock format, hostname, and unhiding events.
 - **Self-setup** — with no network the board raises its own access point and
   serves the portal there, answering captive-portal probes so a phone offers
   its sign-in sheet.
+- **Recovery** — a supervisor restarts the dashboard when it exits, and a
+  hardware watchdog resets the board if it locks up. The watchdog needs a
+  one-time device-tree change; see `CLAUDE.md`, "Watchdog".
 
 ## Repository layout
 
 ```
-cmd/dashboard/      the service: fetch, render, blit, portal, touch
-internal/calendar/  iCal parsing and the Google Calendar API backend
-internal/googleauth/per-account OAuth token storage and refresh
-internal/model/     view model: agenda layout, now-block, hit testing
-internal/view/      HTML template, CSS, fonts, SVG
-internal/portal/    the settings web UI
-internal/fb/        framebuffer format and blitting
-internal/weather/   Open-Meteo client
-internal/wifi/      association, AP mode, status
-board/              files installed onto the device (init scripts, helpers)
-scripts/            host-side build, deploy, flash, and board helpers
-docs/plans/         design notes for work in progress
+cmd/dashboard/       the service: fetch, render, blit, portal, touch, chime
+internal/calendar/   iCal parsing and the Google Calendar API backend
+internal/googleauth/ per-account OAuth token storage and refresh
+internal/config/     config.json schema and storage
+internal/model/      view model: agenda layout, now-block, hit testing
+internal/view/       HTML template, CSS, fonts
+internal/chart/      weather charts as SVG
+internal/portal/     the settings web UI
+internal/fb/         framebuffer format and blitting
+internal/touch/      Goodix touch input, rotated to panel space
+internal/chime/      meeting chime synthesis and playback
+internal/quote/      end-of-day quote
+internal/weather/    Open-Meteo client
+internal/wifi/       association, AP mode, status
+board/               files installed onto the device (init scripts, helpers)
+scripts/             host-side build, deploy, flash, and board helpers
+tools/fb2png/        convert a /dev/fb0 capture to PNG
+docker/usb-audio/    kernel build image for the USB audio modules
+docs/                lockup investigation, TODO, engine gaps, plans
 ```
 
 ## Building
@@ -58,11 +71,33 @@ dependency, so it does not care what the board's Buildroot ships.
 **This repo does not build standalone.** `go.mod` has
 
 ```
-replace github.com/nathanstitt/omnidoc => ../../omnidoc
+replace github.com/nathanstitt/omnidoc => ../omnidoc
 ```
 
 The renderer is a separate project and must be checked out as a sibling
-directory. Override its location with `OMNIDOC_DIR`.
+directory. To use a different location, change that `replace` line.
+
+`scripts/deploy.sh` with no arguments also installs `board/etc/init.d/`, which
+includes `S99wlan0`. To change only the dashboard, name the file:
+`scripts/deploy.sh build/dashboard`. Read `CLAUDE.md` before a bare deploy.
+
+## Board services
+
+Installed from `board/etc/init.d/`:
+
+| script | job |
+|---|---|
+| `S20watchdog` | feed the hardware watchdog; exits cleanly if there is none |
+| `S30usbaudio` | set the USB speaker volume when the card appears |
+| `S97lockupprobe` | temporary lockup-investigation settings (`docs/lockups.md`) |
+| `S98health` | sample health to `/root/health.log`; mark unclean shutdowns |
+| `S99wlan0` | associate, DHCP, set the clock; fall back to AP mode |
+| `S99zdashboard` | run the dashboard under a restart supervisor |
+| `S99zsoakexpire` | clean up a soak test that outlived a lockup |
+
+USB audio needs four kernel modules that the stock image does not ship.
+`scripts/build-usb-audio.sh` builds them in Docker and
+`scripts/setup-usb-audio.sh` installs them; see `CLAUDE.md`, "USB audio".
 
 ## Calendars
 
@@ -94,6 +129,6 @@ records what was measured and what was tried and rejected.
 ## Hardware notes
 
 The board-specific detail — panel timings, the DSI fix, Wi-Fi driver
-installation, flashing, and the gotchas that cost real time — lives in
+installation, flashing, the watchdog, USB audio, and the gotchas that cost real time — lives in
 `CLAUDE.md`. Read it before touching the device; several of its entries exist
 because something failed silently and took a while to find.

@@ -45,8 +45,8 @@ The sections below that invoke `/root/html2fb` and `/root/fbtouch` describe how
 the panel and touch rotation work and are kept for that; the commands themselves
 would have to be recovered from git history or rewritten to run again.
 
-The renderer is the **omnidoc** repo; override its location with `OMNIDOC_DIR`
-(`go.mod` has a `replace` pointing at `../omnidoc`).
+The renderer is the **omnidoc** repo; to move it, edit the `replace`
+line in `go.mod`, which points at `../omnidoc`.
 
 ## Setup
 
