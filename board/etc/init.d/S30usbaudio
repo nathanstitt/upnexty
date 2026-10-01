@@ -1,0 +1,59 @@
+#!/bin/sh
+# Set the USB speaker's playback level once the card appears.
+#
+# The image's S11alsa-utils runs `alsactl init`, which only applies driver
+# defaults -- the Jieli speaker comes up at 99% (-1.3dB), which is loud for a
+# bloop across a room. Nothing on this image restores a saved mixer state, so
+# the level is set here instead.
+#
+# The speaker is on the USB host port behind the hub and enumerates several
+# seconds into boot, well after this script's turn in rcS. Rather than hold
+# the boot sequence, the wait runs in the background: up to WAIT seconds for
+# /proc/asound/card0, then one amixer call. With no speaker plugged in it
+# gives up quietly.
+#
+# VOLUME in /etc/default/usbaudio overrides the level; amixer syntax, so
+# "-22dB", "23%" or a raw "34" all work. -22dB is the level chosen
+# by ear on 2026-09-25: the speaker defaults to 99%, which is loud.
+
+VOLUME="-22dB"
+WAIT=30
+CARD=0
+CONTROL=PCM
+
+[ -f /etc/default/usbaudio ] && . /etc/default/usbaudio
+
+set_level() {
+	i=0
+	while [ ! -e "/proc/asound/card$CARD" ]; do
+		i=$((i + 1))
+		[ "$i" -ge "$WAIT" ] && return 1
+		sleep 1
+	done
+	amixer -q -c "$CARD" sset "$CONTROL" -- "$VOLUME"
+}
+
+case "$1" in
+start)
+	printf "Setting USB audio level: "
+	if [ -e "/proc/asound/card$CARD" ]; then
+		set_level && echo "$VOLUME" || echo "FAIL"
+	else
+		# Backgrounded so the boot does not wait on USB enumeration.
+		(set_level) >/dev/null 2>&1 &
+		echo "$VOLUME (when the card appears)"
+	fi
+	;;
+stop) ;;
+restart | reload) "$0" start ;;
+status)
+	amixer -c "$CARD" sget "$CONTROL" 2>/dev/null | grep "Front Left:" || {
+		echo "no card $CARD"
+		exit 1
+	}
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|status}"
+	exit 1
+	;;
+esac
