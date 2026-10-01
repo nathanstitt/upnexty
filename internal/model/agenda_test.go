@@ -339,23 +339,26 @@ func TestOvernightGapIsAnEntry(t *testing.T) {
 	}
 	row := BuildAgenda(evs, now, false)
 
-	if len(row.Cards) < 3 {
-		t.Fatalf("row has %d cards, want a gap and a separator before the events", len(row.Cards))
+	if len(row.Cards) < 4 {
+		t.Fatalf("row has %d cards, want a heading, a gap and a separator before the events", len(row.Cards))
 	}
-	if row.Cards[0].Kind != CardGap {
-		t.Errorf("first card is %v, want a free-time chip covering the overnight span",
-			row.Cards[0].Kind)
+	// Nothing remains today, so the row opens with the "Today" heading; the
+	// overnight chip is the entry after it.
+	chip := row.Cards[1]
+	if chip.Kind != CardGap {
+		t.Errorf("second card is %v, want a free-time chip covering the overnight span",
+			chip.Kind)
 	}
 	// An overnight span is labelled, not measured: "19h59m free" is arithmetic
 	// nobody reads, and the useful fact is that the day is over.
-	if !row.Cards[0].Overnight {
+	if !chip.Overnight {
 		t.Error("the overnight chip is not marked Overnight, so it would print a duration")
 	}
-	if got := row.Cards[0].GapText; got != "" {
+	if got := chip.GapText; got != "" {
 		t.Errorf("overnight chip carries the duration %q; it should carry none", got)
 	}
 	var sawSep bool
-	for _, c := range row.Cards {
+	for _, c := range row.Cards[1:] {
 		if c.Kind == CardDaySep {
 			sawSep = true
 			if c.SepText != "Tomorrow" {
@@ -376,9 +379,11 @@ func TestOvernightNowBarIsInTheGap(t *testing.T) {
 	}
 	row := BuildAgenda(evs, now, false)
 
-	gap := row.Cards[0]
+	// Nothing remains today, so the row opens with the "Today" heading and
+	// the overnight gap is the entry after it.
+	gap := row.Cards[1]
 	if gap.Kind != CardGap {
-		t.Fatalf("first card is %v, want the gap", gap.Kind)
+		t.Fatalf("second card is %v, want the gap", gap.Kind)
 	}
 	left := gap.XPx + row.OffsetPx + CardPadPx
 	if row.NowBarXPx < left || row.NowBarXPx > left+gap.WidthPx {
@@ -448,28 +453,34 @@ func TestLastEventStaysWithElapsedFreeTime(t *testing.T) {
 	}
 	row := BuildAgenda(evs, now, false)
 
-	if len(row.Cards) < 5 {
-		t.Fatalf("row has %d cards, want past / elapsed / overnight / sep / next", len(row.Cards))
+	if len(row.Cards) < 6 {
+		t.Fatalf("row has %d cards, want today / past / elapsed / overnight / sep / next", len(row.Cards))
 	}
-	if row.Cards[0].Kind != CardEvent || row.Cards[0].Event.Title != "Office hours" {
-		t.Errorf("first card is %v %q, want the last finished event",
-			row.Cards[0].Kind, row.Cards[0].Event.Title)
+	// Nothing remains today, so the finished card sits under a "Today"
+	// heading rather than opening the row bare.
+	if row.Cards[0].Kind != CardDaySep || row.Cards[0].SepText != "Today" {
+		t.Errorf("first card is %v %q, want the Today heading",
+			row.Cards[0].Kind, row.Cards[0].SepText)
+	}
+	if row.Cards[1].Kind != CardEvent || row.Cards[1].Event.Title != "Office hours" {
+		t.Errorf("second card is %v %q, want the last finished event",
+			row.Cards[1].Kind, row.Cards[1].Event.Title)
 	}
 	// Bare on purpose: how long ago the last event finished is true but not
 	// actionable, and a number there reads as something upcoming.
-	if row.Cards[1].Kind != CardGap {
-		t.Errorf("second card is %v, want the elapsed chip", row.Cards[1].Kind)
+	if row.Cards[2].Kind != CardGap {
+		t.Errorf("third card is %v, want the elapsed chip", row.Cards[2].Kind)
 	}
-	if row.Cards[1].GapText != "" {
+	if row.Cards[2].GapText != "" {
 		t.Errorf("the elapsed chip reads %q; it should carry no text",
-			row.Cards[1].GapText)
+			row.Cards[2].GapText)
 	}
-	if row.Cards[2].Kind != CardGap || !row.Cards[2].Overnight {
-		t.Errorf("third card is %v (overnight=%v), want the overnight chip",
-			row.Cards[2].Kind, row.Cards[2].Overnight)
+	if row.Cards[3].Kind != CardGap || !row.Cards[3].Overnight {
+		t.Errorf("fourth card is %v (overnight=%v), want the overnight chip",
+			row.Cards[3].Kind, row.Cards[3].Overnight)
 	}
-	if row.Cards[3].Kind != CardDaySep {
-		t.Errorf("fourth card is %v, want the Tomorrow separator", row.Cards[3].Kind)
+	if row.Cards[4].Kind != CardDaySep {
+		t.Errorf("fifth card is %v, want the Tomorrow separator", row.Cards[4].Kind)
 	}
 }
 
@@ -509,12 +520,15 @@ func TestNoElapsedChipWithoutHistory(t *testing.T) {
 	evs := []calendar.Event{{Title: "Exercise", Start: now.Add(16 * time.Hour), End: now.Add(17 * time.Hour)}}
 	row := BuildAgenda(evs, now, false)
 
-	if row.Cards[0].Kind == CardGap && row.Cards[0].GapText != "" {
+	// Cards[0] is the "Today" heading (nothing remains today); the first
+	// entry after it is what this test is about.
+	first := row.Cards[1]
+	if first.Kind == CardGap && first.GapText != "" {
 		t.Errorf("a %q elapsed chip was emitted with no preceding event",
-			row.Cards[0].GapText)
+			first.GapText)
 	}
-	if row.Cards[0].Kind != CardGap || !row.Cards[0].Overnight {
-		t.Errorf("first card is %v, want the overnight chip", row.Cards[0].Kind)
+	if first.Kind != CardGap || !first.Overnight {
+		t.Errorf("first entry is %v, want the overnight chip", first.Kind)
 	}
 }
 
@@ -827,4 +841,70 @@ func TestSingleCurrentEventKeepsTheNarrowFloor(t *testing.T) {
 		return
 	}
 	t.Fatal("no current card in the row")
+}
+
+// A day with nothing left in it is labelled, so the row does not open on the
+// overnight chip with the NOW bar against it -- which at 09:38 read as evening.
+func TestTodayHeadingWhenNothingRemainsToday(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 24, 9, 38, 0, 0, time.UTC)
+	tomorrow := agEv("tomorrow", now.AddDate(0, 0, 1).Add(-70*time.Minute), now.AddDate(0, 0, 1).Add(-10*time.Minute))
+
+	t.Run("no events today at all", func(t *testing.T) {
+		row := BuildAgenda([]calendar.Event{tomorrow}, now, false)
+		want := []CardKind{CardDaySep, CardGap, CardDaySep, CardEvent}
+		if len(row.Cards) != len(want) {
+			t.Fatalf("got %d cards, want %d: %+v", len(row.Cards), len(want), row.Cards)
+		}
+		for i, k := range want {
+			if row.Cards[i].Kind != k {
+				t.Errorf("card %d kind = %v, want %v", i, row.Cards[i].Kind, k)
+			}
+		}
+		if row.Cards[0].SepText != "Today" || row.Cards[2].SepText != "Tomorrow" {
+			t.Errorf("headings = %q, %q; want Today, Tomorrow", row.Cards[0].SepText, row.Cards[2].SepText)
+		}
+		if !row.Cards[1].Overnight {
+			t.Error("the chip between the headings should be the overnight one")
+		}
+		if got := screenLeft(row, row.Cards[0]); got != CardPadPx {
+			t.Errorf("Today heading starts at %.1f, want %d -- it must be on screen", got, CardPadPx)
+		}
+	})
+
+	t.Run("today's only event is over", func(t *testing.T) {
+		past := agEv("exercise", now.Add(-68*time.Minute), now.Add(-8*time.Minute))
+		row := BuildAgenda([]calendar.Event{past, tomorrow}, now, false)
+		if row.Cards[0].Kind != CardDaySep || row.Cards[0].SepText != "Today" {
+			t.Fatalf("row does not open with a Today heading: %+v", row.Cards[0])
+		}
+		if row.Cards[1].Kind != CardEvent {
+			t.Errorf("card 1 = %+v, want the finished event", row.Cards[1])
+		}
+		// The scroll keeps the heading with the card it labels rather than
+		// stopping at the card and pushing the heading off the left edge.
+		if got := screenLeft(row, row.Cards[0]); got != CardPadPx {
+			t.Errorf("Today heading starts at %.1f, want %d", got, CardPadPx)
+		}
+	})
+
+	t.Run("an event still to come today needs no heading", func(t *testing.T) {
+		later := agEv("later", now.Add(2*time.Hour), now.Add(3*time.Hour))
+		row := BuildAgenda([]calendar.Event{later, tomorrow}, now, false)
+		if row.Cards[0].Kind == CardDaySep {
+			t.Errorf("row opens with a %q heading; the upcoming card already says it is today", row.Cards[0].SepText)
+		}
+	})
+
+	t.Run("a meeting running since yesterday needs no heading", func(t *testing.T) {
+		running := agEv("all-nighter", now.Add(-12*time.Hour), now.Add(time.Hour))
+		row := BuildAgenda([]calendar.Event{running, tomorrow}, now, false)
+		// The walk labels the card with its own date, as it does for any
+		// day crossing; "Today" is the heading that must not appear.
+		for _, c := range row.Cards {
+			if c.Kind == CardDaySep && c.SepText == "Today" {
+				t.Error("a Today heading was emitted in front of a running event")
+			}
+		}
+	})
 }

@@ -246,6 +246,20 @@ func BuildAgenda(events []calendar.Event, now time.Time, clock24 bool) CardRow {
 	// today, and it must be emitted before the overnight chip rather than
 	// after it.
 	lastDay := now.Format("2006-01-02")
+
+	// A day with nothing left in it gets its own heading. Without one the row
+	// opens on the overnight chip with the NOW bar hard against it, and at
+	// 09:38 that reads as evening: OVERNIGHT next to NOW says the day is
+	// nearly over. "Today" in front of the row says the section is today's
+	// and that it is empty, the same way "Tomorrow" labels the next one. Only
+	// when nothing today remains -- with events still to come, the cards
+	// themselves say what day it is.
+	if len(clusters) > 0 && !anyRemainingToday(clusters, now) {
+		row.Cards = append(row.Cards, Card{
+			Kind: CardDaySep, XPx: x, WidthPx: DaySepWidthPx, SepText: "Today",
+		})
+		x += DaySepWidthPx + CardGapPx
+	}
 	for _, cluster := range clusters {
 		// The cluster's first event is its earliest -- input is sorted by start
 		// -- so it is what the gap and day-separator arithmetic reads. clusterEnd
@@ -412,6 +426,12 @@ func BuildAgenda(events []calendar.Event, now time.Time, clock24 bool) CardRow {
 	for i := anchorIdx - 1; i >= 0; i-- {
 		leftmost = row.Cards[i]
 		if row.Cards[i].Kind == CardEvent || row.Cards[i].Kind == CardStack {
+			// A day separator belongs to the entries after it. Scrolling it
+			// off would show today's finished card with no heading, which is
+			// the one case the "Today" heading exists for.
+			if i > 0 && row.Cards[i-1].Kind == CardDaySep {
+				leftmost = row.Cards[i-1]
+			}
 			break
 		}
 	}
@@ -577,6 +597,22 @@ func buildStack(evs []calendar.Event, now time.Time, clock24 bool) Card {
 
 func isGhost(e calendar.Event) bool {
 	return e.Status == "tentative" || e.Status == "needs-action"
+}
+
+// anyRemainingToday reports whether some cluster is still to come, or still
+// running, today. A cluster that started yesterday and has not ended counts:
+// it is on the panel as the current entry, and a "Today" heading in front of
+// a running meeting would be noise.
+func anyRemainingToday(clusters [][]calendar.Event, now time.Time) bool {
+	for _, c := range clusters {
+		if !clusterHullEnd(c).After(now) {
+			continue
+		}
+		if sameDay(c[0].Start, now) || !c[0].Start.After(now) {
+			return true
+		}
+	}
+	return false
 }
 
 // dayHeading labels a day separator: "Today", "Tomorrow", or "Monday, Sep 1".
