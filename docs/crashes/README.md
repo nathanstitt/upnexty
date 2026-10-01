@@ -187,3 +187,92 @@ in four different places, on two boards. That removes the board-defect
 hypothesis for these crashes. What is left is memory being corrupted under a
 correct process: the kernel or a driver writing where it should not, or the
 runtime on this kernel and ARMv7 combination.
+
+## `dashboard-crash-2026-09-22T2218Z.log`
+
+Fifth unprompted death, on the control board (base-Lyra image), 4h04m after
+boot, between the 22:18:28Z and 22:18:58Z health samples. The board stayed up:
+WiFi, SSH and the sampler all fine, load 0.02, 409MB available. The panel
+froze on its last frame, which is what made it read as a lockup from across
+the room. The dashboard was restarted at 22:33Z and the control soak continues.
+
+```
+runtime: bad span s.state=43 s.sweepgen=734276596 sweepgen=19078
+fatal error: non in-use span in unswept list
+```
+
+Same fault, same place (`sweepone` on the background sweeper) as 2026-09-17,
+and the garbage has the same shape. The two corrupt `sweepgen` values are
+`0x2bd42bd4` (09-17) and `0x2bc42bf4` (09-22), and `state=43` is `0x2b` both
+times. Every other byte of the overwrite is `0x2b`: the span header was
+covered by a stream of 16-bit words with a constant high byte, not by random
+bit flips. That is the shape of data landing where it should not, and it is
+the first repeated signature across two crashes. Whatever produces 16-bit
+values with a `0x2b` high byte is worth identifying.
+
+`dmesg` also shows two `rockchip-otp ff4f0000.otp: ecc check error during read
+setup` lines at 422s and 440s uptime, hours before the crash. Unexplained;
+noted in case it recurs.
+
+## `dashboard-crash-2026-09-23T1135Z.log`
+
+Sixth unprompted death, and the first on the **stock Zero W image** (board 3,
+hypothesis 13 in `../lockups.md`), 13h01m after the 22:34Z power cycle. The
+board stayed up: WiFi, SSH, sampler all fine, 387MB available. Panel frozen
+with the clock at 06:35 CDT, which is 11:35Z, matching the last live sample.
+
+```
+runtime: pointer 0x5549138 to unused region of span span.base()=0x3dc4000 span.limit=0x3dc7f00 span.state=1
+fatal error: found bad pointer in Go heap (incorrect use of unsafe or cgo?)
+```
+
+Thrown from `findObject` inside `scanObjectsSmall` (the Green Tea GC mark
+path, `mgcmark_greenteagc.go`) during a GC assist, while goroutine 1 was in
+`textlayout`'s glyph outline reader under omnidoc's font code. A fifth distinct
+runtime invariant, in a fifth place. The pointer is nowhere near the span the
+runtime attributes it to, so the span lookup table itself is what is wrong.
+
+**This removes the firmware image from the crash question.** Six crashes, two
+boards, two images, one binary. What is common to all of them is the Go 1.26.3
+runtime on `linux/arm`, and every fault is in its GC or allocator metadata.
+
+## `dashboard-crash-2026-09-23T1638Z.log`
+
+Seventh unprompted death, control board (base-Lyra image, Go 1.26.3, binary
+`a195311`), between the 16:37:56Z and 16:38:26Z samples, 1h10m after its
+15:27Z restart. Board fine: SSH, WiFi, sampler all up, load 0.00, pstore empty.
+
+```
+runtime: pointer 0x39a290e to unallocated span span.base()=0x3978000 span.limit=0x39a6000 span.state=0
+fatal error: found bad pointer in Go heap (incorrect use of unsafe or cgo?)
+```
+
+Same fault as board 3's crash five hours earlier, and the same shape all the
+way down: Green Tea's `scanObjectsSmall` finds a bad pointer during a GC
+assist, while goroutine 1 is inside `textlayout`'s TrueType parser
+(`parseGPOSPairSet` here, `buildSegments` on board 3). Two boards, two
+images, one toolchain, the same two frames at the top.
+
+Board 3 has been on the Go 1.25.14 build since 14:50Z (hypothesis 16 in
+`../lockups.md`); this crash is the control side of that comparison.
+
+## `dashboard-crash-2026-09-23T2038Z.log`
+
+Eighth unprompted death, control board (base-Lyra, Go 1.26.3), between the
+20:37:46Z and 20:38:16Z samples, 1h47m after its 18:51Z restart. Board fine,
+pstore empty.
+
+```
+runtime: marked free object in span 0xa6f8c7c8, elemsize=64 freeindex=0
+fatal error: found pointer to free object
+```
+
+The background sweeper's zombie check: an object the allocator had freed was
+found marked by the collector. A sixth distinct runtime invariant. Goroutine 1
+was in `fmt.Sprintf` under the view template's icon helper at the time, which
+is as ordinary as code gets.
+
+**The tally on Go 1.26.3 now stands at eight crashes in eight days**, across
+two boards and two images, six different invariants, every one in the GC or
+allocator. Board 3 on Go 1.25.14 passed 23 hours crash-free at the time of
+this entry, against a longest 1.26.3 run of 13 hours.

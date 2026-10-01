@@ -12,7 +12,7 @@ Read `lockups.md` first for why a second board matters.
 | | |
 |---|---|
 | Board 2 (second replacement) | defective, unflashed, **return it** |
-| Board 3 | base Lyra `250717` + WiFi graft, `192.168.1.115`, dashboard rendering, soaking |
+| Board 3 | **stock Zero W `250717`** since 2026-09-22T20:57Z (hypothesis 13 in `lockups.md`), `192.168.1.115`, dashboard rendering, soaking |
 | Control board | untouched, back on wall power, `192.168.1.86`, soaking |
 | `scripts/setup-wifi.sh` | fixed: `strings` is an Xcode shim that refuses to run without the licence; now `grep -a` |
 

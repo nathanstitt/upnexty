@@ -1,0 +1,293 @@
+2026/09/22 18:14:48 touch: open touch device: open /dev/input/event0: no such file or directory (taps disabled)
+runtime: bad span s.state=43 s.sweepgen=734276596 sweepgen=19078
+fatal error: non in-use span in unswept list
+
+goroutine 18 gp=0x34843c8 m=5 mp=0x3441808 [running]:
+runtime.throw({0x87d470, 0x1f})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/panic.go:1229 +0x34 fp=0x3438f8c sp=0x3438f78 pc=0xaa0cc
+runtime.sweepone()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgcsweep.go:389 +0x284 fp=0x3438fc8 sp=0x3438f8c pc=0x57c50
+runtime.bgsweep(0x3498000)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgcsweep.go:300 +0xbc fp=0x3438fe4 sp=0x3438fc8 pc=0x577cc
+runtime.gcenable.gowrap1()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:214 +0x1c fp=0x3438fec sp=0x3438fe4 pc=0x43c74
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x3438fec sp=0x3438fec pc=0xb0c24
+created by runtime.gcenable in goroutine 1
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:214 +0x74
+
+goroutine 1 gp=0x3404148 m=nil [runnable]:
+runtime.asyncPreempt2()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/preempt.go:320 +0x10 fp=0x4093144 sp=0x409313c pc=0x6dcf4
+runtime.asyncPreempt()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/preempt_arm.s:44 +0x98 fp=0x4093200 sp=0x4093144 pc=0xb16a8
+golang.org/x/image/vector.(*Rasterizer).rasterizeDstAlphaSrcOpaqueOpOver(0x40932a0, 0x38cc0e0, {{0x17b, 0x27}, {0x780, 0x119}})
+	/Users/nas/code/vendor/go/pkg/mod/golang.org/x/image@v0.45.0/vector/vector.go:348 +0x1e8 fp=0x4093220 sp=0x4093204 pc=0x52ad24
+golang.org/x/image/vector.(*Rasterizer).Draw(0x40932a0, {0x968118, 0x38cc0e0}, {{0x17b, 0x27}, {0x780, 0x119}}, {0x9676c0, 0x1069390}, {0x0, ...})
+	/Users/nas/code/vendor/go/pkg/mod/golang.org/x/image@v0.45.0/vector/vector.go:279 +0x17c fp=0x4093250 sp=0x4093220 pc=0x52a874
+github.com/nathanstitt/omnidoc/pkg/internal/raster.(*Device).rasterizeMask(0x3999d70, 0x3a60020, 0x0)
+	/Users/nas/code/omnidoc/pkg/internal/raster/device.go:600 +0x258 fp=0x40932d8 sp=0x4093250 pc=0x536d80
+github.com/nathanstitt/omnidoc/pkg/internal/raster.(*Device).PushClip(0x3999d70, 0x3a60020, 0x0)
+	/Users/nas/code/omnidoc/pkg/internal/raster/device.go:244 +0x40 fp=0x4093304 sp=0x40932d8 pc=0x535698
+github.com/nathanstitt/omnidoc/pkg/internal/layout/paint.clipRect({0x969e34, 0x3999d70}, {0x3ff0000000000000, 0x0, 0x0, 0x3ff0000000000000, 0x0, 0x0}, 0x4077c00000000000, 0x4044000000000000, ...)
+	/Users/nas/code/omnidoc/pkg/internal/layout/paint/paint.go:864 +0x4fc fp=0x4093368 sp=0x4093304 pc=0x67d1f8
+github.com/nathanstitt/omnidoc/pkg/internal/layout/paint.paintGradientTile({0x969e34, 0x3999d70}, 0x3d18660, 0x4077c00000000000, 0x4044000000000000, 0x4098100000000000, 0x406e000000000000, {0x3ff0000000000000, 0x0, 0x0, ...})
+	/Users/nas/code/omnidoc/pkg/internal/layout/paint/gradient.go:49 +0x2f8 fp=0x4093470 sp=0x4093368 pc=0x678560
+github.com/nathanstitt/omnidoc/pkg/internal/layout/paint.paintBackgroundTile({0x969e34, 0x3999d70}, 0x432d340, 0x4077c00000000000, 0x4044000000000000, 0x4098100000000000, 0x406e000000000000, {0x3ff0000000000000, 0x0, 0x0, ...})
+	/Users/nas/code/omnidoc/pkg/internal/layout/paint/background.go:74 +0x528 fp=0x4093560 sp=0x4093470 pc=0x673e4c
+github.com/nathanstitt/omnidoc/pkg/internal/layout/paint.paintBackgroundImage({0x969e34, 0x3999d70}, 0x432d340, {0x3ff0000000000000, 0x0, 0x0, 0x3ff0000000000000, 0x0, 0x0})
+	/Users/nas/code/omnidoc/pkg/internal/layout/paint/background.go:58 +0x2d0 fp=0x40935fc sp=0x4093560 pc=0x673898
+github.com/nathanstitt/omnidoc/pkg/internal/layout/paint.paintItem({0x969e34, 0x3999d70}, 0x432d230, {0x3ff0000000000000, 0x0, 0x0, 0x3ff0000000000000, 0x0, 0x0})
+	/Users/nas/code/omnidoc/pkg/internal/layout/paint/paint.go:227 +0x1f4 fp=0x40936d8 sp=0x40935fc pc=0x6798fc
+github.com/nathanstitt/omnidoc/pkg/internal/layout/paint.paintItems({0x969e34, 0x3999d70}, {0x4314000, 0x19a, 0x23a}, {0x3ff0000000000000, 0x0, 0x0, 0x3ff0000000000000, 0x0, ...}, ...)
+	/Users/nas/code/omnidoc/pkg/internal/layout/paint/paint.go:152 +0x94 fp=0x40937cc sp=0x40936d8 pc=0x679470
+github.com/nathanstitt/omnidoc/pkg/internal/layout/paint.PaintPageWithOptions({0x969e34, 0x3999d70}, 0x36072c0, {0x3ff0000000000000, 0x0, 0x0, 0x3ff0000000000000, 0x0, 0x0}, {0x0})
+	/Users/nas/code/omnidoc/pkg/internal/layout/paint/paint.go:72 +0xac fp=0x4093820 sp=0x40937cc pc=0x67921c
+github.com/nathanstitt/omnidoc/pkg/omnidoc.(*reflowRenderer).renderPage(0x382a310, {0x967ee4, 0x3466140}, 0x0, {0x4052000000000000, {0x965430, 0x367371c}, 0x0, 0x0, {0x0, ...}, ...})
+	/Users/nas/code/omnidoc/pkg/omnidoc/reflow_backend.go:277 +0x2c8 fp=0x40938f0 sp=0x4093820 pc=0x67f930
+github.com/nathanstitt/omnidoc/pkg/omnidoc.(*Document).RasterizePage(0x382a320, {0x967ee4, 0x3466140}, 0x0, {0x4052000000000000, {0x965430, 0x367371c}, 0x0, 0x0, {0x0, ...}, ...})
+	/Users/nas/code/omnidoc/pkg/omnidoc/omnidoc.go:154 +0x178 fp=0x40939b0 sp=0x40938f0 pc=0x67f494
+github.com/nathanstitt/upnexty/internal/fb.RenderHTML({0x967ee4, 0x3466140}, {0x4718000, 0x23ca8, 0x24000}, 0x780, 0x1e0, {0x3d3fd5c, 0x1, 0x1})
+	/Users/nas/code/upnext/luckfox/internal/fb/fb.go:60 +0x2b0 fp=0x4093a68 sp=0x40939b0 pc=0x6809f0
+main.renderOnce(0x3760d20, 0x341d440, 0x3401e30, 0x37de160, 0x3761730, {0x838f9c, 0x8}, 0x1e0, 0x780, {0x0, ...})
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:490 +0x54c fp=0x4093d80 sp=0x4093a68 pc=0x6921ec
+main.main.func2.renderSafely.1()
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:284 +0x6c fp=0x4093db8 sp=0x4093d80 pc=0x69129c
+main.recoverRender(0x36d9e3c)
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:333 +0x5c fp=0x4093dd4 sp=0x4093db8 pc=0x69197c
+main.renderSafely(...)
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:283
+main.main.func2()
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:169 +0x114 fp=0x4093e70 sp=0x4093dd4 pc=0x6910ec
+main.main()
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:248 +0xec4 fp=0x4093fa4 sp=0x4093e70 pc=0x690a50
+runtime.main()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:290 +0x32c fp=0x4093fec sp=0x4093fa4 pc=0x6f434
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x4093fec sp=0x4093fec pc=0xb0c24
+
+goroutine 17 gp=0x3484288 m=nil [force gc (idle), 244 minutes]:
+runtime.gopark(0x95eb8c, 0x10d30a0, 0xb, 0xa, 0x1)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:462 +0x100 fp=0x34387d4 sp=0x34387c0 pc=0xaa208
+runtime.goparkunlock(...)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:468
+runtime.forcegchelper()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:375 +0xe4 fp=0x34387ec sp=0x34387d4 pc=0x6f86c
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x34387ec sp=0x34387ec pc=0xb0c24
+created by runtime.init.6 in goroutine 1
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:363 +0x1c
+
+goroutine 19 gp=0x3484508 m=nil [sleep]:
+runtime.gopark(0x95eb8c, 0x10d3d08, 0xe, 0xe, 0x2)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:462 +0x100 fp=0x3439768 sp=0x3439754 pc=0xaa208
+runtime.goparkunlock(...)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:468
+runtime.(*scavengerState).sleep(0x10d3d08, 0x412b381a00000000)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgcscavenge.go:504 +0x168 fp=0x34397c8 sp=0x3439768 pc=0x54ed8
+runtime.bgscavenge(0x3498000)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgcscavenge.go:662 +0x90 fp=0x34397e4 sp=0x34397c8 pc=0x553f0
+runtime.gcenable.gowrap2()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:215 +0x1c fp=0x34397ec sp=0x34397e4 pc=0x43c48
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x34397ec sp=0x34397ec pc=0xb0c24
+created by runtime.gcenable in goroutine 1
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:215 +0xbc
+
+goroutine 33 gp=0x3502008 m=nil [GOMAXPROCS updater (idle), 244 minutes]:
+runtime.gopark(0x95eb8c, 0x10d3330, 0xc, 0xa, 0x1)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:462 +0x100 fp=0x35087a4 sp=0x3508790 pc=0xaa208
+runtime.goparkunlock(...)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:468
+runtime.updateMaxProcsGoroutine()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:7095 +0x110 fp=0x35087ec sp=0x35087a4 pc=0x7fa48
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x35087ec sp=0x35087ec pc=0xb0c24
+created by runtime.defaultGOMAXPROCSUpdateEnable in goroutine 1
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:7083 +0x40
+
+goroutine 34 gp=0x3502148 m=nil [finalizer wait, 244 minutes]:
+runtime.gopark(0x95ea0c, 0x10ded08, 0xa, 0xa, 0x1)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:462 +0x100 fp=0x3508f84 sp=0x3508f70 pc=0xaa208
+runtime.runFinalizers()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mfinal.go:210 +0x10c fp=0x3508fec sp=0x3508f84 pc=0x42904
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x3508fec sp=0x3508fec pc=0xb0c24
+created by runtime.createfing in goroutine 1
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mfinal.go:172 +0x5c
+
+goroutine 20 gp=0x3484648 m=nil [cleanup wait, 2 minutes]:
+runtime.gopark(0x95eb8c, 0x10d3f58, 0x2e, 0xa, 0x1)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:462 +0x100 fp=0x3439fa0 sp=0x3439f8c pc=0xaa208
+runtime.goparkunlock(...)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:468
+runtime.(*cleanupQueue).dequeue(0x10d3ef8)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mcleanup.go:522 +0x12c fp=0x3439fc0 sp=0x3439fa0 pc=0x3e6e4
+runtime.runCleanups()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mcleanup.go:718 +0x7c fp=0x3439fec sp=0x3439fc0 pc=0x3f268
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x3439fec sp=0x3439fec pc=0xb0c24
+created by runtime.(*cleanupQueue).createGs in goroutine 1
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mcleanup.go:672 +0x124
+
+goroutine 2 gp=0x3405188 m=nil [IO wait, 244 minutes]:
+runtime.gopark(0x95eb80, 0xa6afe610, 0x2, 0x2, 0x5)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:462 +0x100 fp=0x3532d68 sp=0x3532d54 pc=0xaa208
+runtime.netpollblock(0xa6afe600, 0x72, 0x0)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/netpoll.go:575 +0xfc fp=0x3532d80 sp=0x3532d68 pc=0x67798
+internal/poll.runtime_pollWait(0xa6afe600, 0x72)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/netpoll.go:351 +0x54 fp=0x3532d94 sp=0x3532d80 pc=0xa92ac
+internal/poll.(*pollDesc).wait(0x38a9198, 0x72, 0x0)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/internal/poll/fd_poll_runtime.go:84 +0x30 fp=0x3532da8 sp=0x3532d94 pc=0x1282f0
+internal/poll.(*pollDesc).waitRead(...)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x38a9180)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/internal/poll/fd_unix.go:613 +0x284 fp=0x3532df0 sp=0x3532da8 pc=0x12c6e8
+net.(*netFD).accept(0x38a9180)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/fd_unix.go:150 +0x20 fp=0x3532e58 sp=0x3532df0 pc=0x1ea38c
+net.(*TCPListener).accept(0x37e3d10)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/tcpsock_posix.go:159 +0x20 fp=0x3532eac sp=0x3532e58 pc=0x1fefdc
+net.(*TCPListener).Accept(0x37e3d10)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/tcpsock.go:387 +0x30 fp=0x3532ec8 sp=0x3532eac pc=0x1fe080
+net/http.(*onceCloseListener).Accept(0x38cc300)
+	<autogenerated>:1 +0x28 fp=0x3532ee0 sp=0x3532ec8 pc=0x359c4c
+net/http.(*Server).Serve(0x35aa218, {0x9677b0, 0x37e3d10})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/http/server.go:3434 +0x2d8 fp=0x3532f78 sp=0x3532ee0 pc=0x33505c
+net/http.(*Server).ListenAndServe(0x35aa218)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/http/server.go:3360 +0xa0 fp=0x3532f9c sp=0x3532f78 pc=0x334c3c
+net/http.ListenAndServe(...)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/http/server.go:3675
+main.main.func1()
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:159 +0xa8 fp=0x3532fec sp=0x3532f9c pc=0x691394
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x3532fec sp=0x3532fec pc=0xb0c24
+created by main.main in goroutine 1
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:154 +0x994
+
+goroutine 23 gp=0x3484a08 m=nil [GC worker (idle)]:
+runtime.gopark(0x95ea18, 0x36d0000, 0x1c, 0xa, 0x0)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:462 +0x100 fp=0x343df94 sp=0x343df80 pc=0xaa208
+runtime.gcBgMarkWorker(0x34ae940)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:1791 +0xf4 fp=0x343dfe4 sp=0x343df94 pc=0x473ac
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:1695 +0x1c fp=0x343dfec sp=0x343dfe4 pc=0x472a8
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x343dfec sp=0x343dfec pc=0xb0c24
+created by runtime.gcBgMarkStartWorkers in goroutine 22
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:1695 +0x140
+
+goroutine 5 gp=0x3405548 m=nil [GC worker (idle)]:
+runtime.gopark(0x95ea18, 0x37e0200, 0x1c, 0xa, 0x0)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:462 +0x100 fp=0x343e794 sp=0x343e780 pc=0xaa208
+runtime.gcBgMarkWorker(0x34ae940)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:1791 +0xf4 fp=0x343e7e4 sp=0x343e794 pc=0x473ac
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:1695 +0x1c fp=0x343e7ec sp=0x343e7e4 pc=0x472a8
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x343e7ec sp=0x343e7ec pc=0xb0c24
+created by runtime.gcBgMarkStartWorkers in goroutine 22
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:1695 +0x140
+
+goroutine 6 gp=0x3405688 m=nil [GC worker (idle)]:
+runtime.gopark(0x95ea18, 0x37e0400, 0x1c, 0xa, 0x0)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:462 +0x100 fp=0x343ef94 sp=0x343ef80 pc=0xaa208
+runtime.gcBgMarkWorker(0x34ae940)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:1791 +0xf4 fp=0x343efe4 sp=0x343ef94 pc=0x473ac
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:1695 +0x1c fp=0x343efec sp=0x343efe4 pc=0x472a8
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x343efec sp=0x343efec pc=0xb0c24
+created by runtime.gcBgMarkStartWorkers in goroutine 22
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/mgc.go:1695 +0x140
+
+goroutine 31 gp=0x3485548 m=nil [select]:
+runtime.gopark(0x95ebbc, 0x0, 0x12, 0x3, 0x1)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:462 +0x100 fp=0x3d90e90 sp=0x3d90e7c pc=0xaa208
+runtime.selectgo(0x3d90f78, 0x3d3df70, 0x0, 0x0, 0x2, 0x1)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/select.go:351 +0xcac fp=0x3d90f48 sp=0x3d90e90 pc=0x8588c
+main.(*Store).WaitCalendarWake(0x341d440, 0x6fc23ac00)
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/loop.go:191 +0xb8 fp=0x3d90f94 sp=0x3d90f48 pc=0x68f1c4
+main.main.func3.1(0x341d440, 0x6fc23ac00)
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:207 +0x2c fp=0x3d90fa8 sp=0x3d90f94 pc=0x69473c
+main.fetchLoopWake(0x341d440, 0x95e6e4, 0x95e6e8, 0x95e6f0)
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:568 +0x30 fp=0x3d90fd4 sp=0x3d90fa8 pc=0x6924d8
+main.main.func3()
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:206 +0x70 fp=0x3d90fec sp=0x3d90fd4 pc=0x690fb4
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x3d90fec sp=0x3d90fec pc=0xb0c24
+created by main.main in goroutine 1
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:196 +0xae8
+
+goroutine 32 gp=0x34857c8 m=nil [sleep, 3 minutes]:
+runtime.gopark(0x95eba8, 0x0, 0xe, 0xe, 0x1)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:462 +0x100 fp=0x3507f5c sp=0x3507f48 pc=0xaa208
+time.Sleep(0xd18c2e2800)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/time.go:363 +0x1f4 fp=0x3507f90 sp=0x3507f5c pc=0xae598
+main.main.func4.fetchLoop.1(0x341d440, 0xd18c2e2800)
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:548 +0x24 fp=0x3507f9c sp=0x3507f90 pc=0x694770
+main.fetchLoopWake(0x341d440, 0x95e6fc, 0x95e6ec, 0x95e6f4)
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:568 +0x30 fp=0x3507fc8 sp=0x3507f9c pc=0x6924d8
+main.fetchLoop(...)
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:548
+main.main.func4()
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:210 +0x38 fp=0x3507fdc sp=0x3507fc8 pc=0x690f24
+main.delayThen(...)
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:532
+main.main.gowrap1()
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:209 +0x38 fp=0x3507fec sp=0x3507fdc pc=0x690edc
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x3507fec sp=0x3507fec pc=0xb0c24
+created by main.main in goroutine 1
+	/Users/nas/code/upnext/luckfox/cmd/dashboard/main.go:209 +0xbc0
+
+goroutine 1584 gp=0x3619b88 m=nil [IO wait]:
+runtime.gopark(0x95eb80, 0xa6afe210, 0x2, 0x2, 0x5)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/proc.go:462 +0x100 fp=0x3d95af0 sp=0x3d95adc pc=0xaa208
+runtime.netpollblock(0xa6afe200, 0x72, 0x0)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/netpoll.go:575 +0xfc fp=0x3d95b08 sp=0x3d95af0 pc=0x67798
+internal/poll.runtime_pollWait(0xa6afe200, 0x72)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/netpoll.go:351 +0x54 fp=0x3d95b1c sp=0x3d95b08 pc=0xa92ac
+internal/poll.(*pollDesc).wait(0x38a81a8, 0x72, 0x0)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/internal/poll/fd_poll_runtime.go:84 +0x30 fp=0x3d95b30 sp=0x3d95b1c pc=0x1282f0
+internal/poll.(*pollDesc).waitRead(...)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0x38a8190, {0x3b34000, 0x1800, 0x1800})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/internal/poll/fd_unix.go:165 +0x294 fp=0x3d95b78 sp=0x3d95b30 pc=0x1293c0
+net.(*netFD).Read(0x38a8190, {0x3b34000, 0x1800, 0x1800})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/fd_posix.go:68 +0x38 fp=0x3d95ba4 sp=0x3d95b78 pc=0x1e8744
+net.(*conn).Read(0x407a040, {0x3b34000, 0x1800, 0x1800})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/net.go:196 +0x48 fp=0x3d95bd0 sp=0x3d95ba4 pc=0x1f56b0
+crypto/tls.(*atLeastReader).Read(0x362e0c0, {0x3b34000, 0x1800, 0x1800})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/crypto/tls/conn.go:815 +0x78 fp=0x3d95bfc sp=0x3d95bd0 pc=0x25bf10
+bytes.(*Buffer).ReadFrom(0x373a60c, {0x965660, 0x362e0c0})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/bytes/buffer.go:229 +0xa0 fp=0x3d95c38 sp=0x3d95bfc pc=0x158550
+crypto/tls.(*Conn).readFromUntil(0x373a488, {0x9656f0, 0x407a040}, 0x5)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/crypto/tls/conn.go:837 +0xd4 fp=0x3d95c60 sp=0x3d95c38 pc=0x25c16c
+crypto/tls.(*Conn).readRecordOrCCS(0x373a488, 0x0)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/crypto/tls/conn.go:626 +0x134 fp=0x3d95db8 sp=0x3d95c60 pc=0x2598b0
+crypto/tls.(*Conn).readRecord(...)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/crypto/tls/conn.go:588
+crypto/tls.(*Conn).Read(0x373a488, {0x3e28000, 0x1000, 0x1000})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/crypto/tls/conn.go:1393 +0x148 fp=0x3d95de8 sp=0x3d95db8 pc=0x25f548
+bufio.(*Reader).Read(0x3666f00, {0x34a82a8, 0x9, 0x9})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/bufio/bufio.go:245 +0x214 fp=0x3d95e0c sp=0x3d95de8 pc=0x2aa590
+io.ReadAtLeast({0x965040, 0x3666f00}, {0x34a82a8, 0x9, 0x9}, 0x9)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/io/io.go:335 +0x90 fp=0x3d95e38 sp=0x3d95e0c pc=0xe9c5c
+io.ReadFull(...)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/io/io.go:354
+net/http.http2readFrameHeader({0x34a82a8, 0x9, 0x9}, {0x965040, 0x3666f00})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/http/h2_bundle.go:1805 +0x54 fp=0x3d95e60 sp=0x3d95e38 pc=0x2ecb5c
+net/http.(*http2Framer).ReadFrameHeader(0x34a8280)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/http/h2_bundle.go:2071 +0x74 fp=0x3d95eb8 sp=0x3d95e60 pc=0x2ed290
+net/http.(*http2Framer).ReadFrame(0x34a8280)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/http/h2_bundle.go:2130 +0x1c fp=0x3d95ef8 sp=0x3d95eb8 pc=0x2ed994
+net/http.(*http2clientConnReadLoop).run(0x3d95fdc)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/http/h2_bundle.go:9550 +0xf0 fp=0x3d95fa4 sp=0x3d95ef8 pc=0x30ff60
+net/http.(*http2ClientConn).readLoop(0x3721c28)
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/http/h2_bundle.go:9419 +0x50 fp=0x3d95fe4 sp=0x3d95fa4 pc=0x30f2a4
+net/http.(*http2Transport).newClientConn.gowrap1()
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/http/h2_bundle.go:8171 +0x1c fp=0x3d95fec sp=0x3d95fe4 pc=0x309868
+runtime.goexit({})
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/runtime/asm_arm.s:873 +0x4 fp=0x3d95fec sp=0x3d95fec pc=0xb0c24
+created by net/http.(*http2Transport).newClientConn in goroutine 1583
+	/opt/homebrew/Cellar/go/1.26.3/libexec/src/net/http/h2_bundle.go:8171 +0xe80

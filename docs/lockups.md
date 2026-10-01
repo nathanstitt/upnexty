@@ -455,6 +455,159 @@ wedging hard enough to take the core with it.
 This also lowers the expected value of a UART console. A serial line can only
 show what the kernel prints, and the kernel prints nothing.
 
+### 13. The stack itself: base-Lyra image on Zero W hardware
+
+*Claim:* every board so far ran the base-Lyra image with the WiFi driver
+grafted on. That image was built for a different board. Its loader, U-Boot and
+kernel are different builds from the Zero W image, and its device tree omits
+the Zero W's `vcc3v3_lcd` and Bluetooth power lines. The Zero W stack has never
+been soaked.
+
+What differs between `Luckfox_Lyra_Flash_250717` and
+`Luckfox_Lyra_Zero_W_Flash_250717`, measured 2026-09-22:
+
+| | base Lyra | Zero W |
+|---|---|---|
+| kernel build | `#3 Mon Nov 24 2025` | `#16 Tue Jul 22 2025` |
+| `MiniLoaderAll.bin` | 232 bytes differ (same DDR `v1.04`, build date field onward) | |
+| device tree | | adds `vcc3v3_lcd` (always on, GPIO1 pin 20), `BT,power_gpio`, `mdio`; swaps panel porches |
+| `fwver` on cmdline | identical: `ddr-v1.04-0ac6b06a19,tee-v1.25,uboot-4d88b0a` | |
+
+**Test started 2026-09-22T20:57Z on board 3**, power-cycled at 22:34Z to move it from USB to wall power, so count survival from 22:34Z. Stock Zero W image, then the
+same `dashboard` binary (md5 `dae59ffb`), the same `config.json`, the same
+init scripts including `S97lockupprobe` (touch unbound, `panic=0`), and
+`set-dsi-panel.sh` for the panel. `setup-wifi.sh` was not needed: the driver
+lives at `/usr/lib/modules/aic8800_fdrv.ko` and loads from `S36wifibt-init.sh`.
+The CA bundle still had to be pushed by hand. The control board stays on the
+base-Lyra image at `192.168.1.86`; board 3 is at `192.168.1.115`.
+
+Both outcomes inform. If board 3 outlives the control by a wide margin, the
+cause is in the base-Lyra build. If it dies on the same schedule, the image is
+cleared and hypotheses 14 and 15 are next.
+
+*Partial result, 2026-09-23.* The **dashboard crashes** reproduce on the stock
+image: board 3 died at 11:35Z with `found bad pointer in Go heap`, 13h after
+its power cycle (see `crashes/README.md`). The image is cleared for the
+crashes. The **lockup** question is still open: board 3 had not locked up at
+16h; the control board locked up at **2026-09-22T23:02:45Z**, 4h48m after boot,
+with `/sys/fs/pstore` empty again after the power cycle. Note the control
+runs binary `09db2ace` (built 09-15) while board 3 ran `dae59ffb` (built
+09-22); both are Go 1.26.3 builds of the same code, but "same binary" in the
+handoff notes was wrong.
+
+### Found while setting this up
+
+- **`nmi_watchdog=0`.** The hardlockup detector is off, so `hardlockup_panic=1`
+  does nothing. Hypotheses 10 and 12 say both detectors were armed; only the
+  softlockup detector was, and it cannot see a core that stops executing.
+- **cpufreq never initialises.** The `vdd-cpu` node names itself as its own
+  `vin-supply`, so the regulator never registers and the kernel logs `Failed to
+  get reg` at boot. There is no cpuidle driver, no devfreq and no DMC. The CPU
+  runs at a fixed 1.2GHz on the PVTPLL exactly as U-Boot left it, with no OPP
+  voltage or thermal management from the kernel. Same in both images. Report
+  upstream; it also means DVFS-transition theories are excluded for free.
+- **No hardware watchdog.** No `wdt` node in either device tree, no
+  `/dev/watchdog`.
+
+### 14. SMP (untested)
+
+`maxcpus=1` in `/chosen/bootargs` of the boot FIT, by the same `fdtput` path
+`set-dsi-panel.sh` uses. Removes cross-core coherency, IRQ distribution and
+secondary-core PSCI in one change.
+
+### 15. Core clock margin (untested)
+
+`assigned-clock-rates` on `pvtpll-core@ff840000` to 600000000, same path. The
+rail is fixed and unmanaged; the 1.2GHz OPP wants 850 to 875mV and nothing on
+this board checks that it gets it. Survival at 600MHz and death at 1200MHz is a
+margin problem.
+
+### 16. The Go toolchain
+
+*Claim:* six dashboard crashes on two boards and two images, one binary, and
+every fault is the Go 1.26.3 runtime finding its own GC or allocator metadata
+wrong. Go 1.26 turned on the Green Tea garbage collector by default, and the
+2026-09-23 crash threw from its mark path (`mgcmark_greenteagc.go`). 32-bit ARM
+is a lightly tested target for it. This is the cheapest remaining variable.
+
+*Test started 2026-09-23T14:50Z on board 3* (stock Zero W image): the same
+source built with **Go 1.25.14** via `GOTOOLCHAIN=go1.25.14` and a `go.mod`
+copy with `go 1.25.0`, md5 `135cb5dd`, at `/root/dashboard`. The 1.26.3 binary
+is kept at `/root/dashboard.go1.26` for switching back. A second variant,
+`build/dashboard-nogreentea` (1.26.3 with `GOEXPERIMENT=nogreenteagc`, md5
+`a01a6738`), is built and not yet deployed; it isolates the collector from the
+rest of the toolchain if 1.25 survives.
+
+Crash-free survival to compare against: the six crashes came at 1h45m, 4h04m,
+6.8h, 10.5h, 13h and ~5h. Anything under a few days says nothing.
+
+*Control side, 2026-09-23T16:38Z:* the control board (still 1.26.3) crashed
+again 1h10m after a restart, with the same `found bad pointer in Go heap` from
+Green Tea's `scanObjectsSmall` during a GC assist inside the TrueType parser
+that killed board 3 at 11:35Z. Seventh crash on 1.26.3. Board 3 on 1.25.14
+was at 4h crash-free at that point, which is inside the old range and says
+nothing yet.
+
+*2026-09-24T14:27Z:* board 3 on 1.25.14 is at **23h crash-free**. The control
+on 1.26.3 crashed twice more in the same window (16:38Z, 20:38Z: `found bad
+pointer in Go heap`, then `found pointer to free object`), so the 1.26.3 side
+is still failing on schedule while the 1.25.14 side has already exceeded the
+longest 1.26.3 run (13h). Not yet conclusive; two more days without a crash
+would be. If it holds, deploy `build/dashboard-nogreentea` (1.26.3 minus the
+Green Tea collector) on the control to pin the fault to the collector rather
+than the toolchain.
+
+*2026-09-25T14:50Z:* board 3 reached **47h crash-free** on 1.25.14. The
+control locked up again at 2026-09-24T18:34Z (27.6h after boot, pstore empty)
+and was power-cycled on the 25th. It now runs `build/dashboard-nogreentea`
+(1.26.3, `GOEXPERIMENT=nogreenteagc`, md5 `a01a6738`, same source revision
+as board 3's build) from 14:50Z, with the old `a195311` binary kept at
+`/root/dashboard.go1.26-a195311`. Clean on both boards through the weekend
+pins the crashes on the Green Tea collector; a crash on the control alone
+says it is something else in 1.26. At 16:17Z the control's binary was
+replaced by `build/dashboard-chime` (md5 `ad306376`): same 1.26.3, same
+`nogreenteagc`, source now including the meeting chime and the "Today"
+heading. The collector under test is unchanged; the swap restarted the
+process, so count its run from 16:17Z.
+
+*2026-09-28T13:17Z, both boards down over the weekend.* Board 1 (base-Lyra,
+1.26.3 without Green Tea) and board 3 (stock Zero W, 1.25.14) were both
+unreachable on Monday morning; the Mac had even been handed board 1's DHCP
+address. **The work LED separates the two failures.** It is driven by the
+kernel's `heartbeat` trigger (`rk3506-luckfox-lyra.dtsi`, `work-led`), so:
+
+| board | LED | reading |
+|---|---|---|
+| 1 | frozen on | kernel timers stopped, CPU halted: the hard lockup |
+| 3 | still flashing | kernel alive, timers running; WiFi, network or userspace died |
+
+**Correction, 14:45Z: board 3 was never down.** Its health log is continuous
+through the weekend with `wlan0=up` in every sample, and it answered as soon
+as the Mac's own network was sorted out: the Mac's Wi-Fi interface had been
+handed 192.168.1.86 and, with a second interface on the same subnet, was
+routing the boards' addresses into the wrong link. Turning the Mac's Wi-Fi
+off fixed it. The lesson from CLAUDE.md applies again: a board that cannot be
+reached is not a board that is down. Check `ifconfig` and `arp` before
+blaming hardware.
+
+So the LED reading stands, but the table's second row means "fine". Board 1's
+frozen LED is still a real lockup. Board 3 on **Go 1.25.14 has now run 5 days
+(2026-09-23T15:27Z onward) without a crash**, against a longest 1.26.3 run of
+13 hours across eight crashes: the toolchain comparison is settled for
+practical purposes. Board 1, read after its power cycle: the no-Green-Tea 1.26.3 dashboard ran
+**32.7h without a crash** (2026-09-25T16:17Z until the board locked up at
+2026-09-27T00:58:38Z, pstore empty), against a longest Green-Tea run of 13h.
+Both cells without Green Tea are clean; the eight crashes sit in the one cell
+with it. **The crashes are the Green Tea collector on linux/arm.** The lockups
+are unaffected by any of this: board 1 locked up on 1.26.3-no-Green-Tea just
+as it did on everything else.
+
+*Applied to board 3 on 2026-09-28T14:58Z:* the hardware watchdog and the
+dashboard supervisor (CLAUDE.md, *Watchdog*), plus the Go 1.25.14 build with
+the chime and the "Today" heading (md5 `a7414b48`). The watchdog reset was
+proved by killing the feeder: reboot 60s later, unclean-shutdown marker at
+15:00:44Z. From here a lockup on board 3 ends in a reset, and whether it
+resets at all is the next piece of evidence. Board 1 has none of this yet.
 ## What the instrumentation is worth now
 
 Seven hypotheses refuted by testing, two more here, and the sampler is

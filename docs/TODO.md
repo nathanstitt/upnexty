@@ -150,6 +150,36 @@ from the plan, so not an implementation defect — a product call.
 
 ---
 
+## Google Calendar: found 2026-09-23
+
+- [ ] **A revoked refresh token empties the panel silently.** Both boards showed
+      `NO MORE EVENTS TODAY` with no stale marker while every fetch failed with
+      `google account needs to be reconnected: Token has been expired or
+      revoked`. The token was obtained 2026-09-15T17:13Z and stopped refreshing
+      on 09-22, seven days later, which is the refresh-token lifetime for an
+      OAuth app still in *Testing*. Publish the app in Google Cloud so tokens
+      stop expiring weekly, and make the panel say "reconnect Google" when the
+      linker reports re-auth, instead of an empty agenda.
+- [x] **Reconnecting an account does not bring its calendar back.** Fixed
+      2026-09-28: a successful pairing adopts the account's primary calendar,
+      and the settings page lists every calendar the account can read with a
+      checkbox per calendar (`POST /google/calendars`). Left as written below
+      for the history.
+- [ ] ~~**Reconnecting an account does not bring its calendar back.**~~ "Disconnect
+      and remove 1 calendar" drops the `kind: google` source from `config.json`,
+      and nothing after a successful pairing re-adds one. On 2026-09-23 the
+      pairing succeeded and the panel stayed empty because `calendars` was `[]`;
+      the entry had to be restored by hand. Offer the account's calendars for
+      selection after pairing, or at least keep the source on disconnect.
+- [ ] **`--once` cannot exercise a Google source.** `main.go` takes the `--once`
+      branch before `loadGoogleLinker`, so a one-shot render always reports
+      `no google token source configured`. It is not a diagnostic for the
+      Google path until the linker moves above that branch.
+- [ ] **The weather axis is labelled in UTC.** `model.Build` passes `now`
+      rather than `local` to `ComputeWindow`, so `HourTicks` formats UTC hours:
+      the panel showed `3 PM` under the NOW bar at 09:59 CDT. One-word fix,
+      held back so the soak binaries stay unchanged.
+
 ## Known gaps
 
 ### The NOW headline names one of several simultaneous events

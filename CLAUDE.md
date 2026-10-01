@@ -46,7 +46,7 @@ the panel and touch rotation work and are kept for that; the commands themselves
 would have to be recovered from git history or rewritten to run again.
 
 The renderer is the **omnidoc** repo; override its location with `OMNIDOC_DIR`
-(`go.mod` has a `replace` pointing at `../../omnidoc`).
+(`go.mod` has a `replace` pointing at `../omnidoc`).
 
 ## Setup
 
@@ -439,6 +439,118 @@ HWM stays flat across later frames — so this is a per-render spike, not a leak
 It is ~2.5× the idle figure above, which is the number to plan against on a
 477MB board. Read `VmHWM`, not `VmRSS`: RSS between ticks says nothing about
 what a render costs.
+
+## Watchdog
+
+Two layers, built 2026-09-24. Applied to board 3 (stock Zero W image) on
+2026-09-28 once the toolchain soak had its answer; board 1 still runs
+without either.
+
+**Hardware.** The RK3506 has two Synopsys watchdogs and the kernel has
+`dw_wdt` compiled in, but Luckfox's device tree carries no node for either,
+so there is no `/dev/watchdog`. `set-watchdog.sh` (deployed to `/root`) adds
+WDT0 at `0xff260000` to the boot partition's device tree by the same in-place
+`fdtput` path as `set-dsi-panel.sh`, with the resource entry's SHA-1 and size
+recomputed. The dtb sits directly in front of `logo.bmp` with only a few
+hundred bytes of slack; the node costs 168 and the script refuses to overrun
+the next file. `remove` takes it back out. Dry-run against a copy of
+`boot.img` on the host with `WDT_MEDIA=copy.img`.
+
+`S20watchdog` feeds it with BusyBox's `watchdog` applet: a ping every 5s, a
+reset after 60s without one (hardware maximum ~89s). Stopping the service
+disarms the timer via the magic close. On a board without the node it prints
+a hint and exits 0, so it is safe to install first.
+
+Verified on board 3, 2026-09-28: `kill -9` on the feeder (no magic close)
+brought the board back with a fresh uptime 60s later and an `UNCLEAN
+SHUTDOWN` marker in the health log. The reset path works end to end.
+
+What this changes: a lockup now ends in a reset after a minute instead of a
+power cycle, and the health log's `UNCLEAN SHUTDOWN` marker still records it.
+A kernel panic is reset too, whatever `panic=` says, once the feeder stops. If
+a lockup ever does **not** reset, that is evidence in itself: the watchdog is
+its own counter, so a clock-tree or power-domain collapse is the remaining
+explanation.
+
+To apply, per board:
+
+```bash
+scripts/deploy.sh                      # installs set-watchdog.sh + S20watchdog
+adb shell /root/set-watchdog.sh        # or over SSH
+adb shell reboot
+adb shell /etc/init.d/S20watchdog status
+```
+
+**Process.** `S99zdashboard` runs the dashboard under a supervisor loop. An
+exit is restarted after 5s; while runs keep dying inside their first minute
+the delay doubles to a 300s ceiling, so a binary that faults at startup does
+not spin. Each exit's log is saved to `/root/crashes/dashboard-<time>.log`
+(the newest 20 are kept) and one line goes to `/root/supervisor.log`. `stop`
+sets a flag first so the supervisor does not treat it as a crash. Verified on
+board 3 with a fake daemon in `/tmp` before the real service was touched.
+
+## USB audio
+
+The images ship no USB audio driver: a speaker on the host port enumerates
+and sits with no driver bound, and `/proc/asound/cards` says "no soundcards".
+ALSA core and PCM are built into the kernel; the missing pieces are four
+modules, built 2026-09-25 from Rockchip's BSP 6.1.99 (branch `rk-6.1-rkr5` of
+`armbian/linux-rockchip`, the kernel Luckfox's `#3 Nov 24 2025` build comes
+from) with the RK3506 defconfig:
+
+```bash
+scripts/build-usb-audio.sh                    # Docker; ~1 min after the first run
+scripts/setup-usb-audio.sh root@192.168.1.86  # install, load, play /root/bloop.wav
+```
+
+`build/modules/` gets `snd-hwdep`, `snd-rawmidi`, `snd-usbmidi-lib` and
+`snd-usb-audio`. The kernel has no `CONFIG_MODVERSIONS`, so vermagic
+(`6.1.99 SMP preempt mod_unload ARMv7 thumb2 p2v8`) is the whole compatibility
+check; the build script verifies it before copying anything out. Two things
+the defconfig gets wrong for this kernel, both handled in the script: it turns
+on the stack protector (the board's kernel exports no `__stack_chk_guard`, so
+the module fails on that one symbol) and `LOCALVERSION_AUTO`.
+
+`modpost` warns about every symbol imported from the kernel because there is
+no `vmlinux` in a modules-only build; those resolve at load. The installer
+checks the list against `/proc/kallsyms` but only as a note: without
+`CONFIG_KALLSYMS_ALL` the kernel hides data symbols, so `jiffies` and
+`param_ops_int` look absent while being exported. `modprobe` is the check that
+counts.
+
+The kernel worktree lives at `~/code/vendor/linux-6.1.99-rkr5` (override with
+`LUCKFOX_KERNEL_SRC`); the Docker image is `luckfox-kbuild:6.1` with the
+object tree in a named volume, so a rebuild is incremental.
+
+Verified on board 1 with a Jieli USB speaker (`4c4a:4155`): card 0
+`USB-Audio`, `aplay -D default /root/bloop.wav` plays. `S03modules_init.sh`
+loads the modules at boot once they are in `modules.dep`, as with WiFi.
+
+The speaker defaults to 99% (-1.3dB), which is loud. `board/etc/init.d/
+S30usbaudio` sets `PCM` to `-22dB` (chosen by ear)
+once the card appears, waiting in the background for USB enumeration so the
+boot is not held. `VOLUME` in `/etc/default/usbaudio` overrides it. Installed
+on board 1 by hand on 2026-09-25 and verified by resetting the level to 99%
+and running `start`; the reboot path is untested until the soak ends.
+
+**Meeting chime.** `internal/chime` synthesizes a short C5-E5-G5 bell
+arpeggio (1.4s, 22.05kHz mono, ~60KB, written to `/tmp` on first use) and
+plays it through `aplay` when a timed, unmuted event's start minute arrives.
+The check runs after every render; `chime.Notifier` rings each start once,
+tolerates a late tick (90s grace), and ignores events already under way at
+boot. Without a sound card `Play` returns `ErrNoCard` before doing anything,
+so a speakerless board is silent and logs nothing. `"sound": {"chime": false}`
+in `config.json` turns it off. Hear it on a board without touching the
+running service:
+
+```bash
+/root/dashboard.chime --chime      # any build with the feature; exits after playing
+```
+
+Built 2026-09-25 as `build/dashboard-chime` (1.26.3, `nogreenteagc`, so it
+can replace board 1's soak binary without changing the collector under test)
+and played on board 1, where it has been the running service since
+2026-09-25T16:17Z. Board 3 stays on its chime-less 1.25 soak binary.
 
 ## Health logging
 
