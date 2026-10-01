@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -26,6 +27,7 @@ import (
 	"github.com/nathanstitt/omnidoc/pkg/omnidoc"
 
 	"github.com/nathanstitt/upnexty/internal/calendar"
+	"github.com/nathanstitt/upnexty/internal/chime"
 	"github.com/nathanstitt/upnexty/internal/config"
 	"github.com/nathanstitt/upnexty/internal/fb"
 	"github.com/nathanstitt/upnexty/internal/model"
@@ -65,7 +67,18 @@ func main() {
 	googleClientPath := flag.String("google-client", googleClientFile,
 		"path to the Google OAuth client credentials; absent disables Google calendars")
 	touchDev := flag.String("touch", "/dev/input/event0", "touchscreen input device")
+	playChime := flag.Bool("chime", false, "play the meeting chime through the speaker and exit")
 	flag.Parse()
+
+	// A way to hear the chime on a board without waiting for a meeting, and
+	// without touching the running service: a second copy of the binary can
+	// do this while the first keeps rendering.
+	if *playChime {
+		if err := (&chime.Player{}).Play(context.Background()); err != nil {
+			log.Fatalf("chime: %v", err)
+		}
+		return
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
@@ -241,11 +254,48 @@ func main() {
 			render()
 		})
 
+	// Meeting starts ring the speaker. Checked after each render rather than
+	// on its own timer so the events it sees are the ones just drawn, and it
+	// costs nothing on a board without a sound card (Play returns ErrNoCard
+	// before touching anything). The Notifier remembers what has rung, so
+	// the extra wakes a fetch or a save cause never ring twice.
+	chimer := chime.NewNotifier(time.Now())
+	player := &chime.Player{}
+	ring := func() {
+		cfg := store.Config()
+		if !cfg.Sound.ChimeEnabled() {
+			return
+		}
+		evs, _, _ := store.Snapshot()
+		// Hidden events do not ring: a mute means "not for me".
+		visible := evs[:0:0]
+		for _, e := range evs {
+			if !cfg.IsMuted(e.Key()) {
+				visible = append(visible, e)
+			}
+		}
+		due := chimer.Due(visible, time.Now())
+		if len(due) == 0 {
+			return
+		}
+		go func() {
+			for _, e := range due {
+				if err := player.Play(context.Background()); err != nil {
+					if !errors.Is(err, chime.ErrNoCard) {
+						log.Printf("chime for %q: %v", e.Title, err)
+					}
+					return
+				}
+			}
+		}()
+	}
+
 	for {
 		// Woken early by a save or an arriving fetch; otherwise this is the
 		// once-a-minute clock tick.
 		store.WaitRenderWake(nextTick(time.Now()))
 		render()
+		ring()
 	}
 }
 

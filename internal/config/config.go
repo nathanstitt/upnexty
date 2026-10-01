@@ -132,10 +132,26 @@ type Config struct {
 	WiFi      WiFiConfig       `json:"wifi"`
 	Portal    PortalConfig     `json:"portal"`
 	Display   DisplayConfig    `json:"display"`
+	Sound     SoundConfig      `json:"sound"`
 	Calendars []CalendarSource `json:"calendars"`
 	// Muted lists events hidden from the panel. Written by a tap on the panel,
 	// cleared from the settings page.
 	Muted []MutedEvent `json:"muted,omitempty"`
+}
+
+// SoundConfig covers the USB speaker, when one is plugged in.
+type SoundConfig struct {
+	// Chime rings the speaker when a timed event starts. A pointer so that
+	// an absent key means on: a board with a speaker should announce
+	// meetings without a config edit, and a board without one plays
+	// nothing either way (the player checks for a card first).
+	Chime *bool `json:"chime,omitempty"`
+}
+
+// ChimeEnabled reports whether meeting starts should ring: true unless the
+// config says "chime": false.
+func (s SoundConfig) ChimeEnabled() bool {
+	return s.Chime == nil || *s.Chime
 }
 
 // HostnameMaxLen is the longest label DNS allows. The kernel would take more,
