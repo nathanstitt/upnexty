@@ -73,7 +73,7 @@
 <div class="row">
   <label>Waiting</label><span class="rule"></span>
   <div class="field">
-    <p>Go to <span class="mono">{{.Pairing.VerificationURL}}</span> and enter:</p>
+    <p>Go to <a class="mono" href="{{.Pairing.VerificationURL}}" target="_blank" rel="noopener">{{.Pairing.VerificationURL}}</a> and enter:</p>
     <p class="mono" style="font-size:1.6em;letter-spacing:0.08em">{{.Pairing.UserCode}}</p>
     <p class="hint">This code is also on the panel. Reload this page once you have finished.</p>
   </div>
@@ -125,7 +125,7 @@
     <label>Add account</label><span class="rule"></span>
     <div class="field">
       <button type="submit">Connect Google Calendar</button>
-      <p class="hint">A code will appear on the panel. Enter it at google.com/device on your phone.</p>
+      <p class="hint">A code will appear on the panel. Enter it at <a href="https://www.google.com/device" target="_blank" rel="noopener">google.com/device</a> on your phone.</p>
     </div>
   </div>
 </form>

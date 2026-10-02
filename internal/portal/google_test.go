@@ -127,6 +127,16 @@ func TestGoogleConnectPublishesCodeForThePanel(t *testing.T) {
 		t.Errorf("VerificationURL = %q", got.VerificationURL)
 	}
 
+	// The settings page repeats the URL as a link that opens a new tab, so
+	// the user does not lose the code by following it.
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(testSession(t, "", "54:01:4a:4c:1b:fd"))
+	pw := httptest.NewRecorder()
+	s.Handler().ServeHTTP(pw, req)
+	if want := `href="https://www.google.com/device" target="_blank" rel="noopener"`; !strings.Contains(pw.Body.String(), want) {
+		t.Errorf("settings page has no %s link:\n%s", want, pw.Body.String())
+	}
+
 	close(link.release)
 
 	// And it must clear once the flow ends, or the panel shows a dead code
@@ -320,6 +330,10 @@ func TestSettingsShowsGoogleSectionOnlyWhenEnabled(t *testing.T) {
 			body := w.Body.String()
 			if got := strings.Contains(body, "Connect Google Calendar"); got != tc.wantSec {
 				t.Errorf("section present = %v, want %v", got, tc.wantSec)
+			}
+			link := `href="https://www.google.com/device" target="_blank"`
+			if got := strings.Contains(body, link); got != tc.wantSec {
+				t.Errorf("google.com/device link present = %v, want %v", got, tc.wantSec)
 			}
 		})
 	}
