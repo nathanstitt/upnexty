@@ -19,11 +19,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: withastro/action@v3
+      - uses: actions/checkout@v7
+      - uses: withastro/action@v6
         with:
           path: ./site
-          package-manager: pnpm@latest
+          package-manager: pnpm@11
+          node-version: 24
 
   deploy:
     needs: build
@@ -33,4 +34,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
