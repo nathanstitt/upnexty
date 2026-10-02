@@ -1,0 +1,48 @@
+---
+import Base from '../layouts/Base.astro';
+---
+<Base
+  title="upnexty"
+  description="upnexty is an open-source wall calendar and weather display. All data stays on the device."
+>
+  <h1>upnexty</h1>
+  <p class="lede">A wall-mounted calendar and weather display. Open source. Your data stays on the device.</p>
+
+  <img src="/panel.png" width="1920" height="480"
+    alt="The upnexty display: clock and weather on the left, a row of calendar events with a NOW marker, an hourly temperature curve, and a 7-day forecast." />
+
+  <h2>What it is</h2>
+  <p>
+    upnexty is a small device that hangs on a wall. It is a Luckfox Lyra Zero W
+    board with a Waveshare 8.8" touch display (1920×480). It shows your day's
+    calendar and the local weather.
+  </p>
+  <ul>
+    <li><strong>Agenda</strong>: what finished last, what is on now, what is next, and the free time between.</li>
+    <li><strong>Weather</strong>: current conditions, an hourly temperature curve, and a 7-day forecast.</li>
+    <li><strong>Touch</strong>: tap an event to see its details or hide it from the display.</li>
+    <li><strong>Meeting chime</strong>: an optional sound through a USB speaker when an event starts.</li>
+    <li><strong>Settings page</strong>: the device serves its own settings page on your local network.</li>
+  </ul>
+
+  <h2>Google Calendar</h2>
+  <p>
+    Google Calendar is optional. The device can also read any iCal feed URL.
+  </p>
+  <p>
+    To connect a Google account, push the button on the device's settings page.
+    The device shows a code on its display. Go to Google's device page on your
+    phone or computer and type the code. upnexty asks for <strong>read-only</strong> access to your calendars (<code>calendar.readonly</code>). It cannot change,
+    add, or delete events.
+  </p>
+  <p>
+    The device talks to Google directly. There is no upnexty server. Your
+    calendar data and your Google token stay on the device.
+    Read the <a href="/privacy/">privacy policy</a> for the details.
+  </p>
+
+  <h2>Open source</h2>
+  <p>
+    All of the code is on <a href="https://github.com/nathanstitt/upnexty">GitHub</a> under the MIT license. You can read it, build it, and run it on your own hardware.
+  </p>
+</Base>

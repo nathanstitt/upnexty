@@ -1,0 +1,77 @@
+---
+interface Props {
+  title: string;
+  description: string;
+}
+const { title, description } = Astro.props;
+const repo = 'https://github.com/nathanstitt/upnexty';
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    <style is:global>
+      :root {
+        --bg: #fafaf9;
+        --fg: #1c1917;
+        --muted: #57534e;
+        --line: #e7e5e4;
+        --link: #1d4ed8;
+        color-scheme: light dark;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1c1917;
+          --fg: #f5f5f4;
+          --muted: #a8a29e;
+          --line: #44403c;
+          --link: #93c5fd;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 17px/1.6 system-ui, -apple-system, sans-serif;
+      }
+      .wrap { max-width: 44rem; margin: 0 auto; padding: 0 16px; }
+      header, footer { border-color: var(--line); border-style: solid; border-width: 0; }
+      header { border-bottom-width: 1px; }
+      footer { border-top-width: 1px; margin-top: 3rem; color: var(--muted); font-size: 0.9rem; }
+      header .wrap, footer .wrap { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-items: center; padding-block: 1rem; }
+      header .brand { font-weight: 700; margin-right: auto; color: var(--fg); text-decoration: none; }
+      a { color: var(--link); }
+      h1 { line-height: 1.2; margin: 2rem 0 0.5rem; }
+      h2 { margin-top: 2rem; }
+      img { max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line); }
+      code { font-size: 0.9em; overflow-wrap: anywhere; }
+      .lede { color: var(--muted); font-size: 1.1rem; margin-top: 0; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap">
+        <a class="brand" href="/">upnexty</a>
+        <a href="/">Home</a>
+        <a href="/privacy/">Privacy</a>
+        <a href={repo}>Source</a>
+      </div>
+    </header>
+    <main class="wrap">
+      <slot />
+    </main>
+    <footer>
+      <div class="wrap">
+        <span>Open source, <a href={`${repo}/blob/main/LICENSE`}>MIT license</a></span>
+        <a href={repo}>GitHub</a>
+        <a href="/privacy/">Privacy policy</a>
+        <a href="mailto:nathan@argosity.com">nathan@argosity.com</a>
+      </div>
+    </footer>
+  </body>
+</html>

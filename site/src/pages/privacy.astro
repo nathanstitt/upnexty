@@ -1,0 +1,84 @@
+---
+import Base from '../layouts/Base.astro';
+---
+<Base
+  title="Privacy policy · upnexty"
+  description="How upnexty uses your data: all data stays on the device. Nothing is sent to the developer."
+>
+  <h1>Privacy policy</h1>
+  <p class="lede">Effective 2 October 2026</p>
+
+  <h2>Summary</h2>
+  <p>
+    upnexty keeps all of your data on the device. There is no upnexty server,
+    no user account, and no analytics. The developer does not receive, store,
+    or see any of your data.
+  </p>
+
+  <h2>Data from Google</h2>
+  <p>
+    If you connect a Google account, upnexty asks for one permission:
+    <code>https://www.googleapis.com/auth/calendar.readonly</code>.
+    This gives read-only access to your calendars.
+  </p>
+  <p>upnexty uses this access only to:</p>
+  <ul>
+    <li>get the list of calendars in your account, so you can select which ones to show;</li>
+    <li>get the events on those calendars, so the device can show them on its display.</li>
+  </ul>
+  <p>
+    upnexty does not change, add, or delete events. It does not read your email,
+    contacts, files, or any other Google data.
+  </p>
+
+  <h2>Where your data is kept</h2>
+  <ul>
+    <li>The device connects to Google directly. No other computer is between them.</li>
+    <li>Your Google access token is stored in the device's internal flash memory.</li>
+    <li>Calendar events are kept in the device's memory only to draw the display.</li>
+    <li>No data from Google is sent to the developer or to any third party.</li>
+    <li>No data is sold, used for advertising, or used to train AI or machine-learning models.</li>
+  </ul>
+
+  <h2>Other network connections</h2>
+  <p>The device also connects to these services. It sends them no Google data:</p>
+  <ul>
+    <li><a href="https://open-meteo.com/">Open-Meteo</a>, for the weather. It receives the location you set on the device.</li>
+    <li><a href="https://zenquotes.io/">ZenQuotes</a>, for a short quote at the end of the day. It receives no personal data.</li>
+    <li>Any iCal feed URLs that you add yourself.</li>
+  </ul>
+
+  <h2>How to remove your data</h2>
+  <ul>
+    <li>On the device's settings page, push <strong>Disconnect</strong> for the account. This deletes the token from the device.</li>
+    <li>You can also remove upnexty's access at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
+    <li>If you reflash the device, all data on it is erased.</li>
+  </ul>
+
+  <h2>Google API Services User Data Policy</h2>
+  <p>
+    upnexty's use and transfer of information received from Google APIs adheres to the
+    <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
+    including the Limited Use requirements.
+  </p>
+
+  <h2>This website</h2>
+  <p>
+    This website has no cookies, no analytics, and no tracking. It is hosted on
+    GitHub Pages, which can keep standard server logs.
+  </p>
+
+  <h2>Open source</h2>
+  <p>
+    All of upnexty's code is public on <a href="https://github.com/nathanstitt/upnexty">GitHub</a> under the MIT license.
+    You can examine it to make sure that it does what this policy says.
+  </p>
+
+  <h2>Changes</h2>
+  <p>
+    If this policy changes, the new version is put on this page with a new effective date.
+  </p>
+
+  <h2>Contact</h2>
+  <p>Nathan Stitt, <a href="mailto:nathan@argosity.com">nathan@argosity.com</a></p>
+</Base>
